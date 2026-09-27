@@ -410,7 +410,7 @@ export function diagnose(local: LocalNode, surveys: SurveyResult[]): Finding[] {
         `${peer.name} speaks an incompatible snapshot version (${cell.text}); ` +
         `state will not sync until murmur versions match`,
       detail: `incompatible snapshot version (${cell.text}); state will not sync`,
-      remedy: `ssh ${peer.target} npm i -g @martintrojer/murmur`,
+      remedy: `ssh ${peer.target} npm i -g @mu-crew/murmur`,
     });
   }
 
@@ -630,7 +630,7 @@ export function diagnose(local: LocalNode, surveys: SurveyResult[]): Finding[] {
         survey.reason === "roster-unsupported" ? "murmur too old to report its roster" : detail,
       remedy:
         survey.reason === "roster-unsupported"
-          ? `ssh ${survey.target} npm i -g @martintrojer/murmur`
+          ? `ssh ${survey.target} npm i -g @mu-crew/murmur`
           : null,
     });
   }

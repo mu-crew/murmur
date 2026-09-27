@@ -1,6 +1,6 @@
 # Setup
 
-Wire murmur after `npm install -g @martintrojer/murmur`. Selling and surface
+Wire murmur after `npm install -g @mu-crew/murmur`. Selling and surface
 overview: [README](../README.md). Hard ssh cases: [SSH.md](../SSH.md).
 
 ## Per-node init

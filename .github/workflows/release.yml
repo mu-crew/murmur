@@ -1,0 +1,29 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - name: Check release version
+        run: node scripts/check-release-version.mjs "${{ github.ref_name }}"
+      - run: sudo apt-get update && sudo apt-get install -y tmux
+      # prepare installs git hooks into the checkout; harmless in CI.
+      - run: npm ci
+      - run: npm run check
+      - name: Publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public

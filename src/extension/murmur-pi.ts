@@ -65,7 +65,7 @@ type ExtensionAPI = {
 //                         shim cannot rewrite this constant (it does not copy
 //                         the source), so it passes the path instead.
 //   link pi --copy        inlines this file and rewrites the string literal.
-const storeModule = process.env.MURMUR_STORE_MODULE || "@martintrojer/murmur/extension-store";
+const storeModule = process.env.MURMUR_STORE_MODULE || "@mu-crew/murmur/extension-store";
 const muManaged = process.env.MU_MANAGED_AGENT === "1";
 const driver = driverFromEnv(process.env);
 

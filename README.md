@@ -51,7 +51,7 @@ murmur now overlaps with [herdr](https://github.com/herdrdev/herdr) and
 agent state in a sidebar or dashboard. The difference is where the state comes
 from and what each tool owns.
 
-| | murmur | herdr | workmux | [mu](https://github.com/martintrojer/mu) |
+| | murmur | herdr | workmux | [mu](https://github.com/mu-crew/mu) |
 | --- | --- | --- | --- | --- |
 | Primary job | Agent-state HUD over tmux | Terminal runtime for agents | Git worktree + tmux window workflow | Task DAG control plane for an agent crew |
 | Owns the terminals | No; reads your tmux | Yes; its server owns the panes | No; drives tmux (or zellij, kitty, WezTerm) | No; spawns agents into tmux or herdr panes |
@@ -72,7 +72,7 @@ Node 20+. Multi-machine: ssh access, murmur on each node.
 On every node that runs agents:
 
 ```bash
-npm install -g @martintrojer/murmur
+npm install -g @mu-crew/murmur
 murmur init      # this node's identity
 murmur link pi   # install the agent-side extension
 ```
@@ -125,5 +125,9 @@ factor / `BatchMode`, `MaxSessions 1`, Eternal Terminal): [SSH.md](SSH.md).
 | [docs/VOCABULARY.md](docs/VOCABULARY.md) | Protocol and identity terms |
 | [AGENTS.md](AGENTS.md) | Repo gate for agents working on murmur |
 
-**0.5.3.** Ready for daily use. Known gaps live at the end of
+**0.6.0.** Ready for daily use. Known gaps live at the end of
 [ARCHITECTURE.md](ARCHITECTURE.md#known-gaps).
+
+---
+
+Part of [mu-crew](https://github.com/mu-crew). Written mostly by AI coding agents, with a human reviewing what ships, and built for running them.

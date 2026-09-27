@@ -11,7 +11,7 @@
  *
  * which is exactly what the README tells you to do -- `murmur link pi` writes a
  * shim that sets it. `src/extension/murmur-pi.ts` prefers that variable over
- * the bare "@martintrojer/murmur/extension-store" specifier, and vitest mocks
+ * the bare "@mu-crew/murmur/extension-store" specifier, and vitest mocks
  * by RESOLVED path, so `vi.doMock(<bare specifier>)` never applied: the real
  * store loaded, the mock counters stayed at 0, and the failure read as "the
  * extension is broken".

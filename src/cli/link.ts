@@ -119,7 +119,7 @@ export function registerLink(program: Command): void {
       // still paints.
       const source = readFileSync(entry, "utf8");
       const pinned = source.replace(
-        /"@martintrojer\/murmur\/extension-store"/,
+        /"@mu-crew\/murmur\/extension-store"/,
         JSON.stringify(storePath),
       );
       if (pinned === source) {

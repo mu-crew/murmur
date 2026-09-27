@@ -373,7 +373,7 @@ test("a peer too old for peer list --json reads as an upgrade, not a broken node
   expect(unsurveyable.message).toBe(
     "bubba runs a murmur too old to report its roster, so it could not be checked -- upgrade that host",
   );
-  expect(unsurveyable.remedy).toBe("ssh bubba npm i -g @martintrojer/murmur");
+  expect(unsurveyable.remedy).toBe("ssh bubba npm i -g @mu-crew/murmur");
 });
 
 test("an unparseable roster is an observation too, keeping the parse detail", () => {
