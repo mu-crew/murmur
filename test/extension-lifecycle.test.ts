@@ -98,7 +98,9 @@ async function rig(claimAnswers: Claim[], options: { setActivity?: boolean } = {
         session_name: null,
         window_name: null,
       }),
-      setWindowBadge: (target: string, badge: string | null) => void badges.push([target, badge]),
+      panesInWindow: () => ["%1"],
+      setWindowState: (target: string, badge: string | null) => void badges.push([target, badge]),
+      setPaneState: () => {},
     },
   }));
 

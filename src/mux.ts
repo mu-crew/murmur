@@ -16,12 +16,11 @@ export interface Mux {
   currentWindow(): Location | null;
   livePanes(server?: TmuxServer): Set<PaneId> | null;
   localPaneProcesses(): LocalPaneProcess[];
-  // Sets `@agent_state` on a WINDOW though the attention belongs to a pane. The
-  // asymmetry is tmux's: the status bar and the `tms` picker read a window
-  // option and there is no per-pane equivalent. The consequence is that a pane
-  // moving between windows must clear the badge it left behind, since nothing
-  // else knows it moved.
-  setWindowBadge(window: WindowId, state: RenderState | null, server?: TmuxServer): void;
+  // Sets murmur's aggregate WINDOW state. Status bars and pickers read this.
+  setWindowState(window: WindowId, state: RenderState | null, server?: TmuxServer): void;
+  // Sets one pane's own state for pane-border formats. It must never be derived
+  // from the window option: a shell beside an agent would inherit the agent.
+  setPaneState(pane: PaneId, state: RenderState | null, server?: TmuxServer): void;
   // Takes the PANE, which is the address, so one call resolves session, window
   // and pane together. Reports whether the attach happened: runTmux swallows
   // failures into null, and a silently failed jump looked exactly like "enter
@@ -29,7 +28,7 @@ export interface Mux {
   // locally.
   attach(pane: PaneId, server?: TmuxServer): boolean;
   windowForPane(pane: PaneId, server?: TmuxServer): WindowId | null;
-  panesInWindow(window: WindowId, server?: TmuxServer): PaneId[];
+  panesInWindow(window: WindowId, server?: TmuxServer): PaneId[] | null;
   capture(pane: PaneId, lines?: number, server?: TmuxServer): string | null;
   // --- remote-jump session seam -------------------------------------------
   // A remote attach lives in its own local session rather than a window, so it
@@ -150,10 +149,9 @@ export function exactPaneTarget(session: string): string {
   return `=${session}:`;
 }
 
-export function tmuxBadgeState(state: RenderState): string {
-  // @agent_state is consumed by existing tmux configuration, whose public
-  // vocabulary calls active work "working". Keep the internal activity named
-  // "running" without forcing a coordinated config rollout.
+export function tmuxAgentState(state: RenderState): string {
+  // tmux formats spell active work "working"; murmur's model spells it
+  // "running".
   return state === "running" ? "working" : state;
 }
 
@@ -263,19 +261,27 @@ export const tmux: Mux = {
     });
   },
 
-  setWindowBadge(window, state, server = { kind: "default" }) {
+  setWindowState(window, state, server = { kind: "default" }) {
     if (state === null) {
-      runTmux(["set-window-option", "-qu", "-t", window, "@agent_state"], server);
-      runTmux(["set-window-option", "-qu", "-t", window, "@pane_agent"], server);
+      runTmux(["set-window-option", "-qu", "-t", window, "@murmur_window_state"], server);
+      runTmux(["set-window-option", "-qu", "-t", window, "@murmur_window_has_agent"], server);
     } else {
       runTmux(
-        ["set-window-option", "-q", "-t", window, "@agent_state", tmuxBadgeState(state)],
+        ["set-window-option", "-q", "-t", window, "@murmur_window_state", tmuxAgentState(state)],
         server,
       );
-      // The tmux status bar and picker read this as "an agent is in this window".
-      runTmux(["set-window-option", "-q", "-t", window, "@pane_agent", "1"], server);
+      runTmux(["set-window-option", "-q", "-t", window, "@murmur_window_has_agent", "1"], server);
     }
     runTmux(["refresh-client", "-S"], server);
+  },
+
+  setPaneState(pane, state, server = { kind: "default" }) {
+    runTmux(
+      state === null
+        ? ["set-option", "-pqu", "-t", pane, "@murmur_pane_state"]
+        : ["set-option", "-pq", "-t", pane, "@murmur_pane_state", tmuxAgentState(state)],
+      server,
+    );
   },
 
   attach(pane, server = { kind: "default" }) {
@@ -303,12 +309,11 @@ export const tmux: Mux = {
     return runTmux(["switch-client", "-t", pane], server) !== null;
   },
 
-  // Sibling panes, for deciding whether an unowned pane may clear the window's
-  // badge: a window holding an agent and a shell must keep it when you focus
-  // the shell.
+  // Sibling panes, for recomputing each pane and the window aggregate. Null is
+  // an unknown answer, not an empty window.
   panesInWindow(window, server = { kind: "default" }) {
     const out = runTmux(["list-panes", "-t", window, "-F", "#{pane_id}"], server);
-    return out?.split("\n").filter(Boolean).map(asPaneId) ?? [];
+    return out === null ? null : out.split("\n").filter(Boolean).map(asPaneId);
   },
 
   // Which client to send home when the remote attach exits. `switch-client`

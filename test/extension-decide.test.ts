@@ -170,7 +170,9 @@ test("runtime is reported per turn without activating pi's turn_end boundary", a
         session_name: null,
         window_name: null,
       }),
-      setWindowBadge: () => {},
+      panesInWindow: () => ["%1"],
+      setWindowState: () => {},
+      setPaneState: () => {},
     },
   }));
 
@@ -271,7 +273,9 @@ test("a failed write closes the store it is dropping", async () => {
         session_name: null,
         window_name: null,
       }),
-      setWindowBadge: () => {},
+      panesInWindow: () => ["%1"],
+      setWindowState: () => {},
+      setPaneState: () => {},
     },
   }));
 
@@ -347,7 +351,9 @@ test("a transient write failure does not silence the agent for the rest of its l
         session_name: null,
         window_name: null,
       }),
-      setWindowBadge: () => {},
+      panesInWindow: () => ["%1"],
+      setWindowState: () => {},
+      setPaneState: () => {},
     },
   }));
 
@@ -404,7 +410,9 @@ test("a missing murmur is given up on after one attempt, not retried per event",
         session_name: null,
         window_name: null,
       }),
-      setWindowBadge: () => {},
+      panesInWindow: () => ["%1"],
+      setWindowState: () => {},
+      setPaneState: () => {},
     },
   }));
 
@@ -455,6 +463,9 @@ test("a pane moved to another window keeps its identity and stops badging the ol
         reports.push({ window: update.location.window, agent_id: update.agent_id });
         return true;
       },
+      localPanes: () => [
+        { server: { kind: "default" }, pane: "%1", agent: { activity: "running" }, attention: [] },
+      ],
       releaseAgent: () => true,
       close: () => {},
     }),
@@ -471,7 +482,9 @@ test("a pane moved to another window keeps its identity and stops badging the ol
         session_name: null,
         window_name: null,
       }),
-      setWindowBadge: (target: string, state: string | null) => badges.push([target, state]),
+      panesInWindow: () => ["%1"],
+      setWindowState: (target: string, state: string | null) => badges.push([target, state]),
+      setPaneState: () => {},
     },
   }));
 
@@ -568,7 +581,9 @@ test("session_shutdown does not permanently silence the extension, because /relo
         session_name: null,
         window_name: null,
       }),
-      setWindowBadge: () => {},
+      panesInWindow: () => ["%1"],
+      setWindowState: () => {},
+      setPaneState: () => {},
     },
   }));
 
@@ -646,7 +661,9 @@ test("session_start re-arms an extension that gave up, so a reload is a real rec
         session_name: null,
         window_name: null,
       }),
-      setWindowBadge: () => {},
+      panesInWindow: () => ["%1"],
+      setWindowState: () => {},
+      setPaneState: () => {},
     },
   }));
 
@@ -698,9 +715,13 @@ async function driveExtension(options: { focused: boolean; muManaged?: boolean }
   handlers: Map<string, () => void | Promise<void>>;
   reports: string[];
   badges: (string | null)[];
+  panes: (string | null)[];
 }> {
   const reports: string[] = [];
   const badges: (string | null)[] = [];
+  const panes: (string | null)[] = [];
+  let activity: "running" | "stopped" = "stopped";
+  const attention: { kind: string }[] = [];
 
   vi.doMock("node:child_process", () => ({
     execFileSync: () => (options.focused ? "1" : "0"),
@@ -710,11 +731,23 @@ async function driveExtension(options: { focused: boolean; muManaged?: boolean }
     loadIdentity: () => ({ host_id: "H", display_name: "h" }),
     openStore: () => ({
       claimAgent: () => ({ outcome: "claimed", agent_id: "a1" }),
-      setActivity: (update: { activity: string }) => {
+      setActivity: (update: { activity: "running" | "stopped" }) => {
+        activity = update.activity;
         reports.push(update.activity);
         return true;
       },
-      requestAttention: (request: { kind: string }) => reports.push(request.kind),
+      requestAttention: (request: { kind: string }) => {
+        attention.push({ kind: request.kind });
+        reports.push(request.kind);
+      },
+      localPanes: () => [
+        {
+          server: { kind: "default" },
+          pane: "%1",
+          agent: { activity },
+          attention,
+        },
+      ],
       releaseAgent: () => true,
       close: () => {},
     }),
@@ -729,7 +762,9 @@ async function driveExtension(options: { focused: boolean; muManaged?: boolean }
         session_name: null,
         window_name: null,
       }),
-      setWindowBadge: (_window: string, badge: string | null) => void badges.push(badge),
+      panesInWindow: () => ["%1"],
+      setWindowState: (_window: string, badge: string | null) => void badges.push(badge),
+      setPaneState: (_pane: string, state: string | null) => void panes.push(state),
     },
   }));
 
@@ -750,7 +785,7 @@ async function driveExtension(options: { focused: boolean; muManaged?: boolean }
     on: (event: string, handler: (event: unknown, ctx: unknown) => unknown) =>
       handlers.set(event, () => handler({}, {}) as void | Promise<void>),
   } as never);
-  return { handlers, reports, badges };
+  return { handlers, reports, badges, panes };
 }
 
 function unmockExtension(): void {
@@ -766,7 +801,7 @@ test("an unfocused agent that settles asks for a human, which is what blocked me
   // agent_start and agent_end alone meant nothing in production ever reported a
   // finished run. Verified against pi 0.84.3 that agent_settled really fires,
   // and that it fires last: start, end, settled, ~60ms after end.
-  const { handlers, reports, badges } = await driveExtension({ focused: false });
+  const { handlers, reports, badges, panes } = await driveExtension({ focused: false });
 
   await handlers.get("agent_start")?.();
   await until(() => reports.length === 1, "the turn's running");
@@ -781,6 +816,7 @@ test("an unfocused agent that settles asks for a human, which is what blocked me
   // landed last.
   expect(reports).toEqual(["running", "stopped", "done"]);
   expect(badges).toEqual(["running", null, "done"]);
+  expect(panes).toEqual(["running", "idle", "done"]);
 
   unmockExtension();
 });
@@ -790,7 +826,7 @@ test("a focused agent that settles says nothing, because the user is already the
   // agent_end has already written activity `stopped`, which is the whole of what
   // a finished run means here; an attention row on top would be a request aimed
   // at a human who is already reading the pane.
-  const { handlers, reports, badges } = await driveExtension({ focused: true });
+  const { handlers, reports, badges, panes } = await driveExtension({ focused: true });
 
   await handlers.get("agent_start")?.();
   await until(() => reports.length === 1, "the turn's running");
@@ -803,6 +839,7 @@ test("a focused agent that settles says nothing, because the user is already the
 
   expect(reports).toEqual(["running", "stopped"]);
   expect(badges).toEqual(["running", null]);
+  expect(panes).toEqual(["running", "idle"]);
 
   unmockExtension();
 });
@@ -911,7 +948,9 @@ test("a refused claim means no report and no badge, for the life of the process"
         session_name: null,
         window_name: null,
       }),
-      setWindowBadge: (_window: string, badge: string | null) => void badges.push(badge),
+      panesInWindow: () => ["%1"],
+      setWindowState: (_window: string, badge: string | null) => void badges.push(badge),
+      setPaneState: () => {},
     },
   }));
 
@@ -975,7 +1014,9 @@ test("a claim the store retained keeps reporting, which is what /reload needs", 
           session_name: null,
           window_name: null,
         }),
-        setWindowBadge: () => {},
+        panesInWindow: () => ["%1"],
+        setWindowState: () => {},
+        setPaneState: () => {},
       },
     }));
 
@@ -1026,7 +1067,9 @@ test("a stale owner's write returning false is silence, not an error", async () 
         session_name: null,
         window_name: null,
       }),
-      setWindowBadge: () => {},
+      panesInWindow: () => ["%1"],
+      setWindowState: () => {},
+      setPaneState: () => {},
     },
   }));
 

@@ -903,3 +903,47 @@ test("the auth category does not overlap unreachability", () => {
   expect(needsInteractiveAuth(auth)).toBe(true);
   expect(describeFailure("dev", auth)).not.toContain("unreachable");
 });
+
+test("collect republishes a pane that reconciliation marks crashed", async () => {
+  const location = {
+    server: { kind: "default" as const },
+    session: asSessionId("$0"),
+    window: asWindowId("@1"),
+    pane: asPaneId("%1"),
+    session_name: null,
+    window_name: null,
+  };
+  const claim = store.claimAgent({
+    location,
+    owner_pid: 2 ** 22,
+    meta: {
+      agent_name: "worker-1",
+      pi_session: null,
+      workstream: "mu",
+      role: null,
+      cli: "pi",
+      driver: "orchestrated",
+    },
+  });
+  if (claim.outcome === "refused") throw new Error("refused");
+  store.setActivity({
+    agent_id: claim.agent_id,
+    owner_pid: 2 ** 22,
+    activity: "running",
+    location,
+  });
+  const panes: [string, string | null][] = [];
+  const windows: [string, string | null][] = [];
+
+  await collect(store, { exec: async () => "" }, Date.now(), {
+    mux: fakeMux({
+      livePanes: () => new Set([asPaneId("%1")]),
+      panesInWindow: () => [asPaneId("%1")],
+      setPaneState: (pane, state) => void panes.push([pane, state]),
+      setWindowState: (window, state) => void windows.push([window, state]),
+    }),
+  });
+
+  expect(panes).toEqual([["%1", "crashed"]]);
+  expect(windows).toEqual([["@1", "crashed"]]);
+});

@@ -1,9 +1,9 @@
 import type { Command } from "commander";
+import { publishAgentStates } from "../agent-state.js";
 import { asPaneId } from "../ids.js";
 import { type Mux, tmux } from "../mux.js";
 import { openStore, type Store } from "../store.js";
 import type { Location, RequestableKind } from "../types.js";
-import { windowBadge } from "./clear.js";
 
 /**
  * The fields a harness may send, as flags or as a JSON object on stdin.
@@ -276,26 +276,11 @@ export function runNotify(
     source,
   });
 
-  // The badge, so the status bar reflects it without waiting for a collect.
-  //
-  // RECOMPUTED, not the kind just recorded. `@agent_state` is a window-scoped
-  // projection of the highest-priority state in that window, and
-  // RENDER_PRIORITY puts `crashed` above `blocked` above `done` -- so painting
-  // this pane's kind blindly let a notify on one pane erase a crashed agent's
-  // glyph in the same window. The attention rows stayed correct, which is
-  // exactly what made it hard to see: only the surface a human scans was wrong,
-  // and nothing repaints until the next event or focus.
-  //
-  // clear.ts already paid for this once in the other direction -- "blindly
-  // clearing the option made a live running agent display as idle though its
-  // agent row was untouched" -- so writing borrows its recomputation rather
-  // than growing a second rule. A null answer cannot happen here (the row this
-  // call just wrote is in that window), but it is honoured rather than asserted.
-  mux.setWindowBadge(
-    location.window,
-    windowBadge(location.window, mux, store, location.server),
-    location.server,
-  );
+  // Publish now, so tmux reflects it without waiting for a collect. Recompute
+  // from stored state rather than painting this request: RENDER_PRIORITY puts
+  // `crashed` above `blocked` above `done`, and the window aggregate must not
+  // let this pane erase a stronger sibling state.
+  publishAgentStates(location.window, mux, store, location.server);
   return true;
 }
 
@@ -326,7 +311,7 @@ function resolveLocation(pane: string | undefined, mux: Mux): Location | null {
   if (!pane) return here;
   const target = asPaneId(pane);
   if (here && here.pane === target) return here;
-  if (here && mux.panesInWindow(here.window, here.server).includes(target)) {
+  if (here && mux.panesInWindow(here.window, here.server)?.includes(target)) {
     return { ...here, pane: target };
   }
   return null;
