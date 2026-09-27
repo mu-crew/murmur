@@ -58,7 +58,12 @@ export function sidepanelOrigin(
   env: NodeJS.ProcessEnv = process.env,
   tmux: SidepanelTmux = productionTmux,
 ): SidepanelOrigin | null {
-  const rawPane = env.TMUX_PANE;
+  let rawPane = env.TMUX_PANE;
+  if (!rawPane && env.TMUX) {
+    const active = tmux.run(["display-message", "-p", "#{pane_id}"]);
+    if (!active.ok || !active.stdout) return null;
+    rawPane = active.stdout;
+  }
   if (!rawPane) return null;
   const result = tmux.run(["display-message", "-t", rawPane, "-p", "#{window_id}\t#{pane_id}"]);
   if (!result.ok) return null;

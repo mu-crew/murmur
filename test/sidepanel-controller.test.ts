@@ -38,17 +38,30 @@ const origin = { window: asWindowId("@1"), pane: asPaneId("%2") };
 const splitLayout = "0000,120x40,0,0{25x40,0,0,9,94x40,26,0,2}";
 const openLayout = "ea71,120x40,0,0{30x40,0,0,9,89x40,31,0,2}";
 
-test("origin requires TMUX_PANE and resolves its exact window and pane", () => {
+test("origin prefers TMUX_PANE and resolves its exact window and pane", () => {
   const outside = scriptedTmux([]);
   expect(sidepanelOrigin({}, outside)).toBeNull();
   expect(outside.calls).toEqual([]);
 
   const tmux = scriptedTmux([ok("@7\t%2")]);
-  expect(sidepanelOrigin({ TMUX_PANE: "%2" }, tmux)).toEqual({
+  expect(sidepanelOrigin({ TMUX: "socket,1,0", TMUX_PANE: "%2" }, tmux)).toEqual({
     window: asWindowId("@7"),
     pane: asPaneId("%2"),
   });
   expect(tmux.calls).toEqual([["display-message", "-t", "%2", "-p", "#{window_id}\t#{pane_id}"]]);
+});
+
+test("origin asks tmux for the invoking client's active pane under run-shell", () => {
+  const tmux = scriptedTmux([ok("%4"), ok("@7\t%4")]);
+
+  expect(sidepanelOrigin({ TMUX: "socket,1,0" }, tmux)).toEqual({
+    window: asWindowId("@7"),
+    pane: asPaneId("%4"),
+  });
+  expect(tmux.calls).toEqual([
+    ["display-message", "-p", "#{pane_id}"],
+    ["display-message", "-t", "%4", "-p", "#{window_id}\t#{pane_id}"],
+  ]);
 });
 
 test("origin rejects failed, malformed, or retargeted pane resolution", () => {

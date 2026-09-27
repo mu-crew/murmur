@@ -4,6 +4,8 @@ import {
   reconcileSidepanelSelection,
   routeSidepanelInput,
   selectedSidepanelPane,
+  sidepanelHelpSections,
+  toggleSidepanelCompact,
   toggleSidepanelCrew,
 } from "../src/cli/sidepanel.js";
 import { DEFAULT_DASH_PREFS } from "../src/dash-prefs.js";
@@ -116,12 +118,59 @@ test.each([
   ["g", {}, true, { type: "move", key: "g" }],
   ["G", {}, true, { type: "move", key: "G" }],
   ["a", {}, true, { type: "crew" }],
+  ["c", {}, true, { type: "compact" }],
+  ["?", {}, true, { type: "help-open" }],
   ["q", {}, true, { type: "close" }],
   ["c", { ctrl: true }, true, { type: "close" }],
   ["", { return: true }, true, { type: "activate" }],
   ["", { return: true }, false, { type: "none" }],
 ] as const)("routes %s input", (input, key, hasSelection, expected) => {
-  expect(routeSidepanelInput(input, key, hasSelection)).toEqual(expected);
+  expect(routeSidepanelInput(false, input, key, hasSelection)).toEqual(expected);
+});
+
+test("the help overlay closes with question mark or escape and swallows other keys", () => {
+  expect(routeSidepanelInput(true, "?", {}, true)).toEqual({ type: "help-close" });
+  expect(routeSidepanelInput(true, "", { escape: true }, true)).toEqual({ type: "help-close" });
+  expect(routeSidepanelInput(true, "q", {}, true)).toEqual({ type: "none" });
+});
+
+test("help lists every side panel key", () => {
+  expect(sidepanelHelpSections({ crew: false, compact: true })).toEqual([
+    {
+      title: "navigation",
+      hints: [
+        { chord: "j/k", label: "select" },
+        { chord: "g/G", label: "top or end" },
+        { chord: "enter", label: "jump to the agent" },
+      ],
+    },
+    {
+      title: "view",
+      hints: [
+        { chord: "a", label: "toggle crew only", value: "all" },
+        { chord: "c", label: "toggle compact rows", value: "on" },
+      ],
+    },
+    {
+      title: "panel",
+      hints: [
+        { chord: "q/^c", label: "close" },
+        { chord: "?/esc", label: "close this help" },
+      ],
+    },
+  ]);
+});
+
+test("compact persistence updates the shared dashboard preference", () => {
+  const prefs = { ...DEFAULT_DASH_PREFS, sort: "age" as const, crew: true };
+  let saved = DEFAULT_DASH_PREFS;
+
+  const updated = toggleSidepanelCompact(prefs, (next) => {
+    saved = next;
+  });
+
+  expect(updated).toEqual({ ...prefs, compact: true });
+  expect(saved).toEqual(updated);
 });
 
 test("crew persistence keeps every other shared preference", () => {

@@ -155,13 +155,15 @@ test("selection wraps, jumps to edges, and handles an empty list", () => {
   expect(moveSidepanelSelection(4, "j", 0)).toBe(0);
 });
 
-test("the viewport spends three lines per row plus separators and follows selection", () => {
+test("the viewport spends four lines per full row and one per compact row", () => {
   expect(sidepanelWindow(0, 5, 2)).toEqual({ first: 0, shown: 0 });
   expect(sidepanelWindow(0, 5, 3)).toEqual({ first: 0, shown: 1 });
   expect(sidepanelWindow(0, 5, 7)).toEqual({ first: 0, shown: 2 });
   expect(sidepanelWindow(3, 5, 7)).toEqual({ first: 2, shown: 2 });
   expect(sidepanelWindow(4, 5, 99)).toEqual({ first: 0, shown: 5 });
   expect(sidepanelWindow(2, 0, 7)).toEqual({ first: 0, shown: 0 });
+  expect(sidepanelWindow(3, 10, 7, true)).toEqual({ first: 0, shown: 7 });
+  expect(sidepanelWindow(8, 10, 7, true)).toEqual({ first: 2, shown: 7 });
 });
 
 test("width is ten percent clamped to the supported and available ranges", () => {

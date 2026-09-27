@@ -61,6 +61,10 @@ The panel opens on the left, takes 10 percent of the window width clamped to
 25–40 columns, spans the full viewport even when the existing layout is nested,
 and takes focus. Toggling it again removes only that window's panel.
 
+Press `?` to show all panel keys. Press `?` or `Escape` to close the help panel.
+Press `c` to toggle compact one-line rows. The side panel and dashboard share
+this compact setting, along with the saved sort and visibility settings.
+
 ## Harnesses other than pi
 
 pi reports in-process through the extension. Codex, opencode, and the Cursor CLI
