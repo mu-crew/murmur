@@ -161,8 +161,8 @@ sees every spoke; **spokes do not see each other** — `export` publishes local
 panes only. A pair that was not demonstrably up reads `unknown`, not
 unreachable.
 
-Asleep or powered-off nodes are normal. `status`, `pick`, and `dash` stay silent
-about that. `murmur peer list` has LAST SEEN; `murmur collect` (run on purpose)
+Asleep or powered-off nodes are normal. `status`, `pick`, `dash`, and
+`sidepanel` stay silent about that. `murmur peer list` has LAST SEEN; `murmur collect` (run on purpose)
 prints one line per peer it could not reach.
 
 Bind a popup picker:
