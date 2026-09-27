@@ -140,15 +140,22 @@ test("question mark toggles the keys overlay", async () => {
     { stdin: input, stdout: output, patchConsole: false },
   );
 
+  // Ink attaches its input listener after the first frame; a key written
+  // before that is dropped. Wait for the list to render first. 5s, not the 1s
+  // default: a CI runner took just over a second to paint this.
+  const settle = { timeout: 5_000 };
+  await vi.waitFor(() => expect(Buffer.concat(writes).toString()).toContain("worker-1"), settle);
   const beforeOpen = writes.length;
   input.write("?");
-  await vi.waitFor(() =>
-    expect(Buffer.concat(writes.slice(beforeOpen)).toString()).toContain("shortcuts"),
+  await vi.waitFor(
+    () => expect(Buffer.concat(writes.slice(beforeOpen)).toString()).toContain("shortcuts"),
+    settle,
   );
   const beforeClose = writes.length;
   input.write("?");
-  await vi.waitFor(() =>
-    expect(Buffer.concat(writes.slice(beforeClose)).toString()).toContain("worker-1"),
+  await vi.waitFor(
+    () => expect(Buffer.concat(writes.slice(beforeClose)).toString()).toContain("worker-1"),
+    settle,
   );
   await instance.unmount();
 });
