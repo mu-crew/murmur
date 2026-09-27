@@ -421,7 +421,7 @@ test("collect reconciles each tmux server independently with one query per serve
     meta,
   });
   store.claimAgent({
-    location: { ...base, server: { kind: "label", value: "coop" } },
+    location: { ...base, server: { kind: "label", value: "mule" } },
     owner_pid: process.pid,
     meta,
   });
@@ -436,9 +436,9 @@ test("collect reconciles each tmux server independently with one query per serve
     }),
   });
 
-  expect(queried).toEqual(["default", "label:coop"]);
+  expect(queried).toEqual(["default", "label:mule"]);
   expect(store.localPanes()).toMatchObject([
-    { server: { kind: "label", value: "coop" }, pane: "%34" },
+    { server: { kind: "label", value: "mule" }, pane: "%34" },
   ]);
 });
 

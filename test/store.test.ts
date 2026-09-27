@@ -254,13 +254,13 @@ test("replacing a dead owner clears the previous occupant's attention", () => {
 test("the same pane id on default and labelled servers has independent ownership", () => {
   const s = store();
   const defaultLocation = location("%34");
-  const labelledLocation = location("%34", { server: { kind: "label", value: "coop" } });
+  const labelledLocation = location("%34", { server: { kind: "label", value: "mule" } });
 
   const first = s.claimAgent({ location: defaultLocation, owner_pid: 100, meta: meta(), now: 1 });
   const second = s.claimAgent({
     location: labelledLocation,
     owner_pid: 200,
-    meta: meta({ agent_name: "coop-agent" }),
+    meta: meta({ agent_name: "mule-agent" }),
     now: 2,
   });
 
@@ -270,8 +270,8 @@ test("the same pane id on default and labelled servers has independent ownership
     { pane: "%34", server: { kind: "default" }, agent: { agent_name: "worker-1" } },
     {
       pane: "%34",
-      server: { kind: "label", value: "coop" },
-      agent: { agent_name: "coop-agent" },
+      server: { kind: "label", value: "mule" },
+      agent: { agent_name: "mule-agent" },
     },
   ]);
 });
@@ -279,7 +279,7 @@ test("the same pane id on default and labelled servers has independent ownership
 test("claim, reclaim, refusal, release, and attention use the full server-pane key", () => {
   const s = store();
   const defaultLocation = location("%34");
-  const labelledLocation = location("%34", { server: { kind: "label", value: "coop" } });
+  const labelledLocation = location("%34", { server: { kind: "label", value: "mule" } });
   const first = s.claimAgent({ location: defaultLocation, owner_pid: 100, meta: meta(), now: 1 });
   const second = s.claimAgent({ location: labelledLocation, owner_pid: 200, meta: meta(), now: 2 });
   if (!("agent_id" in first) || !("agent_id" in second)) throw new Error("claim refused");
@@ -305,12 +305,12 @@ test("claim, reclaim, refusal, release, and attention use the full server-pane k
   s.requestAttention({
     kind: "done",
     location: labelledLocation,
-    message: "coop",
+    message: "mule",
     source: "pi",
   });
   expect(s.acknowledgePane(defaultLocation)).toBe(1);
   expect(s.localPanes().find((pane) => pane.server.kind === "label")?.attention).toMatchObject([
-    { message: "coop" },
+    { message: "mule" },
   ]);
   expect(
     s.releaseAgent({ agent_id: first.agent_id, owner_pid: 100, location: defaultLocation }),

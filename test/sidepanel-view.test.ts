@@ -53,14 +53,14 @@ function prefs(over: Partial<DashPrefs> = {}): DashPrefs {
 
 test("row keys distinguish identical pane ids on different tmux servers", () => {
   const rows = sidepanelRows(
-    [pane(), pane({ server: { kind: "label", value: "coop" } })],
+    [pane(), pane({ server: { kind: "label", value: "mule" } })],
     prefs(),
     1_000,
   );
 
   expect(rows.map((row) => row.key)).toEqual([
     '["H","default",null,"%1"]',
-    '["H","label","coop","%1"]',
+    '["H","label","mule","%1"]',
   ]);
 });
 

@@ -433,7 +433,7 @@ test("a custom {pane} template refuses a private server before opening a connect
 
   const result = jumpToAgent(
     store,
-    view({ server: { kind: "path", value: "/tmp/private.sock" }, agent_name: "coop-af31c5" }),
+    view({ server: { kind: "path", value: "/tmp/private.sock" }, agent_name: "mule-af31c5" }),
     fakeMux(),
     (file) => {
       calls.push(file);
@@ -448,7 +448,7 @@ test("a custom {pane} template refuses a private server before opening a connect
     ok: false,
     reason: "unsupported_server",
     message:
-      "murmur: dev's jump command uses {pane}, which cannot identify the tmux server holding coop-af31c5 (%9)\n\n" +
+      "murmur: dev's jump command uses {pane}, which cannot identify the tmux server holding mule-af31c5 (%9)\n\n" +
       "update it:\n" +
       "  murmur peer set dev --jump-command 'x2ssh -et dev -c {attach}'",
   });
@@ -677,7 +677,7 @@ test("a local jump to a live pane succeeds", () => {
   const servers: unknown[] = [];
   const result = jumpToAgent(
     store,
-    localView({ server: { kind: "label", value: "coop" } }),
+    localView({ server: { kind: "label", value: "mule" } }),
     fakeMux({
       livePanes: (server) => {
         servers.push(server);
@@ -692,8 +692,8 @@ test("a local jump to a live pane succeeds", () => {
 
   expect(result).toEqual({ ok: true });
   expect(servers).toEqual([
-    { kind: "label", value: "coop" },
-    { kind: "label", value: "coop" },
+    { kind: "label", value: "mule" },
+    { kind: "label", value: "mule" },
   ]);
 });
 

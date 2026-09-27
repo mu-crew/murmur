@@ -135,25 +135,25 @@ What you *can* do is stop competing for the one channel. The cap is per
 concurrently with distinct pids, measured — so a tool with its own socket takes
 nothing from murmur.
 
-[coop](https://github.com/martintrojer/coop) is built on that: its own
+[mule](https://github.com/mu-crew/mule) is built on that: its own
 `ControlPath`, every job dispatched detached under a private tmux server, so it
 holds the channel only for a sub-second dispatch. Run long remote commands —
 test suites, builds, anything an orchestrator fires at the host — through it
 rather than `ssh <host> <cmd>`, and they stop starving collects. Measured on a
 capped host: five concurrent calls, 1 of 5 succeeded ungated, 5 of 5 through
-coop.
+mule.
 
-A collect itself does not belong there. coop dispatch costs ~125ms against
+A collect itself does not belong there. mule dispatch costs ~125ms against
 ~33ms for a bare ssh over the master, and a collect is already sub-second, so
 there is no long hold to remove and the overhead is pure cost. murmur's existing
 answer — classify `sessionChannelBusy` and retry — is the right one for
-something this cheap and idempotent. Use coop for what holds the channel for
+something this cheap and idempotent. Use mule for what holds the channel for
 minutes, not for what holds it for milliseconds.
 
-Note coop requires an ssh master and refuses to open one, exiting 3 with the
+Note mule requires an ssh master and refuses to open one, exiting 3 with the
 command to run: opening it may need a human to touch a hardware key, which a
 background process cannot do. That is the same master this page tells you to
-open, so one tap serves both — but if you script around coop, treat exit 3 as
+open, so one tap serves both — but if you script around mule, treat exit 3 as
 "ask a human", never as something to retry.
 
 ---

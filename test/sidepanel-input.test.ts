@@ -94,7 +94,7 @@ test("selection and activation distinguish the same pane id on two tmux servers"
   const first = pane;
   const second = {
     ...pane,
-    server: { kind: "label", value: "coop" } as const,
+    server: { kind: "label", value: "mule" } as const,
     agent_name: "worker-2",
   };
   const rows = sidepanelRows([first, second], DEFAULT_DASH_PREFS, 1_000);

@@ -24,7 +24,7 @@ vi.mock("node:child_process", () => ({
 
 test.each([
   ["/tmp/tmux-501/default", { kind: "default" }],
-  ["/tmp/tmux-501/coop", { kind: "label", value: "coop" }],
+  ["/tmp/tmux-501/mule", { kind: "label", value: "mule" }],
   ["/var/run/private.sock", { kind: "path", value: "/var/run/private.sock" }],
   ["/var/run/private,one.sock", { kind: "path", value: "/var/run/private,one.sock" }],
 ])("derives the tmux server from socket path %s", (socketPath, expected) => {
@@ -33,9 +33,9 @@ test.each([
 
 test("tmux argv selects default, label, and path servers without a shell", () => {
   expect(tmuxArgs({ kind: "default" }, ["list-panes", "-a"])).toEqual(["list-panes", "-a"]);
-  expect(tmuxArgs({ kind: "label", value: "coop" }, ["list-panes", "-a"])).toEqual([
+  expect(tmuxArgs({ kind: "label", value: "mule" }, ["list-panes", "-a"])).toEqual([
     "-L",
-    "coop",
+    "mule",
     "list-panes",
     "-a",
   ]);
@@ -48,13 +48,13 @@ test("tmux argv selects default, label, and path servers without a shell", () =>
 });
 
 test("currentWindow records the socket-derived server", () => {
-  const socket = `${conventionalTmuxDirectory()}/coop`;
+  const socket = `${conventionalTmuxDirectory()}/mule`;
   tmuxReplies.push(`$1\t@2\twork\treviewer\t0\t${socket}`);
   process.env.TMUX_PANE = "%34";
   try {
     expect(tmux.currentWindow()).toMatchObject({
       pane: "%34",
-      server: { kind: "label", value: "coop" },
+      server: { kind: "label", value: "mule" },
     });
   } finally {
     delete process.env.TMUX_PANE;
@@ -100,14 +100,14 @@ test("state reads and writes select the location's private server", () => {
   tmuxReplies.length = 0;
   tmuxReplies.push("%34");
 
-  expect(tmux.panesInWindow(asWindowId("@7"), { kind: "label", value: "coop" })).toEqual(["%34"]);
-  tmux.setWindowState(asWindowId("@7"), "done", { kind: "label", value: "coop" });
+  expect(tmux.panesInWindow(asWindowId("@7"), { kind: "label", value: "mule" })).toEqual(["%34"]);
+  tmux.setWindowState(asWindowId("@7"), "done", { kind: "label", value: "mule" });
 
   expect(tmuxCalls).toEqual([
-    ["-L", "coop", "list-panes", "-t", "@7", "-F", "#{pane_id}"],
-    ["-L", "coop", "set-window-option", "-q", "-t", "@7", "@murmur_window_state", "done"],
-    ["-L", "coop", "set-window-option", "-q", "-t", "@7", "@murmur_window_has_agent", "1"],
-    ["-L", "coop", "refresh-client", "-S"],
+    ["-L", "mule", "list-panes", "-t", "@7", "-F", "#{pane_id}"],
+    ["-L", "mule", "set-window-option", "-q", "-t", "@7", "@murmur_window_state", "done"],
+    ["-L", "mule", "set-window-option", "-q", "-t", "@7", "@murmur_window_has_agent", "1"],
+    ["-L", "mule", "refresh-client", "-S"],
   ]);
 });
 
