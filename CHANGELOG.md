@@ -12,6 +12,14 @@ so it says what changed for a user rather than listing every commit.
 activity, attention, clear, and crash write recomputes all three from stored
 state, so an event cannot erase a stronger existing state.
 
+**Session state and status counts as tmux options.** Murmur publishes
+`@murmur_session_state`, the strongest state across a session's panes, so a
+session picker or `choose-tree` can show it with one `list-sessions` format. It
+also publishes this host's agent counts as global `@murmur_count_<state>`
+options (and `@murmur_count_crew`), unset at zero, with the same crew rule as
+`murmur status`. A status pill for local agents no longer needs to run `murmur
+status` on every redraw.
+
 ## 0.5.3
 
 Wire-compatible with 0.5.0 through 0.5.2: the snapshot format remains version

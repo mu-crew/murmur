@@ -1,6 +1,6 @@
 import { expect, test, vi } from "vitest";
 import { DASH_PANE_OPTION } from "../src/goto.js";
-import { asPaneId, asWindowId } from "../src/ids.js";
+import { asPaneId, asSessionId, asWindowId } from "../src/ids.js";
 import {
   chosenWindowName,
   conventionalTmuxDirectory,
@@ -108,6 +108,48 @@ test("state reads and writes select the location's private server", () => {
     ["-L", "coop", "set-window-option", "-q", "-t", "@7", "@murmur_window_state", "done"],
     ["-L", "coop", "set-window-option", "-q", "-t", "@7", "@murmur_window_has_agent", "1"],
     ["-L", "coop", "refresh-client", "-S"],
+  ]);
+});
+
+test("session state is session-scoped and uses the tmux working token", () => {
+  tmuxCalls.length = 0;
+
+  tmux.setSessionState(asSessionId("$3"), "running");
+  tmux.setSessionState(asSessionId("$4"), null);
+
+  expect(tmuxCalls).toEqual([
+    ["set-option", "-q", "-t", "$3", "@murmur_session_state", "working"],
+    ["set-option", "-qu", "-t", "$4", "@murmur_session_state"],
+  ]);
+});
+
+test("sessionPanes names the window's session and every pane in it", () => {
+  tmuxCalls.length = 0;
+  tmuxReplies.length = 0;
+  tmuxReplies.push("$2\t%1\n$2\t%5\n");
+
+  expect(tmux.sessionPanes(asWindowId("@7"))).toEqual({ session: "$2", panes: ["%1", "%5"] });
+  expect(tmuxCalls).toEqual([["list-panes", "-s", "-t", "@7", "-F", "#{session_id}\t#{pane_id}"]]);
+});
+
+test("state counts go out in one tmux call, unset at zero", () => {
+  tmuxCalls.length = 0;
+
+  tmux.setStateCounts({
+    totals: { crashed: 0, blocked: 2, done: 0, running: 1, idle: 3 },
+    crew: 4,
+  });
+
+  expect(tmuxCalls).toEqual([
+    [
+      ...["set-option", "-gqu", "@murmur_count_crashed", ";"],
+      ...["set-option", "-gq", "@murmur_count_blocked", "2", ";"],
+      ...["set-option", "-gqu", "@murmur_count_done", ";"],
+      ...["set-option", "-gq", "@murmur_count_working", "1", ";"],
+      ...["set-option", "-gq", "@murmur_count_idle", "3", ";"],
+      ...["set-option", "-gq", "@murmur_count_crew", "4", ";"],
+      ...["refresh-client", "-S"],
+    ],
   ]);
 });
 

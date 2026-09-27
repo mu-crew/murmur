@@ -40,11 +40,11 @@ const META: AgentMeta = {
   driver: "orchestrated",
 };
 
-function running(pane: string, window = "@1"): void {
+function running(pane: string, window = "@1", meta: AgentMeta = META): void {
   const claim = store.claimAgent({
     location: location(pane, window),
     owner_pid: process.pid,
-    meta: META,
+    meta,
   });
   if (claim.outcome === "refused") throw new Error("refused");
   store.setActivity({
@@ -107,4 +107,93 @@ test("does not guess when tmux cannot list the window", () => {
   expect(publishAgentStates(asWindowId("@1"), mux, store)).toBe(false);
   expect(states.panes).toEqual([]);
   expect(states.windows).toEqual([]);
+});
+
+function sessionRecorder(sessionPanes: string[] | null) {
+  const sessions: [string, RenderState | null][] = [];
+  const counts: { totals: Record<RenderState, number>; crew: number }[] = [];
+  return {
+    sessions,
+    counts,
+    mux: fakeMux({
+      panesInWindow: () => [asPaneId("%1")],
+      sessionPanes: () =>
+        sessionPanes === null
+          ? null
+          : { session: asSessionId("$1"), panes: sessionPanes.map(asPaneId) },
+      setSessionState: (session, state) => void sessions.push([session, state]),
+      setStateCounts: (value) => void counts.push(value),
+    }),
+  };
+}
+
+test("the session gets the strongest state across all its windows", () => {
+  running("%1", "@1");
+  running("%2", "@2");
+  store.recordCrash(location("%2", "@2"));
+  const states = sessionRecorder(["%1", "%2", "%shell"]);
+
+  publishAgentStates(asWindowId("@1"), states.mux, store);
+
+  expect(states.sessions).toEqual([["$1", "crashed"]]);
+});
+
+test("a later done does not replace a crashed session", () => {
+  running("%1", "@1");
+  running("%2", "@2");
+  store.recordCrash(location("%2", "@2"));
+  store.requestAttention({ kind: "done", location: location("%1"), message: "", source: "pi" });
+  const states = sessionRecorder(["%1", "%2"]);
+
+  publishAgentStates(asWindowId("@1"), states.mux, store);
+
+  expect(states.sessions).toEqual([["$1", "crashed"]]);
+});
+
+test("a session with only idle agents is unset", () => {
+  store.claimAgent({ location: location("%1"), owner_pid: process.pid, meta: META });
+  const states = sessionRecorder(["%1"]);
+
+  publishAgentStates(asWindowId("@1"), states.mux, store);
+
+  expect(states.sessions).toEqual([["$1", null]]);
+});
+
+test("a session tmux cannot list keeps its state", () => {
+  running("%1");
+  const states = sessionRecorder(null);
+
+  expect(publishAgentStates(asWindowId("@1"), states.mux, store)).toBe(true);
+
+  expect(states.sessions).toEqual([]);
+});
+
+test("the pill counts match murmur status for this host", async () => {
+  const { status, tmuxStatus } = await import("../src/status.js");
+  const human = { ...META, driver: "human" as const };
+  running("%1", "@1", human);
+  running("%2", "@1", human);
+  store.requestAttention({ kind: "blocked", location: location("%2"), message: "", source: "pi" });
+  store.claimAgent({
+    location: location("%3"),
+    owner_pid: process.pid,
+    meta: { ...META, driver: "orchestrated" },
+  });
+  running("%4");
+  store.recordCrash(location("%4"));
+  const states = sessionRecorder(["%1"]);
+
+  publishAgentStates(asWindowId("@1"), states.mux, store);
+
+  const [published] = states.counts;
+  const lines = Object.entries(published?.totals ?? {})
+    .filter(([, n]) => n > 0)
+    .map(([state, n]) => `${state === "running" ? "working" : state}\t${n}\n`)
+    .join("");
+  const crew = published?.crew ? `crew\t${published.crew}\n` : "";
+  const identity = { host_id: "HOST", display_name: "host" };
+  // Human running and blocked count; the crew idle and crashed agents add a
+  // crashed (a human must see it) and the crew total, not an idle.
+  expect(lines + crew).toBe("crashed\t1\nblocked\t1\nworking\t1\ncrew\t2\n");
+  expect(lines + crew).toBe(tmuxStatus(status(store, identity)));
 });
