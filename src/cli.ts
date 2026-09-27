@@ -11,6 +11,7 @@ import { registerLink } from "./cli/link.js";
 import { registerNotify } from "./cli/notify.js";
 import { registerPeer } from "./cli/peer.js";
 import { registerPick } from "./cli/pick.js";
+import { registerSidepanel } from "./cli/sidepanel-register.js";
 import { registerStatus } from "./cli/status.js";
 import { VERSION } from "./index.js";
 
@@ -30,5 +31,6 @@ registerPeer(program);
 registerDoctor(program);
 registerStatus(program);
 registerDash(program);
+registerSidepanel(program);
 registerPick(program);
 program.parse();

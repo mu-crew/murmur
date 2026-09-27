@@ -18,6 +18,7 @@ const TMUX_RIG_TESTS = [
   "test/pane-ownership.test.ts",
   "test/mux-targets.test.ts",
   "test/sidepanel-controller.test.ts",
+  "test/sidepanel-tmux.test.ts",
 ];
 
 const shared = {
