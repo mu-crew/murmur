@@ -21,7 +21,7 @@ pi agent ──in-process── murmur store ── state.db   (one per node)
                                             │
                                     ssh murmur export
                                             │
-                                collector ── view ── status / pick / dash
+                                collector ── view ── status / pick / dash / sidepanel
                                                        │
                                      jump: local switch, or ssh -t
 ```
@@ -32,10 +32,18 @@ panes. `murmur export` prints that state as a single complete JSON document — 
 and renders the union as an attention-sorted list. No daemon, no listening
 socket, no master node.
 
-Three paint surfaces share that list: `status` (counts), `pick` (fzf jump),
-`dash` (cards + pane glance). Jump is the same whether you left from pick or
-dash. Dash can also send a buffered prompt to the selected pane without leaving
-the dashboard.
+Four paint surfaces share that list: `status` (counts), `pick` (fzf jump),
+`dash` (cards + pane glance), and `sidepanel` (a compact list in the current
+tmux window). Jump is the same whether you left from pick, dash, or sidepanel.
+Dash can also send a buffered prompt to the selected pane without leaving the
+dashboard.
+
+The side panel uses the existing collector and view pipeline, including the
+dashboard's sort and visibility preferences. Only `sidepanel-controller`
+changes the tmux layout. It creates a marked pane on the left, then
+proportionally reflows the existing layout so the panel spans the full window
+height. On close, it removes the marked pane from tmux's current live layout
+instead of restoring a saved layout that may no longer match the window.
 
 murmur observes and connects. It does not place work. That is an orchestrator's
 job, and mixing the two is how you end up owning scheduling, credentials and
@@ -573,8 +581,9 @@ picks one word, `viewSort` orders the list, and `RENDER_PRIORITY` is the single
 ordering table `status`, `pick`, and `dash` import rather than restating.
 
 `dash` can reorder for display (`priority` is `viewSort`; `node` is local then
-host A–Z; `age` is freshest first). Those toggles live in the dash UI only. They
-do not change `RENDER_PRIORITY` or what `status` / `pick` show.
+host A–Z; `age` is freshest first). The side panel uses the saved dashboard
+order and visibility preferences. Those settings do not change
+`RENDER_PRIORITY` or what `status` and `pick` show.
 
 `identity` is required and non-null, because every caller is a command that
 already fails without one. Optional-chaining it is what previously classed every
@@ -704,8 +713,8 @@ murmur replaced a 1500-line script that was the daily local tool. Zero peers is
 therefore the common case:
 
 - the extension claims its pane and reports activity
-- status, pick, and dash read `localPanes()` through the same mapping a peer
-  snapshot goes through
+- status, pick, dash, and sidepanel read `localPanes()` through the same mapping
+  a peer snapshot goes through
 - the collector, whenever it runs, iterates the peer list, finds nothing, and
   reconciles once
 
@@ -716,8 +725,9 @@ The surfaces differ in *when* that collect happens:
   afterwards, for the next invocation. See `spawnCollect` in `src/cli/pick.ts`
   and the commit that made it so, "paint the picker from cache, collect behind
   it, not before it".
-- **dash paints from cache too**, then refreshes on a `COLLECT_FLOOR_MS`
-  interval while it stays open (`src/cli/dash.tsx`).
+- **dash and sidepanel paint from cache too**, then refresh on a
+  `COLLECT_FLOOR_MS` interval while they stay open (`src/cli/dash.tsx` and
+  `src/cli/sidepanel.tsx`).
 - **status collects inline**, under `COLLECT_FLOOR_MS`, before it reads. tmux
   re-runs it every `status-interval` per attached client; a repaint is not a
   reason to reach a machine.
@@ -872,11 +882,11 @@ so heuristics are where the tests go.
 agent an orchestrator placed want opposite treatment: when the orchestrated one
 finishes, its supervisor consumes the result and nobody needs to acknowledge
 anything. Same facts, opposite attention. So an orchestrated agent raises no
-`done` at all, and its rows are hidden from status, pick, and dash unless its
-attention includes `blocked` or `crashed` — the two kinds only a human can
-answer. That list is `NEEDS_HUMAN`, shared by every surface, because it was two
-literals in two files and that is how a row needing a human became one a human
-could not see.
+`done` at all, and its rows are hidden from status, pick, dash, and sidepanel
+unless its attention includes `blocked` or `crashed` — the two kinds only a
+human can answer. That list is `NEEDS_HUMAN`, shared by every surface, because
+it was two literals in two files. That duplication once hid a row that needed a
+human.
 
 It is per *agent*, not per node, because the normal case is one machine running
 your session and six spawned workers at once.
