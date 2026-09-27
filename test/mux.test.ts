@@ -7,8 +7,8 @@ import {
   deriveTmuxServer,
   pidAlive,
   tmux,
+  tmuxAgentState,
   tmuxArgs,
-  tmuxBadgeState,
 } from "../src/mux.js";
 
 const tmuxCalls = vi.hoisted(() => [] as string[][]);
@@ -66,35 +66,47 @@ test("pidAlive is true for self and false for an unused pid", () => {
   expect(pidAlive(2 ** 22)).toBe(false);
 });
 
-test("tmux badges preserve the established working token", () => {
-  expect(tmuxBadgeState("running")).toBe("working");
-  expect(tmuxBadgeState("blocked")).toBe("blocked");
+test("tmux agent states preserve the established working token", () => {
+  expect(tmuxAgentState("running")).toBe("working");
+  expect(tmuxAgentState("blocked")).toBe("blocked");
 });
 
-test("retracting a window badge clears both agent options", () => {
+test("retracting a window state clears both murmur window options", () => {
   tmuxCalls.length = 0;
 
-  tmux.setWindowBadge(asWindowId("@7"), null);
+  tmux.setWindowState(asWindowId("@7"), null);
 
   expect(tmuxCalls).toEqual([
-    ["set-window-option", "-qu", "-t", "@7", "@agent_state"],
-    ["set-window-option", "-qu", "-t", "@7", "@pane_agent"],
+    ["set-window-option", "-qu", "-t", "@7", "@murmur_window_state"],
+    ["set-window-option", "-qu", "-t", "@7", "@murmur_window_has_agent"],
     ["refresh-client", "-S"],
   ]);
 });
 
-test("badge reads and writes select the location's private server", () => {
+test("pane state is pane-scoped and uses the tmux working token", () => {
+  tmuxCalls.length = 0;
+
+  tmux.setPaneState(asPaneId("%7"), "running");
+  tmux.setPaneState(asPaneId("%8"), null);
+
+  expect(tmuxCalls).toEqual([
+    ["set-option", "-pq", "-t", "%7", "@murmur_pane_state", "working"],
+    ["set-option", "-pqu", "-t", "%8", "@murmur_pane_state"],
+  ]);
+});
+
+test("state reads and writes select the location's private server", () => {
   tmuxCalls.length = 0;
   tmuxReplies.length = 0;
   tmuxReplies.push("%34");
 
   expect(tmux.panesInWindow(asWindowId("@7"), { kind: "label", value: "coop" })).toEqual(["%34"]);
-  tmux.setWindowBadge(asWindowId("@7"), "done", { kind: "label", value: "coop" });
+  tmux.setWindowState(asWindowId("@7"), "done", { kind: "label", value: "coop" });
 
   expect(tmuxCalls).toEqual([
     ["-L", "coop", "list-panes", "-t", "@7", "-F", "#{pane_id}"],
-    ["-L", "coop", "set-window-option", "-q", "-t", "@7", "@agent_state", "done"],
-    ["-L", "coop", "set-window-option", "-q", "-t", "@7", "@pane_agent", "1"],
+    ["-L", "coop", "set-window-option", "-q", "-t", "@7", "@murmur_window_state", "done"],
+    ["-L", "coop", "set-window-option", "-q", "-t", "@7", "@murmur_window_has_agent", "1"],
     ["-L", "coop", "refresh-client", "-S"],
   ]);
 });

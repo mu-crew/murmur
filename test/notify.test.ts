@@ -46,7 +46,7 @@ function inPane(panes: string[] = ["%1"]) {
   });
 }
 
-// @agent_state is a WINDOW option projecting the highest-priority state in that
+// @murmur_window_state is a WINDOW option projecting the highest-priority state in that
 // window, and RENDER_PRIORITY puts crashed above blocked above done. notify used
 // to paint its own kind unconditionally, so a notification on one pane erased a
 // crashed agent's glyph on another pane of the same window -- attention rows
@@ -55,7 +55,7 @@ function inPane(panes: string[] = ["%1"]) {
 test("a notification cannot downgrade a crashed glyph on a sibling pane", () => {
   const badges: [WindowId, RenderState | null][] = [];
   const mux = inPane(["%1", "%2"]);
-  mux.setWindowBadge = (window: WindowId, state: RenderState | null) => {
+  mux.setWindowState = (window: WindowId, state: RenderState | null) => {
     badges.push([window, state]);
   };
 
@@ -84,6 +84,16 @@ test("a notification cannot downgrade a crashed glyph on a sibling pane", () => 
   // ...but the WINDOW keeps the stronger word, because a human scanning the
   // status bar must see the crash first.
   expect(badges).toEqual([[asWindowId("@1"), "crashed"]]);
+});
+
+test("a notification publishes the pane's recomputed state", () => {
+  const panes: [string, RenderState | null][] = [];
+  const mux = inPane();
+  mux.setPaneState = (pane, state) => void panes.push([pane, state]);
+
+  runNotify(store, { source: "codex" }, { type: "agent-turn-complete" }, mux);
+
+  expect(panes).toEqual([["%1", "done"]]);
 });
 
 test("a notification with no recognised event records blocked for the caller's pane", () => {
@@ -159,7 +169,7 @@ test("the badge shows the kind actually recorded, not a fixed word", () => {
     // Real tmux lists the pane the notifier is sitting in; the fake defaults to
     // an empty window, which is a state tmux cannot produce.
     panesInWindow: () => [asPaneId("%1")],
-    setWindowBadge: (window, state) => void badges.push([window, state]),
+    setWindowState: (window, state) => void badges.push([window, state]),
   });
 
   runNotify(store, { source: "codex" }, { type: "agent-turn-complete" }, mux);
@@ -347,7 +357,7 @@ test("the window badge is set, so the status bar does not wait for a collect", (
     // The badge is RECOMPUTED from the window's panes, so the window must
     // contain the pane being reported for, as real tmux guarantees.
     panesInWindow: () => [asPaneId("%1")],
-    setWindowBadge: (window, state) => void badges.push([window, state]),
+    setWindowState: (window, state) => void badges.push([window, state]),
   });
 
   runNotify(store, { source: "codex" }, {}, mux);

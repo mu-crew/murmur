@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { publishAgentStates } from "../agent-state.js";
 import { tmux } from "../mux.js";
 import type { Store } from "../store.js";
 import type { Activity, AgentMeta, AgentRuntime, Location } from "../types.js";
@@ -135,7 +136,7 @@ export default function murmurPi(pi: ExtensionAPI): void {
         location.server.value !== lastLocation.server.value)
     ) {
       try {
-        tmux.setWindowBadge(lastLocation.window, null, lastLocation.server);
+        tmux.setWindowState(lastLocation.window, null, lastLocation.server);
       } catch {
         // Best effort; the new window's badge matters more than the old one's.
       }
@@ -320,10 +321,25 @@ export default function murmurPi(pi: ExtensionAPI): void {
     await getStore();
   });
 
-  /** Paint only if we own the pane. A nested agent is deliberately invisible. */
-  const badge = (location: Location, state: "running" | null): void => {
+  /** Publish stored state only if we own the pane. A nested agent is invisible. */
+  const publish = (location: Location): void => {
+    if (refused || state.kind !== "open") return;
+    try {
+      publishAgentStates(location.window, tmux, state.store, location.server);
+    } catch {
+      // Presentation is best effort; a tmux or store failure must never reach pi.
+    }
+  };
+
+  /** Retract a state this process may have painted when it cannot publish truth. */
+  const retract = (location: Location): void => {
     if (refused) return;
-    tmux.setWindowBadge(location.window, state, location.server);
+    try {
+      tmux.setPaneState(location.pane, null, location.server);
+      tmux.setWindowState(location.window, null, location.server);
+    } catch {
+      // Best effort, as with publish.
+    }
   };
 
   pi.on("agent_start", (_event, ctx) => {
@@ -332,7 +348,7 @@ export default function murmurPi(pi: ExtensionAPI): void {
       // Ownership first, glyph second. A process whose pane was taken over while
       // its handle was dropped learns that from the claim inside `report`, and a
       // badge painted before it would announce an agent that has moved on.
-      if (await report("running", location)) badge(location, "running");
+      if (await report("running", location)) publish(location);
       // Then what it is running with. Here as well as on the change events,
       // because a RESUMED session may never emit a model_select or end a turn --
       // it would sit on the dash reporting no model for its whole life.
@@ -396,8 +412,8 @@ export default function murmurPi(pi: ExtensionAPI): void {
       // Clearing is safe whatever the answer -- it retracts this process's own
       // glyph and can only ever say less -- but it is still ordered after the
       // write so that both halves read the same ownership answer.
-      await report("stopped", location);
-      badge(location, null);
+      if (await report("stopped", location)) publish(location);
+      else retract(location);
     });
   });
 
@@ -422,7 +438,7 @@ export default function murmurPi(pi: ExtensionAPI): void {
           message: "",
           source: "pi",
         });
-        tmux.setWindowBadge(location.window, settled, location.server);
+        publishAgentStates(location.window, tmux, store, location.server);
       } catch {
         dropStore();
       }
@@ -440,13 +456,16 @@ export default function murmurPi(pi: ExtensionAPI): void {
   pi.on("session_shutdown", async () => {
     await enqueue(async () => {
       const location = here();
-      badge(location, null);
       try {
         if (state.kind === "open" && agentId) {
           state.store.releaseAgent({ agent_id: agentId, owner_pid: process.pid, location });
+          publish(location);
+        } else {
+          retract(location);
         }
       } catch {
         // The handle goes either way.
+        retract(location);
       }
       agentId = null;
       pendingTurn = null;

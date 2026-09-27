@@ -3,6 +3,15 @@
 Notable changes per release. Written for someone deciding whether to upgrade,
 so it says what changed for a user rather than listing every commit.
 
+## Unreleased
+
+**Tmux integration publishes explicit window and pane state.** The old
+`@agent_state` and `@pane_agent` window options are replaced by
+`@murmur_window_state` and `@murmur_window_has_agent`. Murmur also publishes
+`@murmur_pane_state`, so a pane border can show that pane's full state. Every
+activity, attention, clear, and crash write recomputes all three from stored
+state, so an event cannot erase a stronger existing state.
+
 ## 0.5.3
 
 Wire-compatible with 0.5.0 through 0.5.2: the snapshot format remains version

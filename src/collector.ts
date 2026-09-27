@@ -1,3 +1,4 @@
+import { publishAgentStates } from "./agent-state.js";
 import { type Channel, hasWarmSocket } from "./channel.js";
 import { type Mux, tmux } from "./mux.js";
 import { parseSnapshot, SnapshotInvalidError } from "./snapshot.js";
@@ -583,7 +584,22 @@ export async function collect(
   }
   for (const server of servers.values()) {
     try {
-      store.reconcileLocal({ server, panes: mux.livePanes(server), now });
+      const summary = store.reconcileLocal({ server, panes: mux.livePanes(server), now });
+      // A crash is recorded here, not by the agent that died, so this is the
+      // only writer that can publish it to tmux.
+      const windows = new Set(
+        store
+          .localPanes()
+          .filter(
+            (pane) =>
+              summary.crashed.includes(pane.pane) &&
+              pane.server.kind === server.kind &&
+              (server.kind === "default" ||
+                ("value" in pane.server && pane.server.value === server.value)),
+          )
+          .map((pane) => pane.window),
+      );
+      for (const window of windows) publishAgentStates(window, mux, store, server);
     } catch {
       // Housekeeping must not fail a command, and it must not report either.
     }

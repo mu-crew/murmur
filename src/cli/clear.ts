@@ -1,55 +1,11 @@
 import type { Command } from "commander";
-import { asPaneId, type WindowId } from "../ids.js";
+import { publishAgentStates } from "../agent-state.js";
+import { asPaneId } from "../ids.js";
 import { type Mux, tmux } from "../mux.js";
 import { openStore, type Store } from "../store.js";
-import type { TmuxServer } from "../types.js";
-import { RENDER_PRIORITY, type RenderState, renderState } from "../view.js";
 
 /**
- * Does any OTHER pane in this window still want attention?
- *
- * The badge is a WINDOW option while "the user looked" is true of one pane, so a
- * window holding an agent and a shell must keep its badge when you focus the
- * shell.
- *
- * Fails safe by keeping the badge when tmux or the store cannot answer: a badge
- * wrongly kept is recoverable by focusing the pane, one wrongly cleared loses
- * the signal.
- *
- * Exported because WRITING the badge needs the same recomputation as clearing
- * it: `notify` used to paint its own kind unconditionally, so a `done` on one
- * pane replaced the `crashed` glyph of another agent in the same window. It
- * stays here, beside its only other caller, rather than moving to view.ts --
- * that module is pure and knows nothing of `Mux` or `Store`, and giving it a
- * projection that needs both would invert the layering.
- */
-export function windowBadge(
-  window: WindowId,
-  mux: Mux,
-  store: Store,
-  server: TmuxServer = { kind: "default" },
-): RenderState | null {
-  const panes = new Set(mux.panesInWindow(window, server));
-  const states = store
-    .localPanes()
-    .filter(
-      (pane) =>
-        pane.server.kind === server.kind &&
-        (pane.server.kind === "default" ||
-          ("value" in server && pane.server.value === server.value)) &&
-        panes.has(pane.pane),
-    )
-    .map((pane) =>
-      renderState({
-        activity: pane.agent?.activity ?? null,
-        attention: pane.attention,
-      }),
-    );
-  return RENDER_PRIORITY.find((state) => state !== "idle" && states.includes(state)) ?? null;
-}
-
-/**
- * Acknowledge every attention request on one pane, and clear its window badge.
+ * Acknowledge every attention request on one pane, then republish its window.
  *
  * The whole write path. Nothing here must refuse to clear anything, because
  * attention is all focus can address: `acknowledgePane` is one `DELETE FROM
@@ -92,13 +48,13 @@ export function clearPane(raw: string, mux: Mux = tmux): void {
     // next event. For a crashed agent that is never.
     //
     // A pane murmur has never seen still clears, because there `openStore`
-    // succeeds and `windowBadge` returns null on its own evidence.
+    // succeeds and the projection finds no local state for it.
     if (!window || !store) return;
-    // @agent_state is a derived window-scoped projection, so it is recomputed
-    // after the delete: blindly clearing the option made a live running agent
-    // display as idle though its agent row was untouched.
+    // Pane and window states are derived projections, so they are recomputed
+    // after the delete: blindly clearing them made a live running agent display
+    // as idle though its agent row was untouched.
     try {
-      mux.setWindowBadge(window, windowBadge(window, mux, store, server), server);
+      publishAgentStates(window, mux, store, server);
     } catch {
       // Unreadable projection: leave the badge. Stale is recoverable, erasing a
       // real signal is not.

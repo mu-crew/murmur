@@ -108,7 +108,7 @@ Three consequences worth stating, because each is easy to violate by accident:
   owning node is the one that reconciles.
 - **Only a pane's own process may report for that pane.** `claimAgent` answers
   `refused` to a second live claimant, and a refused caller registers no
-  handlers, writes nothing and paints no badge. This replaced an environment
+  handlers, writes nothing and publishes no tmux state. This replaced an environment
   marker and three helper functions: a nested pi inherits `$TMUX_PANE` and used
   to report *as* the pane's real agent, so one pane accumulated six reporting
   pids of which one was alive, and the live agent read idle while it worked.
@@ -188,13 +188,18 @@ ids; it cannot stop you asking the wrong one a question. A type system polices
 which noun you passed, never whether the question was worth asking. Only a test
 that moves a pane out from under a recorded window catches that.
 
-The badge also has to be cleared from outside, which is why `murmur clear --pane
-<id>` exists and why tmux hooks call it. The status bar and the picker read a
-tmux window option, so it outlives the agent unless something clears it — and
-the agent cannot, because "you looked at it" is an event only the multiplexer
-sees. Hooks run in the tmux server with no `$TMUX_PANE`, so the pane id is
-passed explicitly: the badge belongs to the window, the looking belongs to one
-pane.
+Tmux state also has to be cleared from outside, which is why `murmur clear --pane
+<id>` exists and why tmux hooks call it. Murmur publishes three tmux options:
+
+- `@murmur_window_state`: the strongest non-idle state among a window's panes,
+  for status bars and pickers
+- `@murmur_window_has_agent`: whether that aggregate state came from an agent
+- `@murmur_pane_state`: one pane's full state, for pane-border formats
+
+The names are distinct because tmux pane options inherit same-named window
+options. A shell beside an agent must not inherit that agent's state. Every
+writer recomputes the options from stored activity and attention, rather than
+painting the event it just handled.
 
 ## The units
 
@@ -206,7 +211,7 @@ pane.
 | `view` | **Pure.** `SnapshotPane[]` in, `PaneView[]` out | `store` (types) |
 | `channel` | Seam: `exec(target, argv) -> stdout`. One impl: ssh | OS |
 | `collector` | Fetch each peer, validate, replace its cache whole | `channel`, `store` |
-| `mux` | Seam: window/pane queries, badge, attach. One impl: tmux | OS |
+| `mux` | Seam: window/pane queries, tmux state options, attach. One impl: tmux | OS |
 
 `view` and `snapshot` being pure and `store` being the only SQL is the boundary
 that carries the design. All three are testable without a machine, a network or
@@ -689,8 +694,8 @@ machine has at that id. Names travel in the snapshot instead.
 *the user looked at this pane*. Its only WRITE to murmur state is one `DELETE
 FROM attention WHERE pane = ?`, so a focus hook structurally cannot mutate an
 agent row — no activity, no identity, no owner metadata. It does read local
-panes once, to recompute the window badge from what the window's other panes are
-doing.
+panes once, to recompute each pane state and the window aggregate from stored
+state.
 
 There is no state focus must refuse to clear, because attention is the only
 thing focus can address. That whole class of bug — a whitelist, a resolver call,
@@ -699,11 +704,13 @@ is deleted along with the ability to get it wrong. It was the worst bug found
 here: 50 of 84 turns on one agent were cleared within a minute of starting,
 because switching back to a pane wiped the state of the agent running in it.
 
-The badge is a window option while "you looked" is true of one pane, so `clear`
-keeps the badge lit when another pane in the same window still wants attention.
-The badge is recomputed from attention AND activity, so a busy agent next door
-keeps the window showing `running` rather than going dark; `idle` is the one
-state never painted, since it is the absence of a signal. It fails safe by keeping the badge — wrongly
+The window state is an aggregate while "you looked" is true of one pane, so
+`clear` keeps the window lit when another pane still wants attention. It is
+recomputed from attention AND activity, so a busy agent next door keeps the
+window showing `running` rather than going dark; `idle` is never published as a
+window aggregate, since it is the absence of a signal. Pane state does include
+`idle`, so a border can distinguish an idle agent from an ordinary shell. Clear
+fails safe by keeping tmux state — wrongly
 keeping one is recoverable by focusing the pane, wrongly clearing one loses the
 signal — and it is silent and total, because it runs inside the tmux server.
 
@@ -954,7 +961,7 @@ identity (never mint one), open the store, and `claimAgent`. Then:
 factory in the same process, and a check that could not recognise its own claim
 would silence the real agent. `refused` is permanent for the process — a nested
 agent is deliberately invisible, and it is checked at both the store call and
-the badge, because the badge is painted from the same handler that reports.
+the tmux publish, because both happen in the same handler.
 
 `replaced` clears the previous occupant's attention because that attention
 described a process that is gone, and a human looking at the pane now sees a
@@ -966,8 +973,8 @@ last-write-wins, so an inverted `start`/`end` pair would leave a finished agent
 
 `setActivity` returning `false` is not an error and is not retried: it means
 this process is no longer the owner of record, and the correct response is
-silence. The badge is gated on that boolean, so a process that cannot report
-cannot paint either.
+silence. Tmux state is published only after an accepted write, so a process
+that cannot report cannot publish state either.
 
 Three assumptions that were wrong, all of which failed silently:
 
@@ -995,8 +1002,8 @@ Three assumptions that were wrong, all of which failed silently:
   both of which follow persistence of the whole turn.
 - **The pane outlives the window.** A pane can move between windows, keeping its
   id while the window id changes, so the location is re-read on every report
-  rather than cached at startup, and a move hands the badge over to the new
-  window.
+  rather than cached at startup, and a move retracts the old window's state
+  before publishing the new one.
 
 The store handle has three states — `untried`, `open`, `absent` — because those
 are three real situations. Collapsing them is what previously latched reporting

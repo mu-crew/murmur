@@ -51,7 +51,7 @@ function read<T>(work: (store: Store) => T): T {
   }
 }
 
-/** Badge writes made by the clear hook. */
+/** Window-state writes made by the clear hook. */
 function badgeRecorder(): {
   writes: [WindowId, unknown][];
   set: (window: WindowId, state: unknown) => void;
@@ -81,7 +81,7 @@ test("focus acknowledges every kind of attention on the pane", () => {
     fakeMux({
       windowForPane: () => asWindowId("@1"),
       panesInWindow: () => [asPaneId("%1")],
-      setWindowBadge: badges.set,
+      setWindowState: badges.set,
     }),
   );
 
@@ -116,7 +116,7 @@ test("focus cannot touch the agent in the pane, whatever it is doing", () => {
     fakeMux({
       windowForPane: () => asWindowId("@1"),
       panesInWindow: () => [asPaneId("%1")],
-      setWindowBadge: badges.set,
+      setWindowState: badges.set,
     }),
   );
 
@@ -126,7 +126,7 @@ test("focus cannot touch the agent in the pane, whatever it is doing", () => {
 });
 
 test("a pane murmur has never seen still gets its badge cleared", () => {
-  // The tms picker and the status bar read @agent_state from tmux, not from
+  // The tms picker and the status bar read @murmur_window_state from tmux, not from
   // murmur. A badge murmur never wrote -- an orphan from the agent-attention
   // era, or a window it never recorded -- used to be unclearable, so the glyph
   // sat in the picker forever because nothing else would ever clear it.
@@ -134,7 +134,7 @@ test("a pane murmur has never seen still gets its badge cleared", () => {
 
   clearPane(
     "%unknown",
-    fakeMux({ windowForPane: () => asWindowId("@42"), setWindowBadge: badges.set }),
+    fakeMux({ windowForPane: () => asWindowId("@42"), setWindowState: badges.set }),
   );
 
   expect(badges.writes).toEqual([["@42", null]]);
@@ -169,7 +169,7 @@ test("a sibling pane that still wants attention keeps the badge lit", () => {
   const mux = fakeMux({
     windowForPane: () => asWindowId("@1"),
     panesInWindow: () => [asPaneId("%agent"), asPaneId("%busy"), asPaneId("%shell")],
-    setWindowBadge: badges.set,
+    setWindowState: badges.set,
   });
 
   // Focusing the shell: the agent next door still wants attention.
@@ -207,11 +207,40 @@ test("clear is silent and total when nothing can answer", () => {
 // reported. A locked state.db plus one focus event wiped a crashed glyph off a
 // window whose attention row was still there, and for a crashed agent nothing
 // ever repaints it.
+test("clear republishes the focused pane's own state", () => {
+  seed((store) => {
+    store.requestAttention({ kind: "done", location: location("%1"), message: "", source: "pi" });
+    const claim = store.claimAgent({
+      location: location("%1"),
+      owner_pid: process.pid,
+      meta: META,
+    });
+    store.setActivity({
+      agent_id: "agent_id" in claim ? claim.agent_id : "",
+      owner_pid: process.pid,
+      activity: "running",
+      location: location("%1"),
+    });
+  });
+  const panes: [string, string | null][] = [];
+
+  clearPane(
+    "%1",
+    fakeMux({
+      windowForPane: () => asWindowId("@1"),
+      panesInWindow: () => [asPaneId("%1")],
+      setPaneState: (pane, state) => void panes.push([pane, state]),
+    }),
+  );
+
+  expect(panes).toEqual([["%1", "running"]]);
+});
+
 test("an unopenable store leaves the badge alone rather than erasing it", () => {
   const badges: [string, string | null][] = [];
   const mux = fakeMux({
     windowForPane: () => asWindowId("@1"),
-    setWindowBadge: (window: WindowId, state: string | null) => {
+    setWindowState: (window: WindowId, state: string | null) => {
       badges.push([window, state]);
     },
   });
@@ -229,7 +258,7 @@ test("an unopenable store leaves the badge alone rather than erasing it", () => 
 });
 
 test("another window's attention cannot light this window's badge", () => {
-  // The badge is scoped to the FOCUSED window, and `windowBadge` enforces that
+  // The window state is scoped to the FOCUSED window, and the projection enforces that
   // by filtering local panes down to the ones tmux says are in it. Nothing
   // tested the filter: every other case here stubs `panesInWindow` to return
   // every seeded pane, so the filter was a no-op in all of them and deleting it
@@ -255,7 +284,7 @@ test("another window's attention cannot light this window's badge", () => {
       // tmux's answer is the authority on membership, and it says the blocked
       // pane is not here.
       panesInWindow: () => [asPaneId("%focused")],
-      setWindowBadge: badges.set,
+      setWindowState: badges.set,
     }),
   );
 
@@ -264,7 +293,7 @@ test("another window's attention cannot light this window's badge", () => {
 
 test("a window whose only agent is idle clears to null, not to idle", () => {
   // `idle` is the absence of a signal, so it must never be painted as one: the
-  // badge option is unset instead. The `state !== "idle"` guard in windowBadge
+  // window option is unset instead. The `state !== "idle"` guard in the projection
   // is what does that, and it was also unprotected -- mutating it away kept the
   // whole suite green while every focused window started reporting `idle`.
   seed((store) => {
@@ -277,7 +306,7 @@ test("a window whose only agent is idle clears to null, not to idle", () => {
     fakeMux({
       windowForPane: () => asWindowId("@1"),
       panesInWindow: () => [asPaneId("%idle")],
-      setWindowBadge: badges.set,
+      setWindowState: badges.set,
     }),
   );
 
