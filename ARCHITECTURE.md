@@ -1085,7 +1085,8 @@ Each was considered and refused with reasons above:
 - a generic put/del op-log
 - HLC or clock reconciliation
 - gossip replication
-- configuration knobs beyond peers and theme
+- configuration knobs beyond peers, jump commands, and dashboard view
+  preferences
 - multiplexers other than tmux, channels other than ssh
 - an in-process integration for any harness other than pi. `murmur notify` is
   the outside-in path for the rest, and it is not the same thing: a harness that
@@ -1099,7 +1100,7 @@ each was cheaper to accept than to solve:
 
 1. **No history.** Only current state is stored. There is no event log, no
    retention horizon, and no way to ask what an agent was doing an hour ago. The
-   picker's preview is a live `capture-pane`, not a replay.
+   dash's pane glance is a live `capture-pane`, not a replay.
 2. **No compatibility with older nodes.** A pre-rewrite `events.db` is not
    migrated, and any `state.db` from a different `user_version` is rebuilt with
    only peer names and targets salvaged. A node serving the old event format is

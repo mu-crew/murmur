@@ -4,8 +4,8 @@
 
 | Doc | Reach when |
 | --- | --- |
-| [README.md](README.md) | product surfaces, install one-liner, what murmur is not |
-| [docs/setup.md](docs/setup.md) | tmux clear hooks, `murmur notify` for Codex/Cursor, peers, doctor, jump overrides |
+| [README.md](README.md) | product surfaces, comparison with herdr / workmux / mu, install one-liner, what murmur is not |
+| [docs/setup.md](docs/setup.md) | tmux clear hooks, side panel binding, `murmur notify` for Codex/Cursor, peers, doctor, jump overrides |
 | [SSH.md](SSH.md) | BatchMode, warm ControlMaster, `MaxSessions 1`, Eternal Terminal |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | activity / attention / freshness model, single-writer invariants, design costs, known gaps |
 
