@@ -6,6 +6,7 @@ import { COLLECT_FLOOR_MS } from "../collector.js";
 import { DASH_CHROME_COLOR, DASH_COLOR } from "../dash-paint.js";
 import { type DashPrefs, loadDashPrefs, saveDashPrefs } from "../dash-prefs.js";
 import { type DashStore, openDashStore, refreshDashStore } from "../dash-store.js";
+import type { FooterHint } from "../dash-tick.js";
 import {
   closeSidepanel,
   type SidepanelOrigin,
@@ -24,25 +25,65 @@ import type { PaneView } from "../view.js";
 import { requireIdentity } from "./identity-guard.js";
 
 const REDRAW_MS = 3_000;
-const FOOTER = "j/k move · ↵ jump · a crew · q close";
+const FOOTER = "? help";
+
+export type SidepanelHelpSection = { title: string; hints: FooterHint[] };
+
+export function sidepanelHelpSections(view: {
+  crew: boolean;
+  compact: boolean;
+}): SidepanelHelpSection[] {
+  return [
+    {
+      title: "navigation",
+      hints: [
+        { chord: "j/k", label: "select" },
+        { chord: "g/G", label: "top or end" },
+        { chord: "enter", label: "jump to the agent" },
+      ],
+    },
+    {
+      title: "view",
+      hints: [
+        { chord: "a", label: "toggle crew only", value: view.crew ? "crew only" : "all" },
+        { chord: "c", label: "toggle compact rows", value: view.compact ? "on" : "off" },
+      ],
+    },
+    {
+      title: "panel",
+      hints: [
+        { chord: "q/^c", label: "close" },
+        { chord: "?/esc", label: "close this help" },
+      ],
+    },
+  ];
+}
 
 type SidepanelInputAction =
   | { type: "move"; key: "j" | "k" | "g" | "G" }
   | { type: "crew" }
+  | { type: "compact" }
+  | { type: "help-open" | "help-close" }
   | { type: "close" }
   | { type: "activate" }
   | { type: "none" };
 
 export function routeSidepanelInput(
+  helpOpen: boolean,
   input: string,
-  key: { ctrl?: boolean; return?: boolean },
+  key: { ctrl?: boolean; escape?: boolean; return?: boolean },
   hasSelection: boolean,
 ): SidepanelInputAction {
+  if (helpOpen) {
+    return input === "?" || key.escape ? { type: "help-close" } : { type: "none" };
+  }
+  if (input === "?") return { type: "help-open" };
   if (input === "q" || (key.ctrl && input === "c")) return { type: "close" };
   if (input === "j" || input === "k" || input === "g" || input === "G") {
     return { type: "move", key: input };
   }
   if (input === "a") return { type: "crew" };
+  if (input === "c") return { type: "compact" };
   if (key.return && hasSelection) return { type: "activate" };
   return { type: "none" };
 }
@@ -64,6 +105,46 @@ export function toggleSidepanelCrew(
   const updated = { ...prefs, crew: !prefs.crew };
   save(updated);
   return updated;
+}
+
+export function toggleSidepanelCompact(
+  prefs: DashPrefs,
+  save: (updated: DashPrefs) => void,
+): DashPrefs {
+  const updated = { ...prefs, compact: !prefs.compact };
+  save(updated);
+  return updated;
+}
+
+function Help({ prefs }: { prefs: DashPrefs }) {
+  return (
+    <Box
+      borderStyle="double"
+      borderColor={DASH_CHROME_COLOR.accent}
+      flexDirection="column"
+      flexGrow={1}
+      paddingX={1}
+      overflow="hidden"
+    >
+      <Text bold color={DASH_CHROME_COLOR.accent}>
+        shortcuts<Text dimColor> · ? or esc closes</Text>
+      </Text>
+      {sidepanelHelpSections({ crew: prefs.crew, compact: prefs.compact }).map((section) => (
+        <Box key={section.title} flexDirection="column">
+          <Text bold color={DASH_CHROME_COLOR.info}>
+            {section.title}
+          </Text>
+          {section.hints.map((hint) => (
+            <Text key={hint.chord} wrap="truncate-end">
+              <Text color={DASH_CHROME_COLOR.accent}>{hint.chord.padEnd(7)}</Text>
+              <Text dimColor>{hint.label}</Text>
+              {hint.value ? <Text> {hint.value}</Text> : null}
+            </Text>
+          ))}
+        </Box>
+      ))}
+    </Box>
+  );
 }
 
 export type SidepanelActionDeps = {
@@ -140,12 +221,18 @@ export function App({
   );
   const [fallbackIndex, setFallbackIndex] = useState(0);
   const [message, setMessage] = useState("");
+  const [helpOpen, setHelpOpen] = useState(false);
   const mounted = useRef(false);
   const rows = useMemo(() => sidepanelRows(view.panes, prefs, now), [view.panes, prefs, now]);
   const selection = reconcileSidepanelSelection(rows, selectedKey, fallbackIndex);
   const selectedIndex = selection.index;
   const selected = selectedSidepanelPane(view.panes, rows, selectedIndex);
-  const window = sidepanelWindow(selectedIndex, rows.length, terminalRows - 2 - (message ? 1 : 0));
+  const window = sidepanelWindow(
+    selectedIndex,
+    rows.length,
+    terminalRows - 2 - (message ? 1 : 0),
+    prefs.compact,
+  );
   const shown = rows.slice(window.first, window.first + window.shown);
 
   useEffect(() => {
@@ -207,8 +294,12 @@ export function App({
   }, [deps.close, exit, origin]);
 
   useInput((input, key) => {
-    const action = routeSidepanelInput(input, key, selected !== undefined);
-    if (action.type === "close") {
+    const action = routeSidepanelInput(helpOpen, input, key, selected !== undefined);
+    if (action.type === "help-open") {
+      setHelpOpen(true);
+    } else if (action.type === "help-close") {
+      setHelpOpen(false);
+    } else if (action.type === "close") {
       close();
     } else if (action.type === "move") {
       const index = moveSidepanelSelection(selectedIndex, action.key, rows.length);
@@ -216,6 +307,8 @@ export function App({
       setSelectedKey(rows[index]?.key ?? null);
     } else if (action.type === "crew") {
       setPrefs((current) => toggleSidepanelCrew(current, deps.save ?? saveDashPrefs));
+    } else if (action.type === "compact") {
+      setPrefs((current) => toggleSidepanelCompact(current, deps.save ?? saveDashPrefs));
     } else if (action.type === "activate" && selected) {
       void activateSidepanelSelection(dashStore.store, selected, origin, deps).then((result) => {
         setMessage(result.error ?? "");
@@ -229,27 +322,38 @@ export function App({
       <Text bold color={DASH_CHROME_COLOR.accent} wrap="truncate-end">
         {`murmur · ${rows.length} ${rows.length === 1 ? "agent" : "agents"}${prefs.crew ? " · crew" : ""}`}
       </Text>
-      <Box flexDirection="column" flexGrow={1} overflow="hidden">
-        {rows.length === 0 ? <Text wrap="truncate-end">No visible agents</Text> : null}
-        {shown.map((row) => {
-          const selectedRow = row.key === rows[selectedIndex]?.key;
-          const color = selectedRow ? DASH_CHROME_COLOR.accent : DASH_COLOR[row.state];
-          return (
-            <Box key={row.key} flexDirection="column">
-              <Text bold={selectedRow} color={color} wrap="truncate-end">
-                {`${row.icon} ${row.name}`}
+      {helpOpen ? (
+        <Help prefs={prefs} />
+      ) : (
+        <Box flexDirection="column" flexGrow={1} overflow="hidden">
+          {rows.length === 0 ? <Text wrap="truncate-end">No visible agents</Text> : null}
+          {shown.map((row) => {
+            const selectedRow = row.key === rows[selectedIndex]?.key;
+            const color = selectedRow ? DASH_CHROME_COLOR.accent : DASH_COLOR[row.state];
+            return prefs.compact ? (
+              <Text key={row.key} bold={selectedRow} color={color} wrap="truncate-end">
+                {`${selectedRow ? "▸" : " "} ${row.icon} ${row.name} · ${row.facts}${row.stream ? ` · ${row.stream}` : ""}`}
               </Text>
-              <Text color={selectedRow ? DASH_CHROME_COLOR.accent : undefined} wrap="truncate-end">
-                {row.facts}
-              </Text>
-              <Text dimColor wrap="truncate-end">
-                {row.stream ?? " "}
-              </Text>
-              <Text> </Text>
-            </Box>
-          );
-        })}
-      </Box>
+            ) : (
+              <Box key={row.key} flexDirection="column">
+                <Text bold={selectedRow} color={color} wrap="truncate-end">
+                  {`${row.icon} ${row.name}`}
+                </Text>
+                <Text
+                  color={selectedRow ? DASH_CHROME_COLOR.accent : undefined}
+                  wrap="truncate-end"
+                >
+                  {row.facts}
+                </Text>
+                <Text dimColor wrap="truncate-end">
+                  {row.stream ?? " "}
+                </Text>
+                <Text> </Text>
+              </Box>
+            );
+          })}
+        </Box>
+      )}
       {message ? (
         <Text color="red" wrap="truncate-end">
           {message}

@@ -37,11 +37,12 @@ enter sends, `ctrl-e` stops the agent, and escape returns to the dashboard.
 `s` **node** sort is local cards first, then remotes A–Z.
 
 `murmur sidepanel` shows the same local and remote agents, with the dashboard's
-saved sort and visibility preferences. Press `a` to toggle crew agents, `j` or
-`k` to move, `g` or `G` to jump to an edge, and enter to jump to the selected
-agent. A successful jump closes the panel; a failed jump leaves it open and
-shows the error. Press `q` or `Ctrl-C` to close it. See
-[side panel setup](docs/setup.md#side-panel).
+saved sort and visibility preferences. Press `?` for all keys. Press `a` to
+toggle crew agents and `c` to toggle compact one-line rows. Both settings are
+shared with the dashboard. Press `j` or `k` to move, `g` or `G` to jump to an
+edge, and enter to jump to the selected agent. A successful jump closes the
+panel; a failed jump leaves it open and shows the error. Press `q` or `Ctrl-C`
+to close it. See [side panel setup](docs/setup.md#side-panel).
 
 ## How it compares
 

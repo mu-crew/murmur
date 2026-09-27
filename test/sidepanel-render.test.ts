@@ -57,7 +57,7 @@ function view(panes: PaneView[]): Status {
   return { counts, orchestrated_counts: counts, panes, peers: [] };
 }
 
-function renderFrame(initial: Status): string {
+function renderFrame(initial: Status, compact = false): string {
   const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
   try {
     return renderToString(
@@ -65,7 +65,7 @@ function renderFrame(initial: Status): string {
         dashStore,
         initial,
         origin,
-        initialPrefs: DEFAULT_DASH_PREFS,
+        initialPrefs: { ...DEFAULT_DASH_PREFS, compact },
         now: 120_001,
         dimensions: { columns: 40, rows: 12 },
       }),
@@ -98,7 +98,15 @@ test("the first frame renders local and remote agent facts", () => {
   expect(output).toContain("reviewer-1");
   expect(output).toContain("idle · devbox · 2m");
   expect(output).toContain("sidepanel");
-  expect(output).toContain("j/k move · ↵ jump · a crew · q close");
+  expect(output).toContain("? help");
+  expect(output).not.toContain("j/k move");
+});
+
+test("compact mode renders each agent on one line", () => {
+  const output = renderFrame(view([pane()]), true);
+
+  expect(output).toContain(`▸ ${String.fromCodePoint(0xf04b)} worker-1 · running · here · 2m`);
+  expect(output.split("\n").filter((line) => line.includes("worker-1"))).toHaveLength(1);
 });
 
 test("the first frame renders the empty state", () => {
@@ -106,6 +114,43 @@ test("the first frame renders the empty state", () => {
 
   expect(output).toContain("murmur · 0 agents");
   expect(output).toContain("No visible agents");
+});
+
+test("question mark toggles the keys overlay", async () => {
+  const input = new PassThrough() as unknown as NodeJS.ReadStream;
+  const output = new PassThrough() as unknown as NodeJS.WriteStream;
+  const writes: Buffer[] = [];
+  Object.assign(input, {
+    isTTY: true,
+    setRawMode: () => input,
+    ref: () => undefined,
+    unref: () => undefined,
+  });
+  Object.assign(output, { isTTY: true, columns: 40, rows: 12 });
+  output.on("data", (chunk: Buffer) => writes.push(chunk));
+  const instance = renderInk(
+    createElement(App, {
+      dashStore,
+      initial: view([pane()]),
+      origin,
+      initialPrefs: DEFAULT_DASH_PREFS,
+      dimensions: { columns: 40, rows: 12 },
+      deps: { refresh: async () => view([pane()]) },
+    }),
+    { stdin: input, stdout: output, patchConsole: false },
+  );
+
+  const beforeOpen = writes.length;
+  input.write("?");
+  await vi.waitFor(() =>
+    expect(Buffer.concat(writes.slice(beforeOpen)).toString()).toContain("shortcuts"),
+  );
+  const beforeClose = writes.length;
+  input.write("?");
+  await vi.waitFor(() =>
+    expect(Buffer.concat(writes.slice(beforeClose)).toString()).toContain("worker-1"),
+  );
+  await instance.unmount();
 });
 
 test("a failed close after activation keeps the renderer mounted", async () => {

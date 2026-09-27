@@ -56,8 +56,12 @@ export function sidepanelWindow(
   selected: number,
   total: number,
   availableRows: number,
+  compact = false,
 ): { first: number; shown: number } {
-  const shown = Math.min(Math.max(0, total), Math.max(0, Math.floor((availableRows + 1) / 4)));
+  const shown = Math.min(
+    Math.max(0, total),
+    Math.max(0, compact ? availableRows : Math.floor((availableRows + 1) / 4)),
+  );
   if (shown === 0) return { first: 0, shown: 0 };
   const bounded = Math.min(Math.max(0, selected), total - 1);
   return { first: Math.min(Math.max(0, bounded - shown + 1), total - shown), shown };
