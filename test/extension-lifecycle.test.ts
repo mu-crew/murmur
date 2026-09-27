@@ -54,7 +54,7 @@ async function rig(claimAnswers: Claim[], options: { setActivity?: boolean } = {
   let closes = 0;
   let asked = 0;
 
-  vi.doMock("@martintrojer/murmur/extension-store", () => ({
+  vi.doMock("@mu-crew/murmur/extension-store", () => ({
     loadIdentity: () => ({ host_id: "H", display_name: "h" }),
     openStore: () => {
       opens += 1;
@@ -130,7 +130,7 @@ async function rig(claimAnswers: Claim[], options: { setActivity?: boolean } = {
 }
 
 function unmock(): void {
-  vi.doUnmock("@martintrojer/murmur/extension-store");
+  vi.doUnmock("@mu-crew/murmur/extension-store");
   vi.doUnmock("node:child_process");
   vi.doUnmock("../src/mux.js");
   vi.resetModules();

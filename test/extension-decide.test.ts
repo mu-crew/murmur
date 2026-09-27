@@ -92,7 +92,7 @@ test("link pi re-exports the install rather than copying it, so upgrades apply",
 });
 
 test("the shim pins the store path, which the extension cannot resolve itself", () => {
-  // A bare "@martintrojer/murmur/extension-store" specifier cannot resolve from
+  // A bare "@mu-crew/murmur/extension-store" specifier cannot resolve from
   // ~/.pi/agent/extensions -- not even for a global install. The failure is
   // silent: the import throws, getStore swallows it, and every state report no-ops
   // while the tmux badge still paints. Verified against a real pi: with the
@@ -148,7 +148,7 @@ test("runtime is reported per turn without activating pi's turn_end boundary", a
   // once per RUN, so a long tool-calling run showed stale figures throughout.
   const runtimeUpdates: { usage?: { total_tokens: number }; context_pct?: number | null }[] = [];
 
-  vi.doMock("@martintrojer/murmur/extension-store", () => ({
+  vi.doMock("@mu-crew/murmur/extension-store", () => ({
     loadIdentity: () => ({ host_id: "H", display_name: "h" }),
     openStore: () => ({
       claimAgent: () => ({ outcome: "claimed", agent_id: "a1" }),
@@ -228,7 +228,7 @@ test("runtime is reported per turn without activating pi's turn_end boundary", a
     [undefined, 33],
   ]);
 
-  vi.doUnmock("@martintrojer/murmur/extension-store");
+  vi.doUnmock("@mu-crew/murmur/extension-store");
   vi.doUnmock("../src/mux.js");
   vi.resetModules();
 });
@@ -243,7 +243,7 @@ test("a failed write closes the store it is dropping", async () => {
 
   // The extension imports its store by the published specifier, which is how
   // it resolves once copied into ~/.pi/agent/extensions.
-  vi.doMock("@martintrojer/murmur/extension-store", () => ({
+  vi.doMock("@mu-crew/murmur/extension-store", () => ({
     loadIdentity: () => ({ host_id: "H", display_name: "h" }),
     openStore: () => {
       opened += 1;
@@ -301,7 +301,7 @@ test("a failed write closes the store it is dropping", async () => {
   expect(opened).toBe(1);
   expect(closed).toBe(1);
 
-  vi.doUnmock("@martintrojer/murmur/extension-store");
+  vi.doUnmock("@mu-crew/murmur/extension-store");
   vi.doUnmock("../src/mux.js");
   vi.resetModules();
 });
@@ -320,7 +320,7 @@ test("a transient write failure does not silence the agent for the rest of its l
   const reports: string[] = [];
   let failNext = true;
 
-  vi.doMock("@martintrojer/murmur/extension-store", () => ({
+  vi.doMock("@mu-crew/murmur/extension-store", () => ({
     loadIdentity: () => ({ host_id: "H", display_name: "h" }),
     openStore: () => {
       opened += 1;
@@ -384,7 +384,7 @@ test("a transient write failure does not silence the agent for the rest of its l
   expect(reports).toEqual(["running"]);
   expect(opened).toBe(2);
 
-  vi.doUnmock("@martintrojer/murmur/extension-store");
+  vi.doUnmock("@mu-crew/murmur/extension-store");
   vi.doUnmock("../src/mux.js");
   vi.resetModules();
 });
@@ -396,7 +396,7 @@ test("a missing murmur is given up on after one attempt, not retried per event",
   // dynamic import on every turn forever.
   let imports = 0;
 
-  vi.doMock("@martintrojer/murmur/extension-store", () => {
+  vi.doMock("@mu-crew/murmur/extension-store", () => {
     imports += 1;
     throw new Error("Cannot find module");
   });
@@ -439,7 +439,7 @@ test("a missing murmur is given up on after one attempt, not retried per event",
   // One attempt, however many events arrive.
   expect(imports).toBe(1);
 
-  vi.doUnmock("@martintrojer/murmur/extension-store");
+  vi.doUnmock("@mu-crew/murmur/extension-store");
   vi.doUnmock("../src/mux.js");
   vi.resetModules();
 });
@@ -455,7 +455,7 @@ test("a pane moved to another window keeps its identity and stops badging the ol
   const reports: { window: string; agent_id: string }[] = [];
   const badges: [string, string | null][] = [];
 
-  vi.doMock("@martintrojer/murmur/extension-store", () => ({
+  vi.doMock("@mu-crew/murmur/extension-store", () => ({
     loadIdentity: () => ({ host_id: "H", display_name: "h" }),
     openStore: () => ({
       claimAgent: () => ({ outcome: "claimed", agent_id: "a1" }),
@@ -522,7 +522,7 @@ test("a pane moved to another window keeps its identity and stops badging the ol
   expect(badges).toContainEqual(["@1", null]);
   expect(badges.at(-1)).toEqual(["@2", "running"]);
 
-  vi.doUnmock("@martintrojer/murmur/extension-store");
+  vi.doUnmock("@mu-crew/murmur/extension-store");
   vi.doUnmock("../src/mux.js");
   vi.resetModules();
 });
@@ -558,7 +558,7 @@ test("session_shutdown does not permanently silence the extension, because /relo
   // still painted, so the agent looked fine and reported nothing.
   const reports: string[] = [];
 
-  vi.doMock("@martintrojer/murmur/extension-store", () => ({
+  vi.doMock("@mu-crew/murmur/extension-store", () => ({
     loadIdentity: () => ({ host_id: "H", display_name: "h" }),
     openStore: () => ({
       claimAgent: () => ({ outcome: "claimed", agent_id: "a1" }),
@@ -623,7 +623,7 @@ test("session_shutdown does not permanently silence the extension, because /relo
   await until(() => reports.length === 3, "turn after a second reload");
   expect(reports).toEqual(["running", "running", "running"]);
 
-  vi.doUnmock("@martintrojer/murmur/extension-store");
+  vi.doUnmock("@mu-crew/murmur/extension-store");
   vi.doUnmock("../src/mux.js");
   vi.resetModules();
 });
@@ -638,7 +638,7 @@ test("session_start re-arms an extension that gave up, so a reload is a real rec
   let identity: { host_id: string; display_name: string } | null = null;
   const reports: string[] = [];
 
-  vi.doMock("@martintrojer/murmur/extension-store", () => ({
+  vi.doMock("@mu-crew/murmur/extension-store", () => ({
     loadIdentity: () => identity,
     openStore: () => ({
       claimAgent: () => ({ outcome: "claimed", agent_id: "a1" }),
@@ -699,7 +699,7 @@ test("session_start re-arms an extension that gave up, so a reload is a real rec
 
   expect(reports).toContain("running");
 
-  vi.doUnmock("@martintrojer/murmur/extension-store");
+  vi.doUnmock("@mu-crew/murmur/extension-store");
   vi.doUnmock("../src/mux.js");
   vi.resetModules();
 });
@@ -727,7 +727,7 @@ async function driveExtension(options: { focused: boolean; muManaged?: boolean }
     execFileSync: () => (options.focused ? "1" : "0"),
   }));
 
-  vi.doMock("@martintrojer/murmur/extension-store", () => ({
+  vi.doMock("@mu-crew/murmur/extension-store", () => ({
     loadIdentity: () => ({ host_id: "H", display_name: "h" }),
     openStore: () => ({
       claimAgent: () => ({ outcome: "claimed", agent_id: "a1" }),
@@ -790,7 +790,7 @@ async function driveExtension(options: { focused: boolean; muManaged?: boolean }
 
 function unmockExtension(): void {
   vi.doUnmock("node:child_process");
-  vi.doUnmock("@martintrojer/murmur/extension-store");
+  vi.doUnmock("@mu-crew/murmur/extension-store");
   vi.doUnmock("../src/mux.js");
   vi.resetModules();
 }
@@ -925,7 +925,7 @@ test("a refused claim means no report and no badge, for the life of the process"
   const writes: string[] = [];
   const badges: (string | null)[] = [];
 
-  vi.doMock("@martintrojer/murmur/extension-store", () => ({
+  vi.doMock("@mu-crew/murmur/extension-store", () => ({
     loadIdentity: () => ({ host_id: "H", display_name: "h" }),
     openStore: () => ({
       claimAgent: () => ({ outcome: "refused", held_by_pid: 61980 }),
@@ -993,7 +993,7 @@ test("a claim the store retained keeps reporting, which is what /reload needs", 
   const outcomes = ["claimed", "retained"] as const;
   for (const outcome of outcomes) {
     const writes: string[] = [];
-    vi.doMock("@martintrojer/murmur/extension-store", () => ({
+    vi.doMock("@mu-crew/murmur/extension-store", () => ({
       loadIdentity: () => ({ host_id: "H", display_name: "h" }),
       openStore: () => ({
         claimAgent: () => ({ outcome, agent_id: "a1" }),
@@ -1044,7 +1044,7 @@ test("a stale owner's write returning false is silence, not an error", async () 
   let closes = 0;
   let calls = 0;
 
-  vi.doMock("@martintrojer/murmur/extension-store", () => ({
+  vi.doMock("@mu-crew/murmur/extension-store", () => ({
     loadIdentity: () => ({ host_id: "H", display_name: "h" }),
     openStore: () => ({
       claimAgent: () => ({ outcome: "claimed", agent_id: "a1" }),

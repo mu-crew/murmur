@@ -9,7 +9,7 @@ import { CLEARED, OWNED, REDIRECTED } from "./setup.js";
  * Six tests in extension-decide.test.ts passed on the maintainer's machine and
  * failed in every other checkout, on byte-identical files, because his shell
  * had MURMUR_STORE_MODULE set -- which is what `murmur link pi` tells you to
- * do. The tests mock the bare "@martintrojer/murmur/extension-store"
+ * do. The tests mock the bare "@mu-crew/murmur/extension-store"
  * specifier; vitest mocks by resolved path; the variable made the extension
  * import a different path, so the mock never applied.
  *

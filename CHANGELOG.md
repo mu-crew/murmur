@@ -3,7 +3,17 @@
 Notable changes per release. Written for someone deciding whether to upgrade,
 so it says what changed for a user rather than listing every commit.
 
-## Unreleased
+## 0.6.0
+
+**murmur is now `@mu-crew/murmur`.** Install with `npm i -g @mu-crew/murmur`;
+`@martintrojer/murmur` stops at 0.5.3. After upgrading, run `murmur link pi`
+once so the pi extension points at the new install.
+
+**Side panel: compact rows, a help view, arrow keys, and a bare run-shell bind.**
+`c` toggles one-line rows (shared with the dash), `?` opens the key list, and
+arrows and Home/End move the selection. `bind C-m run-shell "murmur sidepanel"`
+now works: without `$TMUX_PANE`, the command acts on the client's active pane.
+
 
 **Tmux integration publishes explicit window and pane state.** The old
 `@agent_state` and `@pane_agent` window options are replaced by

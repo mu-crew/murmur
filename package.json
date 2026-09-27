@@ -1,6 +1,6 @@
 {
-  "name": "@martintrojer/murmur",
-  "version": "0.5.3",
+  "name": "@mu-crew/murmur",
+  "version": "0.6.0",
   "description": "Agent state across every machine you work on, in one view.",
   "publishConfig": {
     "access": "public"
@@ -8,10 +8,13 @@
   "type": "module",
   "license": "MIT",
   "author": "Martin Trojer <martin.trojer@gmail.com>",
-  "homepage": "https://github.com/martintrojer/murmur",
+  "homepage": "https://github.com/mu-crew/murmur",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/martintrojer/murmur.git"
+    "url": "git+https://github.com/mu-crew/murmur.git"
+  },
+  "bugs": {
+    "url": "https://github.com/mu-crew/murmur/issues"
   },
   "keywords": [
     "tmux",
@@ -34,7 +37,7 @@
     "./extension-store": "./dist/extension/store.js"
   },
   "bin": {
-    "murmur": "./dist/cli.js"
+    "murmur": "dist/cli.js"
   },
   "files": [
     "dist",
