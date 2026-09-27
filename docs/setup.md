@@ -45,6 +45,22 @@ the shell.
 Focus can only cancel attention. It cannot stop a running agent or alter what
 the agent reported about itself.
 
+## Side panel
+
+Bind the side panel in `.tmux.conf`:
+
+```tmux
+bind C-m run-shell "murmur sidepanel"
+```
+
+Then press `prefix + C-m` to toggle it for the current window. This key is free
+in tmux's default prefix table. `prefix + m` and `prefix + M` are not free: tmux
+uses them to set and clear a pane mark.
+
+The panel opens on the left, takes 10 percent of the window width clamped to
+25–40 columns, spans the full viewport even when the existing layout is nested,
+and takes focus. Toggling it again removes only that window's panel.
+
 ## Harnesses other than pi
 
 pi reports in-process through the extension. Codex, opencode, and the Cursor CLI

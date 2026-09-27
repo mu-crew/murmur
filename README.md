@@ -19,6 +19,7 @@ you can move between agents without moving between terminals.
 | `murmur status` | Attention-state rollups plus the total crew count for a tmux status bar |
 | `murmur pick` | fzf jump list — type to narrow, enter jumps, `ctrl-a` / `--all` toggles crew |
 | `murmur dash` | Watch and talk to local or remote agents without leaving the dashboard |
+| `murmur sidepanel` | Show a compact agent list beside the current tmux window |
 
 Orchestrated (`crew`) agents stay hidden from state rollups unless they are
 `blocked` or `crashed`—their supervisor consumes anything else. `murmur status`
@@ -33,6 +34,13 @@ workstream, session, host, or state; `c` toggles compact one-line rows. Press
 clears the agent's done/blocked mark, as focusing its pane would. In input mode,
 enter sends, `ctrl-e` stops the agent, and escape returns to the dashboard.
 `s` **node** sort is local cards first, then remotes A–Z.
+
+`murmur sidepanel` shows the same local and remote agents, with the dashboard's
+saved sort and visibility preferences. Press `a` to toggle crew agents, `j` or
+`k` to move, `g` or `G` to jump to an edge, and enter to jump to the selected
+agent. A successful jump closes the panel; a failed jump leaves it open and
+shows the error. Press `q` or `Ctrl-C` to close it. See
+[side panel setup](docs/setup.md#side-panel).
 
 ## Install
 
