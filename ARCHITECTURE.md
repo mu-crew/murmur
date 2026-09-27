@@ -189,17 +189,31 @@ which noun you passed, never whether the question was worth asking. Only a test
 that moves a pane out from under a recorded window catches that.
 
 Tmux state also has to be cleared from outside, which is why `murmur clear --pane
-<id>` exists and why tmux hooks call it. Murmur publishes three tmux options:
+<id>` exists and why tmux hooks call it. Murmur publishes these tmux options:
 
+- `@murmur_session_state`: the strongest non-idle state among a session's
+  panes, for session pickers and `choose-tree`
 - `@murmur_window_state`: the strongest non-idle state among a window's panes,
-  for status bars and pickers
+  for status bars
 - `@murmur_window_has_agent`: whether that aggregate state came from an agent
 - `@murmur_pane_state`: one pane's full state, for pane-border formats
+- `@murmur_count_<state>` (global): this host's agent counts for a status pill,
+  one option per state (`crashed`, `blocked`, `done`, `working`, `idle`) plus
+  `@murmur_count_crew`. Unset at zero so a format can test presence. Same fold
+  as `murmur status` (`statusRollup`), but local only: remote peers still need
+  `murmur status`.
 
 The names are distinct because tmux pane options inherit same-named window
-options. A shell beside an agent must not inherit that agent's state. Every
-writer recomputes the options from stored activity and attention, rather than
-painting the event it just handled.
+options, and window options inherit session options. A shell beside an agent
+must not inherit that agent's state. Every writer recomputes the options from
+stored activity and attention, rather than painting the event it just handled.
+The session state is computed from the store over the session's panes, not by
+folding other windows' published options, which could be stale.
+
+The counts are options rather than one status string because a tmux format can
+branch on an option but cannot parse a string. They let a status pill render
+with no `#(...)` process per redraw, which on a Node CLI was measured at most of
+a core.
 
 ## The units
 

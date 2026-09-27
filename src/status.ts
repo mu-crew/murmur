@@ -4,18 +4,19 @@ import type { NodeIdentity } from "./identity.js";
 import { type Mux, tmux } from "./mux.js";
 import type { Store } from "./store.js";
 import {
+  emptyCounts,
   freshness,
-  NEEDS_HUMAN,
   type PaneView,
   paneViews,
   RENDER_PRIORITY,
-  type RenderState,
   renderState,
   type SortContext,
+  type StateCounts,
+  statusRollup,
   viewSort,
 } from "./view.js";
 
-type Counts = Record<RenderState, number>;
+type Counts = StateCounts;
 
 type StatusOptions = { mux?: Mux };
 
@@ -105,26 +106,15 @@ export type Status = {
   }[];
 };
 
-function emptyCounts(): Counts {
-  const counts = {} as Counts;
-  for (const state of RENDER_PRIORITY) counts[state] = 0;
-  return counts;
-}
-
 export function tmuxStatus(view: Status): string {
-  // Orchestrated agents count only for the states a human can answer: a
-  // supervisor consumes a `done` worker's result and `running` asks for nothing.
-  // The list is `NEEDS_HUMAN`, shared with the picker's visibility rule so the
-  // two surfaces cannot disagree about which crew rows matter.
-  const needsHuman = new Set<RenderState>(NEEDS_HUMAN);
-  const total = (state: RenderState): number =>
-    view.counts[state] + (needsHuman.has(state) ? view.orchestrated_counts[state] : 0);
-  const states = RENDER_PRIORITY.filter((state) => total(state) > 0)
+  // The crew rule lives in `statusRollup`, shared with the `@murmur_count_*`
+  // tmux options so the pill and this command cannot disagree.
+  const { totals, crew } = statusRollup(view.counts, view.orchestrated_counts);
+  const states = RENDER_PRIORITY.filter((state) => totals[state] > 0)
     // The tmux renderer's public vocabulary predates the internal activity
     // rename. Keep that external protocol stable until the renderer is updated.
-    .map((state) => `${state === "running" ? "working" : state}\t${total(state)}\n`)
+    .map((state) => `${state === "running" ? "working" : state}\t${totals[state]}\n`)
     .join("");
-  const crew = RENDER_PRIORITY.reduce((sum, state) => sum + view.orchestrated_counts[state], 0);
   return states + (Number.isSafeInteger(crew) && crew > 0 ? `crew\t${crew}\n` : "");
 }
 

@@ -52,6 +52,39 @@ export const RENDER_PRIORITY: readonly RenderState[] = [
  */
 export const NEEDS_HUMAN: readonly AttentionKind[] = ["blocked", "crashed"];
 
+export type StateCounts = Record<RenderState, number>;
+
+export function emptyCounts(): StateCounts {
+  const counts = {} as StateCounts;
+  for (const state of RENDER_PRIORITY) counts[state] = 0;
+  return counts;
+}
+
+/**
+ * What the status bar counts, from human and crew counts kept apart.
+ *
+ * Crew agents count only in the states a human can answer: a supervisor
+ * consumes a `done` worker's result, and `running` asks for nothing. `crew` is
+ * the total crew size, urgent agents included.
+ *
+ * One fold for both status surfaces: `murmur status` (every host) and the
+ * `@murmur_count_*` tmux options (this host). Two copies would let the pill and
+ * the command disagree about the same agent.
+ */
+export function statusRollup(
+  human: StateCounts,
+  crew: StateCounts,
+): { totals: StateCounts; crew: number } {
+  const needsHuman = new Set<RenderState>(NEEDS_HUMAN);
+  const totals = emptyCounts();
+  let crewTotal = 0;
+  for (const state of RENDER_PRIORITY) {
+    totals[state] = human[state] + (needsHuman.has(state) ? crew[state] : 0);
+    crewTotal += crew[state];
+  }
+  return { totals, crew: crewTotal };
+}
+
 /**
  * One attention request as a surface reads it: the kind, and WHEN it was asked.
  *

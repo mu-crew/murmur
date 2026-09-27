@@ -2,9 +2,16 @@ import { execFileSync } from "node:child_process";
 import { realpathSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { DASH_PANE_OPTION, JUMP_CLIENT_OPTION, JUMP_HOOK_INDEX } from "./goto.js";
-import { asPaneId, asSessionId, asWindowId, type PaneId, type WindowId } from "./ids.js";
+import {
+  asPaneId,
+  asSessionId,
+  asWindowId,
+  type PaneId,
+  type SessionId,
+  type WindowId,
+} from "./ids.js";
 import type { Location, TmuxServer } from "./types.js";
-import type { RenderState } from "./view.js";
+import { RENDER_PRIORITY, type RenderState, type StateCounts } from "./view.js";
 
 export type LocalPaneProcess = {
   pane: PaneId;
@@ -21,6 +28,17 @@ export interface Mux {
   // Sets one pane's own state for pane-border formats. It must never be derived
   // from the window option: a shell beside an agent would inherit the agent.
   setPaneState(pane: PaneId, state: RenderState | null, server?: TmuxServer): void;
+  // The session holding a window, and every pane in that session. Null is an
+  // unknown answer, not an empty session.
+  sessionPanes(
+    window: WindowId,
+    server?: TmuxServer,
+  ): { session: SessionId; panes: PaneId[] } | null;
+  // Sets murmur's aggregate SESSION state. Session pickers read this.
+  setSessionState(session: SessionId, state: RenderState | null, server?: TmuxServer): void;
+  // Sets the server-global `@murmur_count_*` options for a status pill, in one
+  // tmux call, and repaints the status line.
+  setStateCounts(counts: { totals: StateCounts; crew: number }, server?: TmuxServer): void;
   // Takes the PANE, which is the address, so one call resolves session, window
   // and pane together. Reports whether the attach happened: runTmux swallows
   // failures into null, and a silently failed jump looked exactly like "enter
@@ -280,6 +298,50 @@ export const tmux: Mux = {
       state === null
         ? ["set-option", "-pqu", "-t", pane, "@murmur_pane_state"]
         : ["set-option", "-pq", "-t", pane, "@murmur_pane_state", tmuxAgentState(state)],
+      server,
+    );
+  },
+
+  sessionPanes(window, server = { kind: "default" }) {
+    const out = runTmux(
+      ["list-panes", "-s", "-t", window, "-F", "#{session_id}\t#{pane_id}"],
+      server,
+    );
+    if (out === null) return null;
+    const rows = out
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => line.split("\t"));
+    const session = rows[0]?.[0];
+    if (!session) return null;
+    return {
+      session: asSessionId(session),
+      panes: rows.flatMap(([, pane]) => (pane ? [asPaneId(pane)] : [])),
+    };
+  },
+
+  setSessionState(session, state, server = { kind: "default" }) {
+    runTmux(
+      state === null
+        ? ["set-option", "-qu", "-t", session, "@murmur_session_state"]
+        : ["set-option", "-q", "-t", session, "@murmur_session_state", tmuxAgentState(state)],
+      server,
+    );
+  },
+
+  setStateCounts({ totals, crew }, server = { kind: "default" }) {
+    // Unset at zero, so a format can test presence: `#{?#{@murmur_count_blocked},...}`.
+    const set = (name: string, count: number): string[] =>
+      count > 0
+        ? ["set-option", "-gq", `@murmur_count_${name}`, String(count), ";"]
+        : ["set-option", "-gqu", `@murmur_count_${name}`, ";"];
+    runTmux(
+      [
+        ...RENDER_PRIORITY.flatMap((state) => set(tmuxAgentState(state), totals[state])),
+        ...set("crew", crew),
+        "refresh-client",
+        "-S",
+      ],
       server,
     );
   },
