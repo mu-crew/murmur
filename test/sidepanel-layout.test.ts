@@ -81,9 +81,7 @@ test("removal uses the current split tree rather than a saved layout", () => {
 
 test("removal prunes a nested panel and collapses one-child splits", () => {
   const current = "0000,120x40,0,0{59x40,0,0[59x19,0,0,9,59x20,0,20,1],60x40,60,0,2}";
-  const result = reflowSidepanelRemoved(current, panel);
-
-  expect(result).toMatch(/^[0-9a-f]{4},120x40,0,0\{59x20,0,20,1,60x40,60,0,2\}$/);
+  expect(reflowSidepanelRemoved(current, panel)).toBe("8112,120x40,0,0{59x40,0,0,1,60x40,60,0,2}");
 });
 
 test("add then remove preserves content topology and proportions modulo rounding", () => {

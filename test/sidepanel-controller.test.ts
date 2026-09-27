@@ -122,6 +122,16 @@ test("open rejects an unusable width before splitting", () => {
   }
 });
 
+test("open never kills a malformed pane target returned by tmux", () => {
+  const tmux = scriptedTmux([ok("120"), ok("not-a-pane")]);
+
+  expect(openSidepanel(origin, ["node"], tmux)).toEqual({
+    ok: false,
+    message: "tmux returned an invalid side panel pane id",
+  });
+  expect(tmux.calls.some((args) => args[0] === "kill-pane")).toBe(false);
+});
+
 test("open rolls back only the new pane when marking fails", () => {
   const tmux = scriptedTmux([ok("120"), ok("%9"), fail("mark denied"), ok()]);
   expect(openSidepanel(origin, ["node"], tmux)).toEqual({

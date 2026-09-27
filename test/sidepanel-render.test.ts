@@ -1,7 +1,8 @@
-import { renderToString } from "ink";
+import { PassThrough } from "node:stream";
+import { render as renderInk, renderToString } from "ink";
 import { createElement } from "react";
 import { expect, test, vi } from "vitest";
-import { App } from "../src/cli/sidepanel.js";
+import { App, SidepanelRefreshTracker, settleSidepanelRenderer } from "../src/cli/sidepanel.js";
 import { DEFAULT_DASH_PREFS } from "../src/dash-prefs.js";
 import type { DashStore } from "../src/dash-store.js";
 import { asPaneId, asSessionId, asWindowId } from "../src/ids.js";
@@ -56,7 +57,7 @@ function view(panes: PaneView[]): Status {
   return { counts, orchestrated_counts: counts, panes, peers: [] };
 }
 
-function render(initial: Status): string {
+function renderFrame(initial: Status): string {
   const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
   try {
     return renderToString(
@@ -75,7 +76,7 @@ function render(initial: Status): string {
 }
 
 test("the first frame renders local and remote agent facts", () => {
-  const output = render(
+  const output = renderFrame(
     view([
       pane(),
       pane({
@@ -101,8 +102,105 @@ test("the first frame renders local and remote agent facts", () => {
 });
 
 test("the first frame renders the empty state", () => {
-  const output = render(view([]));
+  const output = renderFrame(view([]));
 
   expect(output).toContain("murmur · 0 agents");
   expect(output).toContain("No visible agents");
+});
+
+test("a failed close after activation keeps the renderer mounted", async () => {
+  const events: string[] = [];
+  const input = new PassThrough() as unknown as NodeJS.ReadStream;
+  const output = new PassThrough() as unknown as NodeJS.WriteStream;
+  Object.assign(input, {
+    isTTY: true,
+    setRawMode: () => input,
+    ref: () => undefined,
+    unref: () => undefined,
+  });
+  Object.assign(output, { isTTY: true, columns: 40, rows: 12 });
+  const instance = renderInk(
+    createElement(App, {
+      dashStore,
+      initial: view([pane()]),
+      origin,
+      initialPrefs: DEFAULT_DASH_PREFS,
+      dimensions: { columns: 40, rows: 12 },
+      deps: {
+        refresh: async () => view([pane()]),
+        jump: () => {
+          events.push("jump");
+          return { ok: true as const };
+        },
+        close: () => {
+          events.push("close");
+          return { ok: false as const, message: "layout failed" };
+        },
+      },
+    }),
+    { stdin: input, stdout: output, patchConsole: false },
+  );
+  let exited = false;
+  void instance.waitUntilExit().then(() => {
+    exited = true;
+  });
+
+  input.write("\r");
+  await vi.waitFor(() => expect(events).toEqual(["jump", "close"]));
+  await new Promise((resolve) => setImmediate(resolve));
+  expect(exited).toBe(false);
+  await instance.unmount();
+});
+
+test("an in-flight refresh settles before the store closes after unmount", async () => {
+  let resolveRefresh: ((status: Status) => void) | undefined;
+  const pending = new Promise<Status>((resolve) => {
+    resolveRefresh = resolve;
+  });
+  const events: string[] = [];
+  const writes: Buffer[] = [];
+  const tracker = new SidepanelRefreshTracker();
+  const input = new PassThrough() as unknown as NodeJS.ReadStream;
+  const output = new PassThrough() as unknown as NodeJS.WriteStream;
+  Object.assign(input, {
+    isTTY: true,
+    setRawMode: () => input,
+    ref: () => undefined,
+    unref: () => undefined,
+  });
+  Object.assign(output, { isTTY: true, columns: 40, rows: 12 });
+  output.on("data", (chunk: Buffer) => writes.push(chunk));
+  const instance = renderInk(
+    createElement(App, {
+      dashStore,
+      initial: view([pane()]),
+      origin,
+      initialPrefs: DEFAULT_DASH_PREFS,
+      dimensions: { columns: 40, rows: 12 },
+      refreshTracker: tracker,
+      deps: {
+        refresh: () => {
+          events.push("refresh");
+          return pending;
+        },
+        close: () => ({ ok: true as const }),
+      },
+    }),
+    { stdin: input, stdout: output, patchConsole: false },
+  );
+
+  await vi.waitFor(() => expect(events).toEqual(["refresh"]));
+  input.write(Buffer.from("\x03"));
+  await instance.waitUntilExit();
+  const closing = settleSidepanelRenderer(tracker, () => events.push("closed"));
+  events.push("unmounted");
+  await Promise.resolve();
+  const writesAfterUnmount = writes.length;
+  expect(events).toEqual(["refresh", "unmounted"]);
+
+  resolveRefresh?.(view([]));
+  await closing;
+  await new Promise((resolve) => setImmediate(resolve));
+  expect(events).toEqual(["refresh", "unmounted", "closed"]);
+  expect(writes).toHaveLength(writesAfterUnmount);
 });

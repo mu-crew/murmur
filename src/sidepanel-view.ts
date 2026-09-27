@@ -4,6 +4,15 @@ import type { DashPrefs } from "./dash-prefs.js";
 import { dashRows } from "./dash-view.js";
 import { age, type PaneView, type RenderState, renderState } from "./view.js";
 
+export function sidepanelPaneKey(pane: PaneView): string {
+  return JSON.stringify([
+    pane.host_id,
+    pane.server.kind,
+    pane.server.kind === "default" ? null : pane.server.value,
+    pane.pane,
+  ]);
+}
+
 export type SidepanelRow = {
   key: string;
   state: RenderState;
@@ -22,7 +31,7 @@ export function sidepanelRows(
     const state = renderState(pane);
     const elapsed = age(pane.updated_at === null ? null : now - pane.updated_at);
     return {
-      key: `${pane.host_id}:${pane.pane}`,
+      key: sidepanelPaneKey(pane),
       state,
       icon: DASH_GLYPH[state],
       name: agentLabel(pane),
