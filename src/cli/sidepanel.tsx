@@ -37,16 +37,18 @@ export function sidepanelHelpSections(view: {
     {
       title: "navigation",
       hints: [
-        { chord: "j/k", label: "select" },
-        { chord: "g/G", label: "top or end" },
-        { chord: "enter", label: "jump to the agent" },
+        { chord: "j/↓", label: "next" },
+        { chord: "k/↑", label: "previous" },
+        { chord: "g/home", label: "top" },
+        { chord: "G/end", label: "bottom" },
+        { chord: "enter", label: "jump" },
       ],
     },
     {
       title: "view",
       hints: [
-        { chord: "a", label: "toggle crew only", value: view.crew ? "crew only" : "all" },
-        { chord: "c", label: "toggle compact rows", value: view.compact ? "on" : "off" },
+        { chord: "a", label: "crew only", value: view.crew ? "on" : "off" },
+        { chord: "c", label: "compact", value: view.compact ? "on" : "off" },
       ],
     },
     {
@@ -71,7 +73,15 @@ type SidepanelInputAction =
 export function routeSidepanelInput(
   helpOpen: boolean,
   input: string,
-  key: { ctrl?: boolean; escape?: boolean; return?: boolean },
+  key: {
+    ctrl?: boolean;
+    escape?: boolean;
+    return?: boolean;
+    downArrow?: boolean;
+    upArrow?: boolean;
+    home?: boolean;
+    end?: boolean;
+  },
   hasSelection: boolean,
 ): SidepanelInputAction {
   if (helpOpen) {
@@ -79,9 +89,10 @@ export function routeSidepanelInput(
   }
   if (input === "?") return { type: "help-open" };
   if (input === "q" || (key.ctrl && input === "c")) return { type: "close" };
-  if (input === "j" || input === "k" || input === "g" || input === "G") {
-    return { type: "move", key: input };
-  }
+  if (input === "j" || key.downArrow) return { type: "move", key: "j" };
+  if (input === "k" || key.upArrow) return { type: "move", key: "k" };
+  if (input === "g" || key.home) return { type: "move", key: "g" };
+  if (input === "G" || key.end) return { type: "move", key: "G" };
   if (input === "a") return { type: "crew" };
   if (input === "c") return { type: "compact" };
   if (key.return && hasSelection) return { type: "activate" };
@@ -116,7 +127,7 @@ export function toggleSidepanelCompact(
   return updated;
 }
 
-function Help({ prefs }: { prefs: DashPrefs }) {
+export function SidepanelHelp({ prefs }: { prefs: DashPrefs }) {
   return (
     <Box
       borderStyle="double"
@@ -323,7 +334,7 @@ export function App({
         {`murmur · ${rows.length} ${rows.length === 1 ? "agent" : "agents"}${prefs.crew ? " · crew" : ""}`}
       </Text>
       {helpOpen ? (
-        <Help prefs={prefs} />
+        <SidepanelHelp prefs={prefs} />
       ) : (
         <Box flexDirection="column" flexGrow={1} overflow="hidden">
           {rows.length === 0 ? <Text wrap="truncate-end">No visible agents</Text> : null}

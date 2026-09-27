@@ -1,8 +1,11 @@
+import { Box, renderToString } from "ink";
+import { createElement } from "react";
 import { expect, test } from "vitest";
 import {
   activateSidepanelSelection,
   reconcileSidepanelSelection,
   routeSidepanelInput,
+  SidepanelHelp,
   selectedSidepanelPane,
   sidepanelHelpSections,
   toggleSidepanelCompact,
@@ -114,9 +117,13 @@ test("selection and activation distinguish the same pane id on two tmux servers"
 
 test.each([
   ["j", {}, true, { type: "move", key: "j" }],
+  ["", { downArrow: true }, true, { type: "move", key: "j" }],
   ["k", {}, true, { type: "move", key: "k" }],
+  ["", { upArrow: true }, true, { type: "move", key: "k" }],
   ["g", {}, true, { type: "move", key: "g" }],
+  ["", { home: true }, true, { type: "move", key: "g" }],
   ["G", {}, true, { type: "move", key: "G" }],
+  ["", { end: true }, true, { type: "move", key: "G" }],
   ["a", {}, true, { type: "crew" }],
   ["c", {}, true, { type: "compact" }],
   ["?", {}, true, { type: "help-open" }],
@@ -139,16 +146,18 @@ test("help lists every side panel key", () => {
     {
       title: "navigation",
       hints: [
-        { chord: "j/k", label: "select" },
-        { chord: "g/G", label: "top or end" },
-        { chord: "enter", label: "jump to the agent" },
+        { chord: "j/↓", label: "next" },
+        { chord: "k/↑", label: "previous" },
+        { chord: "g/home", label: "top" },
+        { chord: "G/end", label: "bottom" },
+        { chord: "enter", label: "jump" },
       ],
     },
     {
       title: "view",
       hints: [
-        { chord: "a", label: "toggle crew only", value: "all" },
-        { chord: "c", label: "toggle compact rows", value: "on" },
+        { chord: "a", label: "crew only", value: "off" },
+        { chord: "c", label: "compact", value: "on" },
       ],
     },
     {
@@ -159,6 +168,22 @@ test("help lists every side panel key", () => {
       ],
     },
   ]);
+});
+
+test("help fits the default 27-column panel without truncation", () => {
+  const output = renderToString(
+    createElement(
+      Box,
+      { width: 27, height: 18 },
+      createElement(SidepanelHelp, { prefs: DEFAULT_DASH_PREFS }),
+    ),
+  );
+
+  expect(output).toContain("j/↓");
+  expect(output).toContain("k/↑");
+  expect(output).toContain("g/home");
+  expect(output).toContain("G/end");
+  expect(output).not.toContain("…");
 });
 
 test("compact persistence updates the shared dashboard preference", () => {
