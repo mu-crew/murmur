@@ -196,6 +196,20 @@ test("nested source layout keeps every pane, does not overlap, and reaches the r
   expect(Math.max(...opened.map((pane) => pane.left + pane.width))).toBe(120);
 });
 
+test("a panel split while open is pruned into valid full-window geometry", () => {
+  const { window, source } = session();
+  const panel = open(window, source);
+  const added = split(panel, "-v");
+
+  expect(closeSidepanel(window, panel, tmux)).toEqual({ ok: true });
+  const survivors = panes(window);
+  expect(new Set(survivors.map((pane) => pane.id))).toEqual(new Set([source, added]));
+  assertFullWidth(window, survivors);
+  expect(Math.min(...survivors.map((pane) => pane.top))).toBe(0);
+  expect(Math.max(...survivors.map((pane) => pane.top + pane.height))).toBe(40);
+  assertNoOverlap(survivors);
+});
+
 test("a pane split while open survives queued close and fills the window", () => {
   const { window, source } = session();
   const panel = open(window, source);

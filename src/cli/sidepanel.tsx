@@ -1,5 +1,5 @@
 import { Box, render, Text, useApp, useInput, useWindowSize } from "ink";
-import { type ReactElement, useCallback, useEffect, useMemo, useState } from "react";
+import { type ReactElement, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { type JumpResult, jumpToAgent } from "../agents.js";
 import { ssh } from "../channel.js";
 import { COLLECT_FLOOR_MS } from "../collector.js";
@@ -12,7 +12,12 @@ import {
   type SidepanelResult,
   sidepanelOrigin,
 } from "../sidepanel-controller.js";
-import { moveSidepanelSelection, sidepanelRows, sidepanelWindow } from "../sidepanel-view.js";
+import {
+  moveSidepanelSelection,
+  sidepanelPaneKey,
+  sidepanelRows,
+  sidepanelWindow,
+} from "../sidepanel-view.js";
 import { type Status, status, statusWithCollect } from "../status.js";
 import type { Store } from "../store.js";
 import type { PaneView } from "../view.js";
@@ -65,7 +70,21 @@ export type SidepanelActionDeps = {
   jump?: (store: Store, selected: PaneView) => JumpResult;
   close?: typeof closeSidepanel;
   save?: (prefs: DashPrefs) => void;
+  refresh?: (dashStore: DashStore) => Promise<Status>;
 };
+
+export class SidepanelRefreshTracker {
+  private readonly active = new Set<Promise<void>>();
+
+  track(refresh: Promise<void>): void {
+    this.active.add(refresh);
+    void refresh.finally(() => this.active.delete(refresh));
+  }
+
+  async settle(): Promise<void> {
+    await Promise.allSettled([...this.active]);
+  }
+}
 
 export async function activateSidepanelSelection(
   store: Store,
@@ -77,7 +96,7 @@ export async function activateSidepanelSelection(
   if (!jumped.ok) return { close: false, error: jumped.message };
 
   const closed = (deps.close ?? closeSidepanel)(origin.window, origin.pane);
-  return { close: true, error: closed.ok ? null : closed.message };
+  return { close: closed.ok, error: closed.ok ? null : closed.message };
 }
 
 type SidepanelProps = {
@@ -88,11 +107,16 @@ type SidepanelProps = {
   initialPrefs?: DashPrefs;
   now?: number;
   dimensions?: { columns: number; rows: number };
+  refreshTracker?: SidepanelRefreshTracker;
 };
 
-function selectedPane(panes: PaneView[], rows: ReturnType<typeof sidepanelRows>, index: number) {
+export function selectedSidepanelPane(
+  panes: PaneView[],
+  rows: ReturnType<typeof sidepanelRows>,
+  index: number,
+): PaneView | undefined {
   const row = rows[index];
-  return row ? panes.find((pane) => `${pane.host_id}:${pane.pane}` === row.key) : undefined;
+  return row ? panes.find((pane) => sidepanelPaneKey(pane) === row.key) : undefined;
 }
 
 export function App({
@@ -103,6 +127,7 @@ export function App({
   initialPrefs,
   now: initialNow,
   dimensions,
+  refreshTracker,
 }: SidepanelProps): ReactElement {
   const { exit } = useApp();
   const terminal = useWindowSize();
@@ -111,14 +136,15 @@ export function App({
   const [prefs, setPrefs] = useState(initialPrefs ?? loadDashPrefs);
   const [now, setNow] = useState(initialNow ?? Date.now());
   const [selectedKey, setSelectedKey] = useState<string | null>(
-    initial.panes[0] ? `${initial.panes[0].host_id}:${initial.panes[0].pane}` : null,
+    initial.panes[0] ? sidepanelPaneKey(initial.panes[0]) : null,
   );
   const [fallbackIndex, setFallbackIndex] = useState(0);
   const [message, setMessage] = useState("");
+  const mounted = useRef(false);
   const rows = useMemo(() => sidepanelRows(view.panes, prefs, now), [view.panes, prefs, now]);
   const selection = reconcileSidepanelSelection(rows, selectedKey, fallbackIndex);
   const selectedIndex = selection.index;
-  const selected = selectedPane(view.panes, rows, selectedIndex);
+  const selected = selectedSidepanelPane(view.panes, rows, selectedIndex);
   const window = sidepanelWindow(selectedIndex, rows.length, terminalRows - 2 - (message ? 1 : 0));
   const shown = rows.slice(window.first, window.first + window.shown);
 
@@ -126,23 +152,33 @@ export function App({
     if (selection.key !== selectedKey) setSelectedKey(selection.key);
   }, [selection.key, selectedKey]);
 
-  const refresh = useCallback(async () => {
-    const identity = requireIdentity();
-    if (!identity) return;
-    try {
-      refreshDashStore(dashStore);
-      const at = Date.now();
-      const updated = await statusWithCollect(dashStore.store, identity, at, ssh, {
-        floorMs: COLLECT_FLOOR_MS,
-      });
-      setView(updated);
-      setNow(at);
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : String(error));
-    }
-  }, [dashStore]);
+  const refresh = useCallback(() => {
+    const task = (async () => {
+      try {
+        let updated: Status;
+        if (deps.refresh) {
+          updated = await deps.refresh(dashStore);
+        } else {
+          const identity = requireIdentity();
+          if (!identity) return;
+          refreshDashStore(dashStore);
+          updated = await statusWithCollect(dashStore.store, identity, Date.now(), ssh, {
+            floorMs: COLLECT_FLOOR_MS,
+          });
+        }
+        if (!mounted.current) return;
+        setView(updated);
+        setNow(Date.now());
+      } catch (error) {
+        if (mounted.current) setMessage(error instanceof Error ? error.message : String(error));
+      }
+    })();
+    refreshTracker?.track(task);
+    return task;
+  }, [dashStore, deps.refresh, refreshTracker]);
 
   useEffect(() => {
+    mounted.current = true;
     void refresh();
     const redraw = setInterval(() => {
       const identity = requireIdentity();
@@ -158,6 +194,7 @@ export function App({
     }, REDRAW_MS);
     const collect = setInterval(() => void refresh(), COLLECT_FLOOR_MS);
     return () => {
+      mounted.current = false;
       clearInterval(redraw);
       clearInterval(collect);
     };
@@ -225,6 +262,14 @@ export function App({
   );
 }
 
+export async function settleSidepanelRenderer(
+  refreshTracker: SidepanelRefreshTracker,
+  closeStore: () => void,
+): Promise<void> {
+  await refreshTracker.settle();
+  closeStore();
+}
+
 export async function runSidepanelRenderer(): Promise<void> {
   const origin = sidepanelOrigin();
   if (!origin) {
@@ -235,12 +280,18 @@ export async function runSidepanelRenderer(): Promise<void> {
   const identity = requireIdentity();
   if (!identity) return;
   const dashStore = openDashStore();
+  const refreshTracker = new SidepanelRefreshTracker();
   try {
     const instance = render(
-      <App dashStore={dashStore} initial={status(dashStore.store, identity)} origin={origin} />,
+      <App
+        dashStore={dashStore}
+        initial={status(dashStore.store, identity)}
+        origin={origin}
+        refreshTracker={refreshTracker}
+      />,
     );
     await instance.waitUntilExit();
   } finally {
-    dashStore.store.close();
+    await settleSidepanelRenderer(refreshTracker, () => dashStore.store.close());
   }
 }

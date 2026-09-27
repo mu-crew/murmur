@@ -51,10 +51,23 @@ function prefs(over: Partial<DashPrefs> = {}): DashPrefs {
   return { ...DEFAULT_DASH_PREFS, hidden_states: [], ...over };
 }
 
+test("row keys distinguish identical pane ids on different tmux servers", () => {
+  const rows = sidepanelRows(
+    [pane(), pane({ server: { kind: "label", value: "coop" } })],
+    prefs(),
+    1_000,
+  );
+
+  expect(rows.map((row) => row.key)).toEqual([
+    '["H","default",null,"%1"]',
+    '["H","label","coop","%1"]',
+  ]);
+});
+
 test("rows name the agent, rendered state, host, age, and workstream", () => {
   const [row] = sidepanelRows([pane()], prefs(), 120_000);
   expect(row).toEqual({
-    key: "H:%1",
+    key: '["H","default",null,"%1"]',
     name: "worker-1",
     state: "running",
     icon: DASH_GLYPH.running,
@@ -79,7 +92,7 @@ test("rows name the agent, rendered state, host, age, and workstream", () => {
     120_000,
   );
   expect(remote).toMatchObject({
-    key: "R:%2",
+    key: '["R","default",null,"%2"]',
     facts: "running · devbox",
     stream: "review",
   });
@@ -101,7 +114,7 @@ test.each([
       attention: [{ kind: "blocked", requested_at: 500, message: "help" }],
     }),
   ];
-  expect(sidepanelRows(rows, prefs({ sort }), 1_000).map((row) => row.key.split(":")[1])).toEqual(
+  expect(sidepanelRows(rows, prefs({ sort }), 1_000).map((row) => JSON.parse(row.key)[3])).toEqual(
     expected,
   );
 });
@@ -118,14 +131,20 @@ test("rows inherit crew, stale, and hidden-state gates from dashRows", () => {
     pane({ pane: asPaneId("%4"), activity: "stopped" }),
   ];
 
-  expect(sidepanelRows(rows, prefs()).map((row) => row.key)).toEqual(["H:%2", "H:%3", "H:%4"]);
-  expect(sidepanelRows(rows, prefs({ crew: true })).map((row) => row.key)).toContain("H:%1");
+  expect(sidepanelRows(rows, prefs()).map((row) => row.key)).toEqual([
+    '["H","default",null,"%2"]',
+    '["H","default",null,"%3"]',
+    '["H","default",null,"%4"]',
+  ]);
+  expect(sidepanelRows(rows, prefs({ crew: true })).map((row) => row.key)).toContain(
+    '["H","default",null,"%1"]',
+  );
   expect(sidepanelRows(rows, prefs({ hide_stale: true })).map((row) => row.key)).not.toContain(
-    "H:%3",
+    '["H","default",null,"%3"]',
   );
   expect(
     sidepanelRows(rows, prefs({ hidden_states: ["idle"] })).map((row) => row.key),
-  ).not.toContain("H:%4");
+  ).not.toContain('["H","default",null,"%4"]');
 });
 
 test("selection wraps, jumps to edges, and handles an empty list", () => {

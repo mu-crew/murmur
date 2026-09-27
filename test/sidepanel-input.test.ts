@@ -3,11 +3,12 @@ import {
   activateSidepanelSelection,
   reconcileSidepanelSelection,
   routeSidepanelInput,
+  selectedSidepanelPane,
   toggleSidepanelCrew,
 } from "../src/cli/sidepanel.js";
 import { DEFAULT_DASH_PREFS } from "../src/dash-prefs.js";
 import { asPaneId, asSessionId, asWindowId } from "../src/ids.js";
-import type { SidepanelRow } from "../src/sidepanel-view.js";
+import { type SidepanelRow, sidepanelRows } from "../src/sidepanel-view.js";
 import type { Store } from "../src/store.js";
 import type { PaneView } from "../src/view.js";
 
@@ -78,13 +79,35 @@ test("a successful jump closes the captured source panel afterward", async () =>
   expect(result).toEqual({ close: true, error: null });
 });
 
-test("a close failure is reported after the successful jump", async () => {
+test("a close failure is reported and keeps the renderer open", async () => {
   const result = await activateSidepanelSelection(store, pane, origin, {
     jump: () => ({ ok: true }),
     close: () => ({ ok: false, message: "layout failed" }),
   });
 
-  expect(result).toEqual({ close: true, error: "layout failed" });
+  expect(result).toEqual({ close: false, error: "layout failed" });
+});
+
+test("selection and activation distinguish the same pane id on two tmux servers", async () => {
+  const first = pane;
+  const second = {
+    ...pane,
+    server: { kind: "label", value: "coop" } as const,
+    agent_name: "worker-2",
+  };
+  const rows = sidepanelRows([first, second], DEFAULT_DASH_PREFS, 1_000);
+  const selected = selectedSidepanelPane([first, second], rows, 1);
+  const jumped: PaneView[] = [];
+
+  expect(selected).toBe(second);
+  if (!selected) throw new Error("missing selected pane");
+  await activateSidepanelSelection(store, selected, origin, {
+    jump: (_store, target) => {
+      jumped.push(target);
+      return { ok: false, reason: "attach_failed", message: "stop" };
+    },
+  });
+  expect(jumped).toEqual([second]);
 });
 
 test.each([

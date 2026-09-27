@@ -177,7 +177,14 @@ function prunePane(node: LayoutNode, pane: number): LayoutNode | null {
     .map((child) => prunePane(child, pane))
     .filter((child): child is LayoutNode => child !== null);
   if (children.length === 0) return null;
-  if (children.length === 1) return children[0] ?? null;
+  if (children.length === 1) {
+    const survivor = children[0];
+    if (!survivor) return null;
+    return scaleHorizontally(survivor, node.rect.width, node.rect.x) &&
+      scaleVertically(survivor, node.rect.height, node.rect.y)
+      ? survivor
+      : null;
+  }
   node.children = children;
   return node;
 }

@@ -109,11 +109,10 @@ export function openSidepanel(
     ...command,
   ]);
   if (!split.ok) return { ok: false, message: detail("could not create side panel", split) };
-  const panel = asPaneId(split.stdout);
-  if (!/^%\d+$/.test(panel)) {
-    if (panel) rollback(panel, tmux);
+  if (!/^%\d+$/.test(split.stdout)) {
     return { ok: false, message: "tmux returned an invalid side panel pane id" };
   }
+  const panel = asPaneId(split.stdout);
 
   const marked = tmux.run(["set-option", "-p", "-t", panel, SIDEPANEL_ROLE_OPTION, SIDEPANEL_ROLE]);
   if (!marked.ok) {
