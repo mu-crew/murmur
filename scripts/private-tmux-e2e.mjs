@@ -7,16 +7,16 @@ import { fileURLToPath } from "node:url";
 import { renderJumpCommand } from "../dist/index.js";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
-const coopRoot = process.env.COOP_REPO;
-if (!coopRoot) {
-  console.error("usage: COOP_REPO=/path/to/coop npm run test:private-tmux-e2e");
+const muleRoot = process.env.MULE_REPO;
+if (!muleRoot) {
+  console.error("usage: MULE_REPO=/path/to/mule npm run test:private-tmux-e2e");
   process.exit(2);
 }
 
-const state = mkdtempSync(join(tmpdir(), "murmur-coop-e2e-"));
-const socket = "coop";
+const state = mkdtempSync(join(tmpdir(), "murmur-mule-e2e-"));
+const socket = "mule";
 const id = "c00e2e";
-const jobRoot = join(state, "coop", "jobs", id);
+const jobRoot = join(state, "mule", "jobs", id);
 const murmurState = join(state, "murmur");
 const env = { ...process.env, MURMUR_STATE_DIR: murmurState, XDG_STATE_HOME: state };
 const run = (file, args, options = {}) =>
@@ -31,30 +31,30 @@ const tmux = (...args) => run("tmux", ["-L", socket, "-f", "/dev/null", ...args]
 let socketPath;
 let ownsServer = false;
 try {
-  run(process.execPath, [join(root, "dist/cli.js"), "init", "--name", "coop-e2e"]);
+  run(process.execPath, [join(root, "dist/cli.js"), "init", "--name", "mule-e2e"]);
   const command = [
     `MURMUR_STATE_DIR=${JSON.stringify(murmurState)}`,
     `node ${JSON.stringify(join(root, "test/helpers/private-claimant.mjs"))}`,
   ].join(" ");
-  run("cargo", ["test", "--manifest-path", join(coopRoot, "Cargo.toml"), "--no-run"]);
+  run("cargo", ["test", "--manifest-path", join(muleRoot, "Cargo.toml"), "--no-run"]);
   const probe = run("cargo", [
     "run",
     "--quiet",
     "--manifest-path",
-    join(coopRoot, "Cargo.toml"),
+    join(muleRoot, "Cargo.toml"),
     "--bin",
-    "coop",
+    "mule",
     "--",
     "--version",
   ]);
-  if (!probe.includes("0.1.2")) throw new Error(`wrong coop build: ${probe}`);
+  if (!probe.includes("0.2.0")) throw new Error(`wrong mule build: ${probe}`);
 
-  // coop's generated wrapper is already covered by its default suite. This
+  // mule's generated wrapper is already covered by its default suite. This
   // opt-in cross-repo check runs the same final shell under a real private tmux
   // server without requiring sshd, a model provider, or the internet.
   try {
     tmux("list-sessions");
-    throw new Error("local tmux -L coop is already in use; refusing to disturb it");
+    throw new Error("local tmux -L mule is already in use; refusing to disturb it");
   } catch (error) {
     if (error instanceof Error && error.message.includes("refusing")) throw error;
   }
@@ -64,8 +64,8 @@ try {
     "new-session",
     "-d",
     "-s",
-    `coop-${id}`,
-    `env MU_MANAGED_AGENT=1 MU_AGENT_NAME=coop-${id} MU_WORKSTREAM=e2e sh -c ${JSON.stringify(command)}`,
+    `mule-${id}`,
+    `env MU_MANAGED_AGENT=1 MU_AGENT_NAME=mule-${id} MU_WORKSTREAM=e2e sh -c ${JSON.stringify(command)}`,
   );
   socketPath = tmux("display-message", "-p", "#{socket_path}");
 
@@ -79,7 +79,7 @@ try {
   if (!pane) throw new Error("claimant did not appear");
   if (pane.server.kind !== "label" || pane.server.value !== socket)
     throw new Error(`wrong server: ${JSON.stringify(pane.server)}`);
-  if (pane.agent?.driver !== "orchestrated" || pane.agent.agent_name !== `coop-${id}`)
+  if (pane.agent?.driver !== "orchestrated" || pane.agent.agent_name !== `mule-${id}`)
     throw new Error(`not crew: ${JSON.stringify(pane.agent)}`);
 
   const second = JSON.parse(run(process.execPath, [join(root, "dist/cli.js"), "export"]));
@@ -90,12 +90,12 @@ try {
   if (!attach.includes("tmux -L") || !attach.includes(socket) || !attach.includes("attach -t"))
     throw new Error(`bad attach: ${attach}`);
 
-  tmux("kill-session", "-t", `=coop-${id}`);
+  tmux("kill-session", "-t", `=mule-${id}`);
   const gone = JSON.parse(run(process.execPath, [join(root, "dist/cli.js"), "export"]));
   if (gone.panes.length !== 0)
     throw new Error(`claimant survived kill: ${JSON.stringify(gone.panes)}`);
 
-  console.log(`crew=1 server=label:${socket} agent=coop-${id}`);
+  console.log(`crew=1 server=label:${socket} agent=mule-${id}`);
   console.log(`export_survived=1 pane=${pane.pane}`);
   console.log(`attach=${attach}`);
   console.log("after_kill=0");

@@ -80,7 +80,7 @@ function cliResult(...args: string[]) {
 
 test("text output is one command that survives command substitution literally", () => {
   addPeer("dev", "developer.example", [
-    { pane: "%34", agent: "coop-job", server: { kind: "label", value: "coop server" } },
+    { pane: "%34", agent: "mule-job", server: { kind: "label", value: "mule server" } },
   ]);
   const bin = mkdtempSync(join(tmpdir(), "murmur-fake-transport-"));
   const log = join(bin, "argv");
@@ -89,7 +89,7 @@ test("text output is one command that survives command substitution literally", 
 
   const stdout = execFileSync(
     "sh",
-    ["-c", 'attach="$($NODE $CLI jump-command --host dev --agent coop-job)"; eval "$attach"'],
+    ["-c", 'attach="$($NODE $CLI jump-command --host dev --agent mule-job)"; eval "$attach"'],
     {
       env: {
         ...process.env,
@@ -104,13 +104,13 @@ test("text output is one command that survives command substitution literally", 
   );
 
   expect(stdout).toBe("");
-  const rendered = cliResult("jump-command", "--host", "dev", "--agent", "coop-job");
+  const rendered = cliResult("jump-command", "--host", "dev", "--agent", "mule-job");
   expect(rendered.status).toBe(0);
   expect(rendered.stdout).toBe(
-    "fake-transport --command 'tmux -L '\\''coop server'\\'' attach -t '\\''%34'\\'''\n",
+    "fake-transport --command 'tmux -L '\\''mule server'\\'' attach -t '\\''%34'\\'''\n",
   );
   expect(rendered.stderr).toBe("");
-  expect(readFileSync(log, "utf8")).toBe("--command\ntmux -L 'coop server' attach -t '%34'\n");
+  expect(readFileSync(log, "utf8")).toBe("--command\ntmux -L 'mule server' attach -t '%34'\n");
 });
 
 test("JSON has the stable address and rendered-command shape for hidden crew", () => {
@@ -119,7 +119,7 @@ test("JSON has the stable address and rendered-command shape for hidden crew", (
       pane: "%8",
       agent: "worker-hidden",
       driver: "orchestrated",
-      server: { kind: "path", value: "/tmp/coop.sock" },
+      server: { kind: "path", value: "/tmp/mule.sock" },
     },
   ]);
 
@@ -129,8 +129,8 @@ test("JSON has the stable address and rendered-command shape for hidden crew", (
     host: "dev",
     agent: "worker-hidden",
     pane: "%8",
-    server: { kind: "path", value: "/tmp/coop.sock" },
-    command: "fake-transport --command 'tmux -S '\\''/tmp/coop.sock'\\'' attach -t '\\''%8'\\'''",
+    server: { kind: "path", value: "/tmp/mule.sock" },
+    command: "fake-transport --command 'tmux -S '\\''/tmp/mule.sock'\\'' attach -t '\\''%8'\\'''",
   });
 });
 

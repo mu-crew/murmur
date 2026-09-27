@@ -187,7 +187,7 @@ test("a snapshot reconciles and publishes every known tmux server", () => {
   const s = store();
   const privateLocation: Location = {
     ...location("%2", "@2"),
-    server: { kind: "label", value: "coop" },
+    server: { kind: "label", value: "mule" },
   };
   s.claimAgent({ location: location("%1"), owner_pid: process.pid, meta: META, now: 1 });
   s.claimAgent({ location: privateLocation, owner_pid: process.pid, meta: META, now: 1 });
@@ -195,14 +195,14 @@ test("a snapshot reconciles and publishes every known tmux server", () => {
   const built = s.buildLocalSnapshot(IDENTITY, [
     { server: { kind: "default" }, panes: live(), isAlive: alive([process.pid]), now: 2 },
     {
-      server: { kind: "label", value: "coop" },
+      server: { kind: "label", value: "mule" },
       panes: live("%2"),
       isAlive: alive([process.pid]),
       now: 2,
     },
   ]);
 
-  expect(built.panes).toMatchObject([{ server: { kind: "label", value: "coop" }, pane: "%2" }]);
+  expect(built.panes).toMatchObject([{ server: { kind: "label", value: "mule" }, pane: "%2" }]);
   expect(s.localPanes()).toHaveLength(1);
 });
 
@@ -303,8 +303,8 @@ test("a snapshot states its own version and speaks snapshot 3", () => {
 test.each<[TmuxServer, TmuxServer]>([
   [{ kind: "default" }, { kind: "default" }],
   [
-    { kind: "label", value: "coop" },
-    { kind: "label", value: "coop" },
+    { kind: "label", value: "mule" },
+    { kind: "label", value: "mule" },
   ],
   [
     { kind: "path", value: "/tmp/tmux.sock" },
@@ -337,7 +337,7 @@ test.each<[TmuxServer, TmuxServer]>([
 test.each([
   [
     "default with a value",
-    { kind: "default", value: "coop" },
+    { kind: "default", value: "mule" },
     "panes[0].server",
     "unknown key value",
   ],
@@ -345,7 +345,7 @@ test.each([
   ["label without a value", { kind: "label" }, "panes[0].server", "missing key value"],
   [
     "label with an extra key",
-    { kind: "label", value: "coop", extra: true },
+    { kind: "label", value: "mule", extra: true },
     "panes[0].server",
     "unknown key extra",
   ],
@@ -358,7 +358,7 @@ test.each([
   ["path without a value", { kind: "path" }, "panes[0].server", "missing key value"],
   [
     "unknown kind",
-    { kind: "socket", value: "coop" },
+    { kind: "socket", value: "mule" },
     "panes[0].server.kind",
     "default, label, path",
   ],
@@ -427,7 +427,7 @@ test("the same pane id is valid on different tmux servers", () => {
     display_name: "d",
     murmur_version: "0.5.0",
     generated_at: 1,
-    panes: [pane, { ...pane, server: { kind: "label", value: "coop" } }],
+    panes: [pane, { ...pane, server: { kind: "label", value: "mule" } }],
   };
 
   expect(parseSnapshot(JSON.stringify(document)).panes).toHaveLength(2);

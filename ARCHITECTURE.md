@@ -83,7 +83,7 @@ Identity and address are separated:
   row.
 - **pane address** — the tmux server tag plus pane id. The pair is `UNIQUE` in
   `agents` and part of the primary key in `attention`. Pane ids are scoped to a
-  tmux server, so `%34` on the default server and `%34` on `tmux -L coop` are
+  tmux server, so `%34` on the default server and `%34` on `tmux -L mule` are
   different addresses.
 
 Truth about a node lives only on that node. Other nodes hold one opaque,
