@@ -1,8 +1,7 @@
 import { defineConfig } from "vitest/config";
 
 /**
- * Two files drive a REAL tmux server: `pane-ownership` and `mux-targets`. They
- * must not run beside each other.
+ * These files drive a REAL tmux server and must not run beside each other.
  *
  * Each builds its own `-L` socket rig, so they do not share tmux state -- but
  * they still contend for the machine, and the symptom was pane-ownership's 5s
@@ -15,7 +14,11 @@ import { defineConfig } from "vitest/config";
  * worst case, hence the longer `testTimeout` there and the 5s default
  * everywhere else -- where a slow test means a hang worth failing on.
  */
-const TMUX_RIG_TESTS = ["test/pane-ownership.test.ts", "test/mux-targets.test.ts"];
+const TMUX_RIG_TESTS = [
+  "test/pane-ownership.test.ts",
+  "test/mux-targets.test.ts",
+  "test/sidepanel-controller.test.ts",
+];
 
 const shared = {
   environment: "node" as const,
