@@ -303,12 +303,26 @@ export const tmux: Mux = {
   },
 
   setPaneState(pane, state, server = { kind: "default" }) {
+    if (state === null) {
+      runTmux(["set-option", "-pqu", "-t", pane, "@murmur_pane_state"], server);
+      runTmux(["set-option", "-pqu", "-t", pane, "@murmur_pane_since"], server);
+      return;
+    }
+
+    const token = tmuxAgentState(state);
     runTmux(
-      state === null
-        ? ["set-option", "-pqu", "-t", pane, "@murmur_pane_state"]
-        : ["set-option", "-pq", "-t", pane, "@murmur_pane_state", tmuxAgentState(state)],
+      [
+        "if-shell",
+        "-F",
+        "-t",
+        pane,
+        `#{!=:#{@murmur_pane_state},${token}}`,
+        `set-option -pq -t ${pane} @murmur_pane_since ${Date.now()}`,
+        "",
+      ],
       server,
     );
+    runTmux(["set-option", "-pq", "-t", pane, "@murmur_pane_state", token], server);
   },
 
   setPaneLabel(pane, label, server = { kind: "default" }) {
