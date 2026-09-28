@@ -9,6 +9,7 @@ import {
   tmux,
   tmuxAgentState,
   tmuxArgs,
+  tmuxServerAbsent,
 } from "../src/mux.js";
 
 const tmuxCalls = vi.hoisted(() => [] as string[][]);
@@ -18,7 +19,11 @@ const tmuxReplies = vi.hoisted(() => [] as string[]);
 vi.mock("node:child_process", () => ({
   execFileSync: (_file: string, args: string[]) => {
     tmuxCalls.push(args);
-    return tmuxReplies.shift() ?? "";
+    const reply = tmuxReplies.shift() ?? "";
+    if (reply.startsWith("THROW:")) {
+      throw Object.assign(new Error("tmux failed"), { stderr: reply.slice(6) });
+    }
+    return reply;
   },
 }));
 
@@ -59,6 +64,24 @@ test("currentWindow records the socket-derived server", () => {
   } finally {
     delete process.env.TMUX_PANE;
   }
+});
+
+test("a missing tmux server means no panes, other failures mean unknown", () => {
+  expect(tmuxServerAbsent("no server running on /tmp/tmux-1000/default\n")).toBe(true);
+  expect(
+    tmuxServerAbsent("error connecting to /tmp/tmux-1000/mule (No such file or directory)\n"),
+  ).toBe(true);
+  expect(tmuxServerAbsent("error connecting to /tmp/tmux-1000/x (Permission denied)\n")).toBe(
+    false,
+  );
+  expect(tmuxServerAbsent("")).toBe(false);
+});
+
+test("livePanes answers an empty set when no tmux server is running", () => {
+  tmuxReplies.push("THROW:no server running on /tmp/tmux-1000/default");
+  expect(tmux.livePanes()).toEqual(new Set());
+  tmuxReplies.push("THROW:error connecting to /tmp/tmux-1000/x (Permission denied)");
+  expect(tmux.livePanes()).toBe(null);
 });
 
 test("pidAlive is true for self and false for an unused pid", () => {

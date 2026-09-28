@@ -111,6 +111,19 @@ export function deriveTmuxServer(
   return label === "default" ? { kind: "default" } : { kind: "label", value: label };
 }
 
+/**
+ * Whether tmux's stderr says there is no server to ask -- a definite "zero
+ * panes", unlike a timeout or a permission error, which say nothing. tmux words
+ * this `no server running on <socket>` for a stale socket and `error connecting
+ * to <socket> (No such file or directory)` when the socket file is gone.
+ */
+export function tmuxServerAbsent(stderr: string): boolean {
+  return (
+    stderr.includes("no server running on ") ||
+    /error connecting to .* \(No such file or directory\)/.test(stderr)
+  );
+}
+
 function runTmux(args: string[], server: TmuxServer = { kind: "default" }): string | null {
   try {
     return execFileSync("tmux", tmuxArgs(server, args), {
@@ -223,9 +236,22 @@ export const tmux: Mux = {
   //
   // null means tmux could not answer, an empty set means there are none.
   // Conflating them would delete every agent the moment tmux was unreachable.
+  //
+  // A server that is not running IS an answer: it has no panes. Treating it as
+  // null left a host whose tmux died (reboot, kill-server) exporting its last
+  // panes forever, because reconciliation never had evidence to reap them.
   livePanes(server = { kind: "default" }) {
-    const out = runTmux(["list-panes", "-a", "-F", "#{pane_id}"], server);
-    if (out === null) return null;
+    let out: string;
+    try {
+      out = execFileSync("tmux", tmuxArgs(server, ["list-panes", "-a", "-F", "#{pane_id}"]), {
+        encoding: "utf8",
+        timeout: 3000,
+        stdio: ["ignore", "pipe", "pipe"],
+      }).trim();
+    } catch (error) {
+      const stderr = String((error as { stderr?: unknown }).stderr ?? "");
+      return tmuxServerAbsent(stderr) ? new Set() : null;
+    }
     return new Set(out.split("\n").filter(Boolean).map(asPaneId));
   },
 
