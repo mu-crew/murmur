@@ -231,7 +231,10 @@ test("a reachable peer is still dialled for a glance", () => {
 });
 
 test.each([
-  [{ kind: "default" } as const, "'tmux' 'capture-pane' '-p' '-e' '-t' '%1' '-S' '-40'"],
+  [
+    { kind: "default" } as const,
+    "'tmux' '-L' 'default' 'capture-pane' '-p' '-e' '-t' '%1' '-S' '-40'",
+  ],
   [
     { kind: "label", value: "co'op; touch /tmp/server-pwned" } as const,
     "'tmux' '-L' 'co'\\''op; touch /tmp/server-pwned' 'capture-pane' '-p' '-e' '-t' '%1' '-S' '-40'",
@@ -267,7 +270,9 @@ test("a hostile pane id is inert in the remote command", () => {
   });
 
   expect(preview(hostile, "REMOTE").argv).toEqual([
-    ["'tmux' 'capture-pane' '-p' '-e' '-t' '%1'\\'';touch /tmp/murmur-pwned;'\\''' '-S' '-40'"],
+    [
+      "'tmux' '-L' 'default' 'capture-pane' '-p' '-e' '-t' '%1'\\'';touch /tmp/murmur-pwned;'\\''' '-S' '-40'",
+    ],
   ]);
 });
 
