@@ -24,10 +24,17 @@ export interface Mux {
   livePanes(server?: TmuxServer): Set<PaneId> | null;
   localPaneProcesses(): LocalPaneProcess[];
   // Sets murmur's aggregate WINDOW state. Status bars and pickers read this.
-  setWindowState(window: WindowId, state: RenderState | null, server?: TmuxServer): void;
+  setWindowState(
+    window: WindowId,
+    state: RenderState | null,
+    server?: TmuxServer,
+    hasAgent?: boolean,
+  ): void;
   // Sets one pane's own state for pane-border formats. It must never be derived
   // from the window option: a shell beside an agent would inherit the agent.
   setPaneState(pane: PaneId, state: RenderState | null, server?: TmuxServer): void;
+  // Sets the owner-reported agent label on that pane, without window inheritance.
+  setPaneLabel(pane: PaneId, label: string | null, server?: TmuxServer): void;
   // The session holding a window, and every pane in that session. Null is an
   // unknown answer, not an empty session.
   sessionPanes(
@@ -279,17 +286,19 @@ export const tmux: Mux = {
     });
   },
 
-  setWindowState(window, state, server = { kind: "default" }) {
-    if (state === null) {
-      runTmux(["set-window-option", "-qu", "-t", window, "@murmur_window_state"], server);
-      runTmux(["set-window-option", "-qu", "-t", window, "@murmur_window_has_agent"], server);
-    } else {
-      runTmux(
-        ["set-window-option", "-q", "-t", window, "@murmur_window_state", tmuxAgentState(state)],
-        server,
-      );
-      runTmux(["set-window-option", "-q", "-t", window, "@murmur_window_has_agent", "1"], server);
-    }
+  setWindowState(window, state, server = { kind: "default" }, hasAgent = state !== null) {
+    runTmux(
+      state === null
+        ? ["set-window-option", "-qu", "-t", window, "@murmur_window_state"]
+        : ["set-window-option", "-q", "-t", window, "@murmur_window_state", tmuxAgentState(state)],
+      server,
+    );
+    runTmux(
+      hasAgent
+        ? ["set-window-option", "-q", "-t", window, "@murmur_window_has_agent", "1"]
+        : ["set-window-option", "-qu", "-t", window, "@murmur_window_has_agent"],
+      server,
+    );
     runTmux(["refresh-client", "-S"], server);
   },
 
@@ -298,6 +307,15 @@ export const tmux: Mux = {
       state === null
         ? ["set-option", "-pqu", "-t", pane, "@murmur_pane_state"]
         : ["set-option", "-pq", "-t", pane, "@murmur_pane_state", tmuxAgentState(state)],
+      server,
+    );
+  },
+
+  setPaneLabel(pane, label, server = { kind: "default" }) {
+    runTmux(
+      label === null
+        ? ["set-option", "-pqu", "-t", pane, "@murmur_pane_label"]
+        : ["set-option", "-pq", "-t", pane, "@murmur_pane_label", label],
       server,
     );
   },

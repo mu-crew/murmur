@@ -336,6 +336,7 @@ export default function murmurPi(pi: ExtensionAPI): void {
     if (refused) return;
     try {
       tmux.setPaneState(location.pane, null, location.server);
+      tmux.setPaneLabel(location.pane, null, location.server);
       tmux.setWindowState(location.window, null, location.server);
     } catch {
       // Best effort, as with publish.

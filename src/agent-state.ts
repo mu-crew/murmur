@@ -54,18 +54,28 @@ export function publishAgentStates(
 
   const allLocal = store.localPanes();
   const localPanes = allLocal.filter((pane) => sameServer(pane.server, server));
+  const paneOf = (pane: string): LocalPane | undefined =>
+    localPanes.find((candidate) => candidate.pane === pane);
   const stateOf = (pane: string): RenderState | null => {
-    const local = localPanes.find((candidate) => candidate.pane === pane);
+    const local = paneOf(pane);
     return local ? paneState(local) : null;
   };
 
   const states: RenderState[] = [];
+  let hasAgent = false;
   for (const pane of panes) {
-    const state = stateOf(pane);
+    const local = paneOf(pane);
+    const state = local ? paneState(local) : null;
     mux.setPaneState(pane, state, server);
+    mux.setPaneLabel(
+      pane,
+      local?.agent ? local.agent.agent_name || local.agent.pi_session || local.agent.cli : null,
+      server,
+    );
+    if (local?.agent) hasAgent = true;
     if (state) states.push(state);
   }
-  mux.setWindowState(window, strongest(states), server);
+  mux.setWindowState(window, strongest(states), server, hasAgent);
 
   const session = mux.sessionPanes(window, server);
   if (session) {

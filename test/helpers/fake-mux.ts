@@ -32,6 +32,7 @@ export function fakeMux(over: Partial<Mux> = {}): Mux {
     localPaneProcesses: () => [],
     setWindowState: () => {},
     setPaneState: () => {},
+    setPaneLabel: () => {},
     sessionPanes: () => null,
     setSessionState: () => {},
     setStateCounts: () => {},
