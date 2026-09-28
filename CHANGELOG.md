@@ -3,6 +3,15 @@
 Notable changes per release. Written for someone deciding whether to upgrade,
 so it says what changed for a user rather than listing every commit.
 
+## 1.0.1
+
+**A host whose tmux server has stopped no longer shows its old panes.** When
+tmux reported that no server was running, murmur treated that as "could not
+tell" and kept the host's last panes and their `done` attention. Peers kept
+showing them as fresh. It now treats a missing server as zero panes, and the
+next collect clears them. A timeout or permission error still counts as
+unknown, so a brief tmux failure cannot remove live agents.
+
 ## 1.0.0
 
 **1.0 means the contract is stable.** The tmux options, `murmur status --json`
