@@ -1,6 +1,6 @@
 {
   "name": "@mu-crew/murmur",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "Agent state across every machine you work on, in one view.",
   "publishConfig": {
     "access": "public"
