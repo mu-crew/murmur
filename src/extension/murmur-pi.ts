@@ -316,10 +316,14 @@ export default function murmurPi(pi: ExtensionAPI): void {
    * claim rides the queue that already serialises every handler, so each runs
    * after it, and a refused process writes nothing, paints nothing and holds no
    * handle. `refused` is checked in both places that could act.
+   *
+   * Publish after the claim, too. Otherwise the tmux options wait for the first
+   * agent event, and an idle agent, such as a mu worker not yet sent work, has
+   * no label or window marker for as long as it waits.
    */
-  void enqueue(async () => {
-    await getStore();
-  });
+  const claimAndPublish = async (): Promise<void> => {
+    if (await getStore()) publish(here());
+  };
 
   /** Publish stored state only if we own the pane. A nested agent is invisible. */
   const publish = (location: Location): void => {
@@ -330,6 +334,8 @@ export default function murmurPi(pi: ExtensionAPI): void {
       // Presentation is best effort; a tmux or store failure must never reach pi.
     }
   };
+
+  void enqueue(claimAndPublish);
 
   /** Retract a state this process may have painted when it cannot publish truth. */
   const retract = (location: Location): void => {
@@ -489,7 +495,8 @@ export default function murmurPi(pi: ExtensionAPI): void {
       // pane legitimately, leaving this process refused permanently: silent for
       // life while its badge still paints. pi fires session_start immediately
       // after shutdown, bounding the unowned window to two handler calls.
-      await getStore();
+      // Publishing repaints what session_shutdown's publish removed.
+      await claimAndPublish();
     });
   });
 }

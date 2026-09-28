@@ -817,8 +817,10 @@ test("an unfocused agent that settles asks for a human, which is what blocked me
   // are separate rows in separate tables, so nothing here depends on which
   // landed last.
   expect(reports).toEqual(["running", "stopped", "done"]);
-  expect(badges).toEqual(["running", null, "done"]);
-  expect(panes).toEqual(["running", "idle", "done"]);
+  // The leading entries are the publish after the claim, before any turn: the
+  // pane reads idle at once, and an idle agent lights no window badge.
+  expect(badges).toEqual([null, "running", null, "done"]);
+  expect(panes).toEqual(["idle", "running", "idle", "done"]);
 
   unmockExtension();
 });
@@ -840,8 +842,8 @@ test("a focused agent that settles says nothing, because the user is already the
   await until(() => reports.length === 3, "a write that must not happen");
 
   expect(reports).toEqual(["running", "stopped"]);
-  expect(badges).toEqual(["running", null]);
-  expect(panes).toEqual(["running", "idle"]);
+  expect(badges).toEqual([null, "running", null]);
+  expect(panes).toEqual(["idle", "running", "idle"]);
 
   unmockExtension();
 });
