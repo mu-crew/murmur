@@ -34,6 +34,7 @@ type Rig = {
   writes: { activity: string; agent_id: string; owner_pid: number }[];
   releases: { agent_id: string; owner_pid: number; location: { pane: string } }[];
   badges: [string, string | null][];
+  labels: [string, string | null][];
   opens: () => number;
   closes: () => number;
 };
@@ -50,6 +51,7 @@ async function rig(claimAnswers: Claim[], options: { setActivity?: boolean } = {
   const writes: Rig["writes"] = [];
   const releases: Rig["releases"] = [];
   const badges: Rig["badges"] = [];
+  const labels: Rig["labels"] = [];
   let opens = 0;
   let closes = 0;
   let asked = 0;
@@ -72,6 +74,19 @@ async function rig(claimAnswers: Claim[], options: { setActivity?: boolean } = {
           return options.setActivity ?? true;
         },
         requestAttention: () => {},
+        // What publishAgentStates reads: this process's pane, idle.
+        localPanes: () => [
+          {
+            server: { kind: "default" },
+            pane: "%1",
+            session: "$0",
+            window: "@1",
+            session_name: null,
+            window_name: null,
+            agent: { agent_id: "a1", agent_name: "worker-1", cli: "pi", activity: "stopped" },
+            attention: [],
+          },
+        ],
         releaseAgent: (release: {
           agent_id: string;
           owner_pid: number;
@@ -101,6 +116,9 @@ async function rig(claimAnswers: Claim[], options: { setActivity?: boolean } = {
       panesInWindow: () => ["%1"],
       setWindowState: (target: string, badge: string | null) => void badges.push([target, badge]),
       setPaneState: () => {},
+      setPaneLabel: (pane: string, label: string | null) => void labels.push([pane, label]),
+      sessionPanes: () => null,
+      setStateCounts: () => {},
     },
   }));
 
@@ -124,6 +142,7 @@ async function rig(claimAnswers: Claim[], options: { setActivity?: boolean } = {
     writes,
     releases,
     badges,
+    labels,
     opens: () => opens,
     closes: () => closes,
   };
@@ -135,6 +154,27 @@ function unmock(): void {
   vi.doUnmock("../src/mux.js");
   vi.resetModules();
 }
+
+test("a claim publishes the pane at once, so an idle agent is labelled before any turn", async () => {
+  // A pi spawned by mu sits idle until it is sent work. If the tmux options are
+  // written only by agent events, that pane has no @murmur_pane_label and no
+  // window marker until its first turn -- observed on live workers that had
+  // been idle for hours, their tabs showing the pane title instead.
+  const r = await rig([{ outcome: "claimed", agent_id: "a1" }]);
+  await until(() => r.labels.length > 0);
+
+  expect(r.labels).toContainEqual(["%1", "worker-1"]);
+
+  // And again after a reload: session_shutdown retracted what it painted.
+  await r.handlers.get("session_shutdown")?.();
+  const before = r.labels.length;
+  await r.handlers.get("session_start")?.();
+  await until(() => r.labels.slice(before).some(([, label]) => label !== null));
+
+  expect(r.labels.slice(before)).toContainEqual(["%1", "worker-1"]);
+
+  unmock();
+});
 
 test("a reload re-claims the pane at once, leaving no unowned window to lose it in", async () => {
   // `session_shutdown` RELEASES the agent row -- it must, because pi fires the

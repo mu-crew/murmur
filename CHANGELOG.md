@@ -3,6 +3,13 @@
 Notable changes per release. Written for someone deciding whether to upgrade,
 so it says what changed for a user rather than listing every commit.
 
+## Unreleased
+
+**Idle agents are labelled as soon as they start.** The pi extension now
+publishes its pane right after it claims it, and again after a `/reload`.
+Before, `@murmur_pane_label` and the window marker waited for the first turn,
+so a mu worker not yet sent work showed its pane title instead of its name.
+
 ## 0.6.1
 
 **Tmux pane formats can show agent names.** Murmur publishes
