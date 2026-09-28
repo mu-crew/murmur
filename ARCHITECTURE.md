@@ -195,8 +195,9 @@ Tmux state also has to be cleared from outside, which is why `murmur clear --pan
   panes, for session pickers and `choose-tree`
 - `@murmur_window_state`: the strongest non-idle state among a window's panes,
   for status bars
-- `@murmur_window_has_agent`: whether that aggregate state came from an agent
+- `@murmur_window_has_agent`: whether the window contains an agent, including when every agent is idle
 - `@murmur_pane_state`: one pane's full state, for pane-border formats
+- `@murmur_pane_label`: one pane's agent name, falling back to its pi session and CLI
 - `@murmur_count_<state>` (global): this host's agent counts for a status pill,
   one option per state (`crashed`, `blocked`, `done`, `working`, `idle`) plus
   `@murmur_count_crew`. Unset at zero so a format can test presence. Same fold

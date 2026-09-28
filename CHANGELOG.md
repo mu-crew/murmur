@@ -3,6 +3,13 @@
 Notable changes per release. Written for someone deciding whether to upgrade,
 so it says what changed for a user rather than listing every commit.
 
+## Unreleased
+
+**Tmux pane formats can show agent names.** Murmur publishes
+`@murmur_pane_label` on each agent pane, falling back from the agent name to its
+pi session and CLI. `@murmur_window_has_agent` now remains set when a window's
+only agents are idle.
+
 ## 0.6.0
 
 **murmur is now `@mu-crew/murmur`.** Install with `npm i -g @mu-crew/murmur`;

@@ -57,14 +57,18 @@ function running(pane: string, window = "@1", meta: AgentMeta = META): void {
 
 function recorder() {
   const panes: [PaneId, RenderState | null][] = [];
-  const windows: [WindowId, RenderState | null][] = [];
+  const labels: [PaneId, string | null][] = [];
+  const windows: [WindowId, RenderState | null, boolean | undefined][] = [];
   return {
     panes,
+    labels,
     windows,
     mux: fakeMux({
       panesInWindow: () => [asPaneId("%1"), asPaneId("%2"), asPaneId("%shell")],
       setPaneState: (pane, state) => void panes.push([pane, state]),
-      setWindowState: (window, state) => void windows.push([window, state]),
+      setPaneLabel: (pane, label) => void labels.push([pane, label]),
+      setWindowState: (window, state, _server, hasAgent) =>
+        void windows.push([window, state, hasAgent]),
     }),
   };
 }
@@ -82,7 +86,26 @@ test("publishes each pane's full state and the window's strongest state", () => 
     ["%2", "crashed"],
     ["%shell", null],
   ]);
-  expect(states.windows).toEqual([["@1", "crashed"]]);
+  expect(states.labels).toEqual([
+    ["%1", "worker-1"],
+    ["%2", "worker-1"],
+    ["%shell", null],
+  ]);
+  expect(states.windows).toEqual([["@1", "crashed", true]]);
+});
+
+test("pane labels fall back through pi session and cli", () => {
+  running("%1", "@1", { ...META, agent_name: null, pi_session: "session-1" });
+  running("%2", "@1", { ...META, agent_name: null, pi_session: null, cli: "codex" });
+  const states = recorder();
+
+  publishAgentStates(asWindowId("@1"), states.mux, store);
+
+  expect(states.labels).toEqual([
+    ["%1", "session-1"],
+    ["%2", "codex"],
+    ["%shell", null],
+  ]);
 });
 
 test("publishes idle for an agent pane but leaves the aggregate unset", () => {
@@ -92,7 +115,7 @@ test("publishes idle for an agent pane but leaves the aggregate unset", () => {
   publishAgentStates(asWindowId("@1"), states.mux, store);
 
   expect(states.panes).toContainEqual(["%1", "idle"]);
-  expect(states.windows).toEqual([["@1", null]]);
+  expect(states.windows).toEqual([["@1", null, true]]);
 });
 
 test("does not guess when tmux cannot list the window", () => {
@@ -107,6 +130,7 @@ test("does not guess when tmux cannot list the window", () => {
   expect(publishAgentStates(asWindowId("@1"), mux, store)).toBe(false);
   expect(states.panes).toEqual([]);
   expect(states.windows).toEqual([]);
+  expect(states.labels).toEqual([]);
 });
 
 function sessionRecorder(sessionPanes: string[] | null) {

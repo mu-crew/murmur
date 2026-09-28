@@ -485,6 +485,7 @@ test("a pane moved to another window keeps its identity and stops badging the ol
       panesInWindow: () => ["%1"],
       setWindowState: (target: string, state: string | null) => badges.push([target, state]),
       setPaneState: () => {},
+      setPaneLabel: () => {},
     },
   }));
 
@@ -765,6 +766,7 @@ async function driveExtension(options: { focused: boolean; muManaged?: boolean }
       panesInWindow: () => ["%1"],
       setWindowState: (_window: string, badge: string | null) => void badges.push(badge),
       setPaneState: (_pane: string, state: string | null) => void panes.push(state),
+      setPaneLabel: () => {},
     },
   }));
 
@@ -951,6 +953,7 @@ test("a refused claim means no report and no badge, for the life of the process"
       panesInWindow: () => ["%1"],
       setWindowState: (_window: string, badge: string | null) => void badges.push(badge),
       setPaneState: () => {},
+      setPaneLabel: () => {},
     },
   }));
 

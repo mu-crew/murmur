@@ -71,7 +71,19 @@ test("tmux agent states preserve the established working token", () => {
   expect(tmuxAgentState("blocked")).toBe("blocked");
 });
 
-test("retracting a window state clears both murmur window options", () => {
+test("an idle-only agent window keeps its agent marker", () => {
+  tmuxCalls.length = 0;
+
+  tmux.setWindowState(asWindowId("@7"), null, undefined, true);
+
+  expect(tmuxCalls).toEqual([
+    ["set-window-option", "-qu", "-t", "@7", "@murmur_window_state"],
+    ["set-window-option", "-q", "-t", "@7", "@murmur_window_has_agent", "1"],
+    ["refresh-client", "-S"],
+  ]);
+});
+
+test("a window without agents clears both murmur window options", () => {
   tmuxCalls.length = 0;
 
   tmux.setWindowState(asWindowId("@7"), null);
@@ -83,15 +95,19 @@ test("retracting a window state clears both murmur window options", () => {
   ]);
 });
 
-test("pane state is pane-scoped and uses the tmux working token", () => {
+test("pane state and label use distinct pane-scoped options", () => {
   tmuxCalls.length = 0;
 
   tmux.setPaneState(asPaneId("%7"), "running");
   tmux.setPaneState(asPaneId("%8"), null);
+  tmux.setPaneLabel(asPaneId("%7"), "worker-1");
+  tmux.setPaneLabel(asPaneId("%8"), null);
 
   expect(tmuxCalls).toEqual([
     ["set-option", "-pq", "-t", "%7", "@murmur_pane_state", "working"],
     ["set-option", "-pqu", "-t", "%8", "@murmur_pane_state"],
+    ["set-option", "-pq", "-t", "%7", "@murmur_pane_label", "worker-1"],
+    ["set-option", "-pqu", "-t", "%8", "@murmur_pane_label"],
   ]);
 });
 
