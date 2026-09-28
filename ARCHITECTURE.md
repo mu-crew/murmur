@@ -180,7 +180,9 @@ Two nearby calls look contradictory and are not:
 `livePanes()` returns `null` for "could not tell", which is deliberately
 distinct from an empty set, and `reconcileLocal` treats `null` as no evidence
 and writes nothing. Conflating them deletes every agent on the host the moment
-tmux is unreachable.
+tmux is unreachable. A server that is simply not running (`no server running`,
+or a missing socket) is a definite answer, and returns the empty set: reading it
+as null left a host whose tmux had died exporting its last panes indefinitely.
 
 The rule binds the JUMP as well as reconciliation, and that took two goes to
 learn. A local jump asks `livePanes()`, and the remote probe is `tmux list-panes
