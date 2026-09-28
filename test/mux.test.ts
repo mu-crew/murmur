@@ -96,6 +96,7 @@ test("a window without agents clears both murmur window options", () => {
 });
 
 test("pane state and label use distinct pane-scoped options", () => {
+  const dateNow = vi.spyOn(Date, "now").mockReturnValue(1790000000000);
   tmuxCalls.length = 0;
 
   tmux.setPaneState(asPaneId("%7"), "running");
@@ -104,11 +105,22 @@ test("pane state and label use distinct pane-scoped options", () => {
   tmux.setPaneLabel(asPaneId("%8"), null);
 
   expect(tmuxCalls).toEqual([
+    [
+      "if-shell",
+      "-F",
+      "-t",
+      "%7",
+      "#{!=:#{@murmur_pane_state},working}",
+      "set-option -pq -t %7 @murmur_pane_since 1790000000000",
+      "",
+    ],
     ["set-option", "-pq", "-t", "%7", "@murmur_pane_state", "working"],
     ["set-option", "-pqu", "-t", "%8", "@murmur_pane_state"],
+    ["set-option", "-pqu", "-t", "%8", "@murmur_pane_since"],
     ["set-option", "-pq", "-t", "%7", "@murmur_pane_label", "worker-1"],
     ["set-option", "-pqu", "-t", "%8", "@murmur_pane_label"],
   ]);
+  dateNow.mockRestore();
 });
 
 test("state reads and writes select the location's private server", () => {
