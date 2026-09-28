@@ -3,7 +3,7 @@
 Notable changes per release. Written for someone deciding whether to upgrade,
 so it says what changed for a user rather than listing every commit.
 
-## Unreleased
+## 0.6.1
 
 **Tmux pane formats can show agent names.** Murmur publishes
 `@murmur_pane_label` on each agent pane, falling back from the agent name to its
