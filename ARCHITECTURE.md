@@ -14,6 +14,26 @@ on.
 That is the whole problem. Everything below is in service of it, and the design
 spends most of its effort refusing to solve harder problems nearby.
 
+## Contract
+
+From 1.0.0, the following interfaces are stable. A breaking change to one of
+them requires a major version:
+
+- tmux pane options `@murmur_pane_state` (`crashed`, `blocked`, `done`,
+  `working`, or `idle`), `@murmur_pane_since` (milliseconds since the epoch),
+  and `@murmur_pane_label`
+- tmux window, session, and server options `@murmur_window_state`,
+  `@murmur_window_has_agent`, `@murmur_session_state`, and
+  `@murmur_count_<state>`
+- `murmur status --json` fields `panes[].pane`, `panes[].local`,
+  `panes[].agent_name`, `panes[].workstream`, `panes[].driver`,
+  `panes[].activity`, `panes[].attention`, `panes[].freshness`, and
+  `panes[].updated_at`
+- environment variables read from agent panes: `MU_MANAGED_AGENT`,
+  `MU_AGENT_NAME`, `MU_WORKSTREAM`, and `MU_ROLE`
+
+Everything else, including the store schema and other JSON fields, is internal.
+
 ## The shape
 
 ```

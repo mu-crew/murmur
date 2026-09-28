@@ -3,7 +3,15 @@
 Notable changes per release. Written for someone deciding whether to upgrade,
 so it says what changed for a user rather than listing every commit.
 
-## Unreleased
+## 1.0.0
+
+**1.0 means the contract is stable.** The tmux options, `murmur status --json`
+fields and `MU_*` variables listed in ARCHITECTURE.md § Contract change only
+with a major version. mu 2.0 reads them for agent state.
+
+**Pane state includes its start time.** `@murmur_pane_since` is the time in
+milliseconds since the epoch when an agent pane entered its current state. It
+changes only when the state changes and is unset with the state.
 
 **Idle agents are labelled as soon as they start.** The pi extension now
 publishes its pane right after it claims it, and again after a `/reload`.
