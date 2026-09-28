@@ -1,9 +1,14 @@
 import { expect, test } from "vitest";
+import { visibleWidth } from "../src/ansi.js";
 import { DASH_GLYPH } from "../src/dash-paint.js";
 import { type DashPrefs, DEFAULT_DASH_PREFS } from "../src/dash-prefs.js";
 import { asPaneId, asSessionId, asWindowId } from "../src/ids.js";
 import {
   moveSidepanelSelection,
+  type SidepanelRow,
+  sidepanelCompactLine,
+  sidepanelContentWidth,
+  sidepanelResizeTarget,
   sidepanelRows,
   sidepanelWidth,
   sidepanelWindow,
@@ -72,6 +77,8 @@ test("rows name the agent, rendered state, host, age, and workstream", () => {
     state: "running",
     icon: DASH_GLYPH.running,
     facts: "running · here · 2m",
+    host: "here",
+    age: "2m",
     stream: "murmur",
   });
 
@@ -166,17 +173,64 @@ test("the viewport spends four lines per full row and one per compact row", () =
   expect(sidepanelWindow(8, 10, 7, true)).toEqual({ first: 2, shown: 7 });
 });
 
-test("width is ten percent clamped to the supported and available ranges", () => {
+test("compact lines keep identity first and add columns as width allows", () => {
+  const row = sidepanelRows(
+    [pane({ agent_name: "worker-with-a-long-name", workstream: "murmur-sidebar" })],
+    prefs(),
+    120_000,
+  )[0];
+  if (!row) throw new Error("missing row");
+
+  const narrow = sidepanelCompactLine(row, 24, true);
+  expect(narrow.startsWith(`▸ ${DASH_GLYPH.running}  worker`)).toBe(true);
+  expect(narrow).not.toContain("running");
+  expect(visibleWidth(narrow)).toBe(24);
+
+  expect(sidepanelCompactLine(row, 40, false)).toContain("here");
+  expect(sidepanelCompactLine(row, 56, false)).toContain("murmur-sidebar");
+});
+
+test("width uses a quarter of the window within readable bounds", () => {
   expect(sidepanelWidth(0)).toBe(0);
   expect(sidepanelWidth(1)).toBe(0);
   expect(sidepanelWidth(24)).toBe(0);
   expect(sidepanelWidth(26)).toBe(25);
   expect(sidepanelWidth(100)).toBe(25);
-  expect(sidepanelWidth(250)).toBe(25);
-  expect(sidepanelWidth(320)).toBe(32);
-  expect(sidepanelWidth(500)).toBe(40);
+  expect(sidepanelWidth(120)).toBe(30);
+  expect(sidepanelWidth(160)).toBe(40);
+  expect(sidepanelWidth(250)).toBe(40);
 
   for (let windowWidth = 0; windowWidth < 600; windowWidth += 1) {
     expect(sidepanelWidth(windowWidth)).toBeLessThanOrEqual(Math.max(0, windowWidth - 1));
   }
+});
+
+test("content width shrinks to the data rather than the window share", () => {
+  const rows = sidepanelRows([pane({ agent_name: "w1", workstream: "mu" })], prefs(), 120_000);
+  const header = "murmur · 1 agent";
+
+  // Full rows: the widest of name, facts and stream, plus one spare column.
+  expect(sidepanelContentWidth(rows, false, header)).toBe(
+    Math.max(visibleWidth(header), visibleWidth("running · here · 2m")) + 1,
+  );
+  // Nothing to show still leaves a usable panel.
+  expect(sidepanelContentWidth([], false, "m")).toBe(17);
+
+  const long = sidepanelRows(
+    [pane({ agent_name: "worker-with-a-long-name", workstream: "murmur-sidebar" })],
+    prefs(),
+    120_000,
+  );
+  const compact = sidepanelContentWidth(long, true, header);
+  expect(visibleWidth(sidepanelCompactLine(long[0] as SidepanelRow, compact, true).trimEnd())).toBe(
+    compact - 1,
+  );
+});
+
+test("resizing grows at once and shrinks only past a small slack", () => {
+  expect(sidepanelResizeTarget(25, 30)).toBe(30);
+  expect(sidepanelResizeTarget(30, 29)).toBeNull();
+  expect(sidepanelResizeTarget(30, 28)).toBeNull();
+  expect(sidepanelResizeTarget(30, 27)).toBe(27);
+  expect(sidepanelResizeTarget(30, 30)).toBeNull();
 });

@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { asPaneId, asWindowId, type PaneId, type WindowId } from "./ids.js";
 import { reflowSidepanelAdded, reflowSidepanelRemoved } from "./sidepanel-layout.js";
-import { sidepanelWidth } from "./sidepanel-view.js";
+import { SIDEPANEL_MIN_WIDTH, sidepanelWidth } from "./sidepanel-view.js";
 
 export const SIDEPANEL_ROLE_OPTION = "@murmur_role";
 export const SIDEPANEL_ROLE = "sidepanel";
@@ -149,6 +149,26 @@ export function openSidepanel(
     };
   }
   return { ok: true, panel };
+}
+
+/**
+ * Fit the panel to its content, never wider than the share it opened at. tmux
+ * takes the columns from (or gives them back to) the neighbouring content.
+ */
+export function resizeSidepanel(
+  panel: PaneId,
+  wanted: number,
+  tmux: SidepanelTmux = productionTmux,
+): SidepanelResult {
+  const window = tmux.run(["display-message", "-t", panel, "-p", "#{window_width}"]);
+  if (!window.ok) return { ok: false, message: detail("could not read tmux window width", window) };
+  const cap = sidepanelWidth(Number(window.stdout) || 0);
+  if (cap === 0) return { ok: true };
+  const width = Math.min(cap, Math.max(SIDEPANEL_MIN_WIDTH, Math.floor(wanted)));
+  const resized = tmux.run(["resize-pane", "-t", panel, "-x", String(width)]);
+  return resized.ok
+    ? { ok: true }
+    : { ok: false, message: detail("could not resize side panel", resized) };
 }
 
 export function closeSidepanel(

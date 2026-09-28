@@ -9,13 +9,18 @@ import { type DashStore, openDashStore, refreshDashStore } from "../dash-store.j
 import type { FooterHint } from "../dash-tick.js";
 import {
   closeSidepanel,
+  resizeSidepanel,
   type SidepanelOrigin,
   type SidepanelResult,
   sidepanelOrigin,
 } from "../sidepanel-controller.js";
 import {
   moveSidepanelSelection,
+  sidepanelCompactLayout,
+  sidepanelCompactLine,
+  sidepanelContentWidth,
   sidepanelPaneKey,
+  sidepanelResizeTarget,
   sidepanelRows,
   sidepanelWindow,
 } from "../sidepanel-view.js";
@@ -163,6 +168,8 @@ export type SidepanelActionDeps = {
   close?: typeof closeSidepanel;
   save?: (prefs: DashPrefs) => void;
   refresh?: (dashStore: DashStore) => Promise<Status>;
+  /** Absent in tests, so a render never resizes a real tmux pane. */
+  resize?: (panel: SidepanelOrigin["pane"], width: number) => SidepanelResult;
 };
 
 export class SidepanelRefreshTracker {
@@ -245,6 +252,16 @@ export function App({
     prefs.compact,
   );
   const shown = rows.slice(window.first, window.first + window.shown);
+  const compactLayout = sidepanelCompactLayout(rows, columns);
+  const header = `murmur · ${rows.length} ${rows.length === 1 ? "agent" : "agents"}${prefs.crew ? " · crew" : ""}`;
+  const wantedWidth = sidepanelContentWidth(rows, prefs.compact, header);
+  const resizeTo = helpOpen ? null : sidepanelResizeTarget(columns, wantedWidth);
+
+  useEffect(() => {
+    if (resizeTo === null || !deps.resize) return;
+    const result = deps.resize(origin.pane, resizeTo);
+    if (!result.ok) setMessage(result.message);
+  }, [resizeTo, deps.resize, origin.pane]);
 
   useEffect(() => {
     if (selection.key !== selectedKey) setSelectedKey(selection.key);
@@ -331,7 +348,7 @@ export function App({
   return (
     <Box flexDirection="column" width={columns} height={terminalRows} overflow="hidden">
       <Text bold color={DASH_CHROME_COLOR.accent} wrap="truncate-end">
-        {`murmur · ${rows.length} ${rows.length === 1 ? "agent" : "agents"}${prefs.crew ? " · crew" : ""}`}
+        {header}
       </Text>
       {helpOpen ? (
         <SidepanelHelp prefs={prefs} />
@@ -343,7 +360,7 @@ export function App({
             const color = selectedRow ? DASH_CHROME_COLOR.accent : DASH_COLOR[row.state];
             return prefs.compact ? (
               <Text key={row.key} bold={selectedRow} color={color} wrap="truncate-end">
-                {`${selectedRow ? "▸" : " "} ${row.icon} ${row.name} · ${row.facts}${row.stream ? ` · ${row.stream}` : ""}`}
+                {sidepanelCompactLine(row, columns, selectedRow, compactLayout)}
               </Text>
             ) : (
               <Box key={row.key} flexDirection="column">
@@ -403,6 +420,7 @@ export async function runSidepanelRenderer(): Promise<void> {
         initial={status(dashStore.store, identity)}
         origin={origin}
         refreshTracker={refreshTracker}
+        deps={{ resize: (panel, width) => resizeSidepanel(panel, width) }}
       />,
     );
     await instance.waitUntilExit();
