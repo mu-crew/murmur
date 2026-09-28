@@ -89,10 +89,23 @@ export interface Mux {
   detachClient(client: string): boolean;
 }
 
-export function tmuxArgs(server: TmuxServer, args: string[]): string[] {
+/**
+ * The argv selecting one tmux server. `default` is pinned with `-L default`
+ * rather than left bare: a bare tmux follows `$TMUX`, so a collector running
+ * inside any other server -- nested, or a private `-L` rig -- read THAT
+ * server's panes as the default one's and reconcile deleted every agent whose
+ * pane it could not see. `deriveTmuxServer` only calls a socket `default` when
+ * it is the conventional `default` socket, which is exactly what `-L default`
+ * names.
+ *
+ * `undefined` is the ambient server, for questions about wherever this process
+ * is running: its own pane, its client, the dash pane it registered.
+ */
+export function tmuxArgs(server: TmuxServer | undefined, args: string[]): string[] {
+  if (!server) return args;
   if (server.kind === "label") return ["-L", server.value, ...args];
   if (server.kind === "path") return ["-S", server.value, ...args];
-  return args;
+  return ["-L", "default", ...args];
 }
 
 export function conventionalTmuxDirectory(): string {
@@ -124,7 +137,7 @@ export function tmuxServerAbsent(stderr: string): boolean {
   );
 }
 
-function runTmux(args: string[], server: TmuxServer = { kind: "default" }): string | null {
+function runTmux(args: string[], server?: TmuxServer): string | null {
   try {
     return execFileSync("tmux", tmuxArgs(server, args), {
       encoding: "utf8",
@@ -240,7 +253,7 @@ export const tmux: Mux = {
   // A server that is not running IS an answer: it has no panes. Treating it as
   // null left a host whose tmux died (reboot, kill-server) exporting its last
   // panes forever, because reconciliation never had evidence to reap them.
-  livePanes(server = { kind: "default" }) {
+  livePanes(server?: TmuxServer) {
     let out: string;
     try {
       out = execFileSync("tmux", tmuxArgs(server, ["list-panes", "-a", "-F", "#{pane_id}"]), {
@@ -312,7 +325,7 @@ export const tmux: Mux = {
     });
   },
 
-  setWindowState(window, state, server = { kind: "default" }, hasAgent = state !== null) {
+  setWindowState(window, state, server?: TmuxServer, hasAgent = state !== null) {
     runTmux(
       state === null
         ? ["set-window-option", "-qu", "-t", window, "@murmur_window_state"]
@@ -328,7 +341,7 @@ export const tmux: Mux = {
     runTmux(["refresh-client", "-S"], server);
   },
 
-  setPaneState(pane, state, server = { kind: "default" }) {
+  setPaneState(pane, state, server?: TmuxServer) {
     if (state === null) {
       runTmux(["set-option", "-pqu", "-t", pane, "@murmur_pane_state"], server);
       runTmux(["set-option", "-pqu", "-t", pane, "@murmur_pane_since"], server);
@@ -351,7 +364,7 @@ export const tmux: Mux = {
     runTmux(["set-option", "-pq", "-t", pane, "@murmur_pane_state", token], server);
   },
 
-  setPaneLabel(pane, label, server = { kind: "default" }) {
+  setPaneLabel(pane, label, server?: TmuxServer) {
     runTmux(
       label === null
         ? ["set-option", "-pqu", "-t", pane, "@murmur_pane_label"]
@@ -360,7 +373,7 @@ export const tmux: Mux = {
     );
   },
 
-  sessionPanes(window, server = { kind: "default" }) {
+  sessionPanes(window, server?: TmuxServer) {
     const out = runTmux(
       ["list-panes", "-s", "-t", window, "-F", "#{session_id}\t#{pane_id}"],
       server,
@@ -378,7 +391,7 @@ export const tmux: Mux = {
     };
   },
 
-  setSessionState(session, state, server = { kind: "default" }) {
+  setSessionState(session, state, server?: TmuxServer) {
     runTmux(
       state === null
         ? ["set-option", "-qu", "-t", session, "@murmur_session_state"]
@@ -387,7 +400,7 @@ export const tmux: Mux = {
     );
   },
 
-  setStateCounts({ totals, crew }, server = { kind: "default" }) {
+  setStateCounts({ totals, crew }, server?: TmuxServer) {
     // Unset at zero, so a format can test presence: `#{?#{@murmur_count_blocked},...}`.
     const set = (name: string, count: number): string[] =>
       count > 0
@@ -404,7 +417,7 @@ export const tmux: Mux = {
     );
   },
 
-  attach(pane, server = { kind: "default" }) {
+  attach(pane, server?: TmuxServer) {
     // ONE call, targeting the pane. tmux resolves a bare `%N` to its session,
     // window and pane together, which is the whole reason this takes the
     // address rather than a session and window.
@@ -431,7 +444,7 @@ export const tmux: Mux = {
 
   // Sibling panes, for recomputing each pane and the window aggregate. Null is
   // an unknown answer, not an empty window.
-  panesInWindow(window, server = { kind: "default" }) {
+  panesInWindow(window, server?: TmuxServer) {
     const out = runTmux(["list-panes", "-t", window, "-F", "#{pane_id}"], server);
     return out === null ? null : out.split("\n").filter(Boolean).map(asPaneId);
   },
@@ -529,7 +542,7 @@ export const tmux: Mux = {
 
   // The window a pane belongs to, for a pane murmur holds no row for: clearing a
   // badge is a tmux operation and does not require owning the pane.
-  windowForPane(pane, server = { kind: "default" }) {
+  windowForPane(pane, server?: TmuxServer) {
     const out = runTmux(["display-message", "-t", pane, "-p", "#{window_id}"], server);
     return out ? asWindowId(out) : null;
   },
@@ -538,7 +551,7 @@ export const tmux: Mux = {
   // tmux discards every attribute and nothing downstream can recover which line
   // was the failing one. What arrives is arbitrary terminal bytes, which is why
   // `src/ansi.ts` exists -- see `glance` for the sanitation that follows.
-  capture(pane, lines, server = { kind: "default" }) {
+  capture(pane, lines, server?: TmuxServer) {
     const args = ["capture-pane", "-p", "-e", "-t", pane];
     if (lines !== undefined) args.push("-S", `-${lines}`);
     return runTmux(args, server);

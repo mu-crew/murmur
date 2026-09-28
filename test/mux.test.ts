@@ -37,7 +37,13 @@ test.each([
 });
 
 test("tmux argv selects default, label, and path servers without a shell", () => {
-  expect(tmuxArgs({ kind: "default" }, ["list-panes", "-a"])).toEqual(["list-panes", "-a"]);
+  expect(tmuxArgs({ kind: "default" }, ["list-panes", "-a"])).toEqual([
+    "-L",
+    "default",
+    "list-panes",
+    "-a",
+  ]);
+  expect(tmuxArgs(undefined, ["list-panes", "-a"])).toEqual(["list-panes", "-a"]);
   expect(tmuxArgs({ kind: "label", value: "mule" }, ["list-panes", "-a"])).toEqual([
     "-L",
     "mule",
