@@ -378,7 +378,7 @@ test("compact rows count characters rather than UTF-16 units", () => {
   expect([...compactRow(row, compactRowLayout([row], 10), "  ")]).toHaveLength(10);
 });
 
-test("compact rows drop extra fields before trimming the agent", () => {
+test("compact rows preserve the summary before lower-priority metadata", () => {
   const row = {
     state: "R",
     agent: "agent",
@@ -394,16 +394,48 @@ test("compact rows drop extra fields before trimming the agent", () => {
     summary: true,
   });
   expect(compactRowLayout([row], 43)).toMatchObject({
-    columns: ["host", "stream", "flags", "age"],
-    summary: false,
+    columns: ["host", "stream", "age"],
+    summary: true,
   });
-  expect(compactRowLayout([row], 33).columns).toEqual(["host", "stream", "age"]);
-  expect(compactRowLayout([row], 27).columns).toEqual(["host", "stream"]);
-  expect(compactRowLayout([row], 23).columns).toEqual(["host"]);
-  expect(compactRowLayout([row], 15).columns).toEqual([]);
+  expect(compactRowLayout([row], 33)).toMatchObject({ columns: ["host"], summary: true });
+  expect(compactRowLayout([row], 27)).toMatchObject({ columns: ["host"], summary: true });
+  expect(compactRowLayout([row], 23)).toMatchObject({ columns: [], summary: true });
+  expect(compactRowLayout([row], 15)).toMatchObject({ columns: [], summary: false });
   expect(compactRow({ ...row, agent: "agent-name" }, compactRowLayout([row], 9), "  ")).toBe(
     "  R  age…",
   );
+});
+
+test("compact summaries align effort and context across model name lengths", () => {
+  const base = { state: "R", agent: "a", host: "", stream: "", flags: "", age: "" };
+  const rows = [
+    { ...base, summary: "gpt-5.6-sol · medium · 7.2%" },
+    { ...base, summary: "claude-opus-5-5 · medium · 83.3%" },
+  ];
+  const layout = compactRowLayout(rows, 80);
+  const [gpt, claude] = rows.map((row) => compactRow(row, layout, "  "));
+
+  expect(gpt?.indexOf("medium")).toBe(claude?.indexOf("medium"));
+  expect(gpt?.indexOf("7.2%")).toBe(claude?.indexOf("83.3%"));
+});
+
+test("compact rows trim long model summaries without breaking table width", () => {
+  const row = {
+    state: "R",
+    agent: "worker",
+    host: "here",
+    stream: "murmur",
+    flags: "",
+    age: "2m",
+    summary: "claude-opus-with-an-excessively-long-model-name · high · 42.0%",
+  };
+  const layout = compactRowLayout([row], 32);
+  const line = compactRow(row, layout, "  ");
+
+  expect(layout.summary).toBe(true);
+  expect(line).toContain("claude");
+  expect(line).toContain("…");
+  expect(visibleWidth(line)).toBe(32);
 });
 
 test("navigation keys map to the active region", () => {

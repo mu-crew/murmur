@@ -370,9 +370,12 @@ export type CompactRowLayout = {
   widths: Record<"state" | "agent" | CompactOptionalColumn, number>;
   columns: CompactOptionalColumn[];
   summary: boolean;
+  /** Widths of the leading ` · `-separated summary segments (model, effort, ...). */
+  segments: number[];
 };
 
-const COMPACT_CAPS = { agent: 24, host: 18, stream: 18 } as const;
+const COMPACT_CAPS = { agent: 24, host: 18, stream: 18, segment: 20 } as const;
+const SUMMARY_SEPARATOR = " · ";
 const COMPACT_SUMMARY_MIN = 8;
 const COMPACT_SEPARATOR = "  ";
 
@@ -410,15 +413,49 @@ export function compactRowLayout(
     widths.agent +
     columns.reduce((sum, column) => sum + widths[column], 0) +
     COMPACT_SEPARATOR.length * (1 + columns.length);
+  const drop = (fits: () => boolean) => {
+    for (const column of ["flags", "age", "stream", "host"] as const) {
+      if (fits()) break;
+      const index = columns.indexOf(column);
+      if (index >= 0) columns.splice(index, 1);
+    }
+  };
+  const summaryFits = () => width - used() >= COMPACT_SEPARATOR.length + COMPACT_SUMMARY_MIN;
   let summary = rows.some((row) => row.summary.length > 0);
-  if (summary && width - used() < COMPACT_SEPARATOR.length + COMPACT_SUMMARY_MIN) summary = false;
-  for (const column of ["flags", "age", "stream", "host"] as const) {
-    if (used() <= width) break;
-    const index = columns.indexOf(column);
-    if (index >= 0) columns.splice(index, 1);
+  if (summary) {
+    const all = [...columns];
+    drop(summaryFits);
+    if (!summaryFits()) {
+      summary = false;
+      columns.splice(0, columns.length, ...all);
+    }
   }
+  drop(() => used() <= width);
   widths.agent = Math.max(1, Math.min(widths.agent, width - (used() - widths.agent)));
-  return { width, widths, columns, summary };
+  // Summaries are usually `model · effort · ctx%`, and a variable-length model
+  // name shears everything after it. Every segment but the last is aligned.
+  // ponytail: split on the separator, so an attention message containing one
+  // is aligned too -- harmless, and cheaper than a typed summary.
+  const segments: number[] = [];
+  if (summary) {
+    for (const row of rows) {
+      const parts = row.summary.split(SUMMARY_SEPARATOR).slice(0, -1);
+      parts.forEach((part, index) => {
+        const size = Math.min(COMPACT_CAPS.segment, visibleWidth(part));
+        segments[index] = Math.max(segments[index] ?? 0, size);
+      });
+    }
+  }
+  return { width, widths, columns, summary, segments };
+}
+
+function alignedSummary(summary: string, segments: readonly number[]): string {
+  const parts = summary.split(SUMMARY_SEPARATOR);
+  return parts
+    .map((part, index) =>
+      index < parts.length - 1 && segments[index] ? compactCell(part, segments[index]) : part,
+    )
+    .join(SUMMARY_SEPARATOR);
 }
 
 /** Format one compact row; Ink only has to apply its selection styling. */
@@ -435,7 +472,8 @@ export function compactRow(
   let line = `${marker}${cells.join(COMPACT_SEPARATOR)}`;
   if (layout.summary) {
     const remaining = layout.width - visibleWidth(line) - COMPACT_SEPARATOR.length;
-    line += `${COMPACT_SEPARATOR}${compactCell(row.summary, Math.max(0, remaining))}`;
+    const summary = alignedSummary(row.summary, layout.segments);
+    line += `${COMPACT_SEPARATOR}${compactCell(summary, Math.max(0, remaining))}`;
   }
   return compactCell(line, layout.width);
 }

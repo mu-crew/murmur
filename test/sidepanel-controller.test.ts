@@ -6,6 +6,7 @@ import {
   closeSidepanel,
   findSidepanel,
   openSidepanel,
+  resizeSidepanel,
   SIDEPANEL_ROLE,
   SIDEPANEL_ROLE_OPTION,
   type SidepanelTmux,
@@ -89,7 +90,7 @@ test("duplicate marked panes fail safely instead of choosing one", () => {
 
 test.each([
   [100, "25"],
-  [320, "32"],
+  [120, "30"],
   [500, "40"],
 ])("open passes clamped width for a %i-column window", (windowWidth, expected) => {
   const tmux = scriptedTmux([ok(String(windowWidth)), ok("%9"), ok(), ok(splitLayout), ok(), ok()]);
@@ -125,6 +126,21 @@ test.each([
   expect(tmux.calls[3]).toEqual(["display-message", "-t", "@1", "-p", "#{window_layout}"]);
   expect(tmux.calls[4]?.slice(0, 3)).toEqual(["select-layout", "-t", "@1"]);
   expect(tmux.calls[5]).toEqual(["select-pane", "-t", "%9"]);
+});
+
+test("resize fits content, clamped between the minimum and the opening share", () => {
+  for (const [wanted, expected] of [
+    [20, "20"],
+    [5, "16"],
+    [90, "30"],
+  ] as const) {
+    const tmux = scriptedTmux([ok("120"), ok()]);
+    expect(resizeSidepanel(asPaneId("%9"), wanted, tmux)).toEqual({ ok: true });
+    expect(tmux.calls).toEqual([
+      ["display-message", "-t", "%9", "-p", "#{window_width}"],
+      ["resize-pane", "-t", "%9", "-x", expected],
+    ]);
+  }
 });
 
 test("open rejects an unusable width before splitting", () => {

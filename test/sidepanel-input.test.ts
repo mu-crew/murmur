@@ -218,7 +218,16 @@ test("crew persistence keeps every other shared preference", () => {
 });
 
 function row(key: string): SidepanelRow {
-  return { key, state: "running", icon: ">", name: key, facts: "running", stream: null };
+  return {
+    key,
+    state: "running",
+    icon: ">",
+    name: key,
+    facts: "running",
+    host: "here",
+    age: "",
+    stream: null,
+  };
 }
 
 test("selection follows its stable key when rows reorder", () => {

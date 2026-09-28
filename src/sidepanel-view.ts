@@ -1,6 +1,8 @@
 import { agentLabel } from "./agents.js";
+import { visibleWidth } from "./ansi.js";
 import { DASH_GLYPH } from "./dash-paint.js";
 import type { DashPrefs } from "./dash-prefs.js";
+import { type CompactRowLayout, compactRow, compactRowLayout } from "./dash-tick.js";
 import { dashRows } from "./dash-view.js";
 import { age, type PaneView, type RenderState, renderState } from "./view.js";
 
@@ -19,6 +21,8 @@ export type SidepanelRow = {
   icon: string;
   name: string;
   facts: string;
+  host: string;
+  age: string;
   stream: string | null;
 };
 
@@ -30,15 +34,46 @@ export function sidepanelRows(
   return dashRows(panes, prefs, now).map((pane) => {
     const state = renderState(pane);
     const elapsed = age(pane.updated_at === null ? null : now - pane.updated_at);
+    const host = pane.local ? "here" : pane.host;
     return {
       key: sidepanelPaneKey(pane),
       state,
       icon: DASH_GLYPH[state],
       name: agentLabel(pane),
-      facts: [state, pane.local ? "here" : pane.host, elapsed].filter(Boolean).join(" · "),
+      facts: [state, host, elapsed].filter(Boolean).join(" · "),
+      host,
+      age: elapsed,
       stream: pane.workstream ?? pane.session_name,
     };
   });
+}
+
+function compactFields(row: SidepanelRow) {
+  return {
+    state: row.icon,
+    agent: row.name,
+    host: row.host,
+    stream: row.stream ?? "",
+    flags: "",
+    age: row.age,
+    summary: "",
+  };
+}
+
+export function sidepanelCompactLayout(
+  rows: readonly SidepanelRow[],
+  width: number,
+): CompactRowLayout {
+  return compactRowLayout(rows.map(compactFields), width);
+}
+
+export function sidepanelCompactLine(
+  row: SidepanelRow,
+  width: number,
+  selected: boolean,
+  layout = sidepanelCompactLayout([row], width),
+): string {
+  return compactRow(compactFields(row), layout, selected ? "▸ " : "  ");
 }
 
 export function moveSidepanelSelection(
@@ -67,8 +102,45 @@ export function sidepanelWindow(
   return { first: Math.min(Math.max(0, bounded - shown + 1), total - shown), shown };
 }
 
+export const SIDEPANEL_MIN_WIDTH = 16;
+
+/**
+ * The columns the panel's content needs, so it can shrink to fit instead of
+ * padding a fixed share of the window with blank space. One spare column keeps
+ * the longest line off the pane border.
+ */
+export function sidepanelContentWidth(
+  rows: readonly SidepanelRow[],
+  compact: boolean,
+  header: string,
+): number {
+  let lines: number[];
+  if (compact) {
+    const { widths, columns } = sidepanelCompactLayout(rows, Number.MAX_SAFE_INTEGER);
+    const cells = [widths.state, widths.agent, ...columns.map((column) => widths[column])];
+    lines = rows.length ? [2 + cells.reduce((a, b) => a + b, 0) + 2 * (cells.length - 1)] : [];
+  } else {
+    lines = rows.flatMap((row) => [
+      visibleWidth(`${row.icon} ${row.name}`),
+      visibleWidth(row.facts),
+      visibleWidth(row.stream ?? ""),
+    ]);
+  }
+  return Math.max(SIDEPANEL_MIN_WIDTH, visibleWidth(header), ...lines) + 1;
+}
+
+/**
+ * Whether to ask tmux for a new width. Grows at once, since growing is what
+ * stops clipping; shrinks only past a small slack so an age ticking from `9m`
+ * to `10m` and back does not resize the layout every redraw.
+ */
+export function sidepanelResizeTarget(current: number, wanted: number): number | null {
+  if (wanted > current || current - wanted > 2) return wanted;
+  return null;
+}
+
 export function sidepanelWidth(windowWidth: number): number {
   const available = Math.max(0, Math.floor(windowWidth) - 1);
   if (available < 25) return 0;
-  return Math.min(available, Math.max(25, Math.min(40, Math.floor(windowWidth * 0.1))));
+  return Math.min(available, Math.max(25, Math.min(40, Math.floor(windowWidth * 0.25))));
 }

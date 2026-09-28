@@ -105,7 +105,10 @@ test("the first frame renders local and remote agent facts", () => {
 test("compact mode renders each agent on one line", () => {
   const output = renderFrame(view([pane()]), true);
 
-  expect(output).toContain(`▸ ${String.fromCodePoint(0xf04b)} worker-1 · running · here · 2m`);
+  expect(output).toContain(`▸ ${String.fromCodePoint(0xf04b)}  worker-1`);
+  expect(output).toContain("here");
+  expect(output).toContain("2m");
+  expect(output).not.toContain("running");
   expect(output.split("\n").filter((line) => line.includes("worker-1"))).toHaveLength(1);
 });
 
