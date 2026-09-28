@@ -1,0 +1,24 @@
+name: Check
+
+# The release workflow's gate, without publishing: for PRs, pushes to main and
+# manual runs, so a runner-only failure shows up before a tag does.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+      - run: sudo apt-get update && sudo apt-get install -y tmux zsh
+      - run: npm ci
+      - run: npm run check

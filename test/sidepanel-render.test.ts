@@ -137,25 +137,25 @@ test("question mark toggles the keys overlay", async () => {
       dimensions: { columns: 40, rows: 12 },
       deps: { refresh: async () => view([pane()]) },
     }),
-    { stdin: input, stdout: output, patchConsole: false },
+    // interactive: Ink turns live rendering off when it detects CI (CI=true on
+    // GitHub runners) and then writes only the final frame at unmount, so the
+    // overlay never reached `writes` there. This test is about live frames.
+    { stdin: input, stdout: output, patchConsole: false, interactive: true },
   );
 
   // Ink attaches its input listener after the first frame; a key written
   // before that is dropped. Wait for the list to render first. 5s, not the 1s
   // default: a CI runner took just over a second to paint this.
-  const settle = { timeout: 5_000 };
-  await vi.waitFor(() => expect(Buffer.concat(writes).toString()).toContain("worker-1"), settle);
+  await vi.waitFor(() => expect(Buffer.concat(writes).toString()).toContain("worker-1"));
   const beforeOpen = writes.length;
   input.write("?");
-  await vi.waitFor(
-    () => expect(Buffer.concat(writes.slice(beforeOpen)).toString()).toContain("shortcuts"),
-    settle,
+  await vi.waitFor(() =>
+    expect(Buffer.concat(writes.slice(beforeOpen)).toString()).toContain("shortcuts"),
   );
   const beforeClose = writes.length;
   input.write("?");
-  await vi.waitFor(
-    () => expect(Buffer.concat(writes.slice(beforeClose)).toString()).toContain("worker-1"),
-    settle,
+  await vi.waitFor(() =>
+    expect(Buffer.concat(writes.slice(beforeClose)).toString()).toContain("worker-1"),
   );
   await instance.unmount();
 });
