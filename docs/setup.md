@@ -57,9 +57,9 @@ Then press `prefix + C-m` to toggle it for the current window. This key is free
 in tmux's default prefix table. `prefix + m` and `prefix + M` are not free: tmux
 uses them to set and clear a pane mark.
 
-The panel opens on the left, takes 10 percent of the window width clamped to
-25–40 columns, spans the full viewport even when the existing layout is nested,
-and takes focus. Toggling it again removes only that window's panel.
+The panel opens on the left at 25 percent of the window width clamped to
+25–40 columns, then shrinks to fit its widest line (never below 16 columns). It
+spans the full viewport even when the existing layout is nested, and takes focus. Toggling it again removes only that window's panel.
 
 Press `j` or `Down` to select the next agent, and `k` or `Up` to select the
 previous agent. Press `g` or `Home` to select the first agent, and `G` or `End`
