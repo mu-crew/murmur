@@ -1,21 +1,37 @@
 import { expect, test } from "vitest";
-import { gotoDecision, runGoto } from "../src/goto.js";
-import { asPaneId } from "../src/ids.js";
+import {
+  DASH_SESSION,
+  type GotoWorld,
+  gotoDecision,
+  parseReturnMarker,
+  returnOption,
+  runGoto,
+} from "../src/goto.js";
+import { asPaneId, asWindowId } from "../src/ids.js";
 import { fakeMux } from "./helpers/fake-mux.js";
 
 const DASH = asPaneId("%7");
+const DASH_WINDOW = asWindowId("@7");
+const WORK = { pane: asPaneId("%2"), window: asWindowId("@2") };
+const OPTIONS = { initialised: true, dashCommand: ["node", "murmur", "dash"] };
 
 /** Every world this decision reads, with the ordinary local case as the base. */
-function world(over: Partial<Parameters<typeof gotoDecision>[0]> = {}) {
+function world(over: Partial<GotoWorld> = {}): GotoWorld {
   return {
     insideTmux: true,
     client: "/dev/ttys001 100",
     jumpClient: null,
     dashPane: DASH,
-    livePanes: new Set([DASH]),
+    livePanes: new Set([DASH, WORK.pane]),
+    liveWindows: new Set([DASH_WINDOW, WORK.window]),
+    here: WORK,
+    returnTo: null,
+    initialised: true,
     ...over,
   };
 }
+
+const IN_DASH = { pane: DASH, window: DASH_WINDOW };
 
 test("an ordinary client switches to the marked dash pane", () => {
   expect(gotoDecision(world())).toEqual({ kind: "switch", pane: DASH });
@@ -51,24 +67,76 @@ test("a marker for the same tty from an earlier client does not detach", () => {
   });
 });
 
-test("no dash marker is a clear failure, not a silent no-op", () => {
-  const decision = gotoDecision(world({ dashPane: null }));
-  expect(decision.kind).toBe("fail");
-  expect(decision.kind === "fail" && decision.message).toContain("no murmur dash is running");
+test("no dash running opens one", () => {
+  expect(gotoDecision(world({ dashPane: null }))).toEqual({ kind: "spawn" });
 });
 
 test("a stale dash marker does not count as a running dash", () => {
   // The dash sets the option and clears it on exit, but a SIGKILL leaves it
   // behind. The pane is the liveness authority, as everywhere else in murmur.
-  const decision = gotoDecision(world({ livePanes: new Set([asPaneId("%1")]) }));
-  expect(decision.kind).toBe("fail");
-  expect(decision.kind === "fail" && decision.message).toContain("no murmur dash is running");
+  expect(gotoDecision(world({ livePanes: new Set([WORK.pane]) }))).toEqual({ kind: "spawn" });
+});
+
+test("an uninitialised node refuses rather than opening a dash that dies on start", () => {
+  // The new window would close at once and take the error with it.
+  const decision = gotoDecision(world({ dashPane: null, initialised: false }));
+  expect(decision.kind === "fail" && decision.message).toContain("murmur init");
 });
 
 test("a pane list tmux could not answer is not evidence the dash is gone", () => {
   // null means "tmux did not answer", which must not be read as "no panes" --
-  // the same distinction livePanes() draws for the collector.
+  // and opening a second dash on that basis would duplicate a live one.
   expect(gotoDecision(world({ livePanes: null }))).toEqual({ kind: "switch", pane: DASH });
+});
+
+test("in the dash the key goes back to the recorded pane", () => {
+  expect(gotoDecision(world({ here: IN_DASH, returnTo: WORK }))).toEqual({
+    kind: "back",
+    target: WORK.pane,
+  });
+});
+
+test("back falls to the window when the pane is gone", () => {
+  const decision = gotoDecision(
+    world({ here: IN_DASH, returnTo: WORK, livePanes: new Set([DASH]) }),
+  );
+  expect(decision).toEqual({ kind: "back", target: WORK.window });
+});
+
+test("back with the window gone too stays in the dash and says so", () => {
+  const decision = gotoDecision(
+    world({
+      here: IN_DASH,
+      returnTo: WORK,
+      livePanes: new Set([DASH]),
+      liveWindows: new Set([DASH_WINDOW]),
+    }),
+  );
+  expect(decision.kind === "fail" && decision.message).toContain("nothing to go back to");
+});
+
+test("back with no recorded place stays in the dash and says so", () => {
+  const decision = gotoDecision(world({ here: IN_DASH }));
+  expect(decision.kind === "fail" && decision.message).toContain("nothing to go back to");
+});
+
+test("detach outranks back inside a murmur jump session", () => {
+  const decision = gotoDecision(
+    world({ here: IN_DASH, returnTo: WORK, jumpClient: "/dev/ttys001 100" }),
+  );
+  expect(decision).toEqual({ kind: "detach", client: "/dev/ttys001" });
+});
+
+test("a return marker from an earlier client on the same tty is ignored", () => {
+  // tty paths are recycled; the creation time is what makes the marker ours.
+  expect(parseReturnMarker("99 %2 @2", "100")).toBeNull();
+  expect(parseReturnMarker("100 %2 @2", "100")).toEqual(WORK);
+  expect(parseReturnMarker("100 junk", "100")).toBeNull();
+  expect(parseReturnMarker(null, "100")).toBeNull();
+});
+
+test("the return option name is one tmux option word per client", () => {
+  expect(returnOption("/dev/ttys001")).toBe("@murmur_return__dev_ttys001");
 });
 
 test("outside tmux the command refuses", () => {
@@ -88,20 +156,75 @@ test("a client tmux cannot name can still switch to the dash", () => {
 
 test("runGoto switches to the live dash pane", () => {
   const attached: string[] = [];
+  const options: Record<string, string> = {};
   const result = runGoto(
     fakeMux({
       dashPane: () => DASH,
       livePanes: () => new Set([DASH]),
       clientIdentity: () => "/dev/ttys001 100",
+      clientLocation: () => WORK,
+      setOption: (name, value) => {
+        options[name] = value;
+      },
       attach: (pane) => {
         attached.push(pane);
         return true;
       },
     }),
     { TMUX: "/tmp/tmux-501/default,1,0" },
+    OPTIONS,
   );
   expect(result).toEqual({ ok: true });
   expect(attached).toEqual([DASH]);
+  // Where the key was pressed, recorded for the way back.
+  expect(options).toEqual({ "@murmur_return__dev_ttys001": "100 %2 @2" });
+});
+
+test("runGoto in the dash switches back to the recorded pane", () => {
+  const shown: string[] = [];
+  const result = runGoto(
+    fakeMux({
+      dashPane: () => DASH,
+      livePanes: () => new Set([DASH, WORK.pane]),
+      clientIdentity: () => "/dev/ttys001 100",
+      clientLocation: () => IN_DASH,
+      option: (name) => (name === "@murmur_return__dev_ttys001" ? "100 %2 @2" : null),
+      setOption: () => {
+        throw new Error("going back must not overwrite the way back");
+      },
+      showTarget: (target) => {
+        shown.push(target);
+        return true;
+      },
+    }),
+    { TMUX: "x" },
+    OPTIONS,
+  );
+  expect(result).toEqual({ ok: true });
+  expect(shown).toEqual([WORK.pane]);
+});
+
+test("runGoto with no dash opens one, marks it at once and switches to it", () => {
+  const events: string[] = [];
+  const result = runGoto(
+    fakeMux({
+      clientIdentity: () => "/dev/ttys001 100",
+      clientLocation: () => WORK,
+      openDash: (session, command) => {
+        events.push(`open ${session} ${command.join(" ")}`);
+        return asPaneId("%9");
+      },
+      markDashPane: (pane) => events.push(`mark ${pane}`),
+      attach: (pane) => {
+        events.push(`attach ${pane}`);
+        return true;
+      },
+    }),
+    { TMUX: "x" },
+    OPTIONS,
+  );
+  expect(result).toEqual({ ok: true });
+  expect(events).toEqual([`open ${DASH_SESSION} node murmur dash`, "mark %9", "attach %9"]);
 });
 
 test("runGoto detaches the marked jump client and never attaches", () => {
@@ -123,6 +246,7 @@ test("runGoto detaches the marked jump client and never attaches", () => {
       },
     }),
     { TMUX: "/tmp/tmux-501/default,1,0" },
+    OPTIONS,
   );
   expect(result).toEqual({ ok: true });
   expect(detached).toEqual(["/dev/ttys001"]);
@@ -138,6 +262,7 @@ test("a failed tmux call is reported rather than swallowed", () => {
       attach: () => false,
     }),
     { TMUX: "x" },
+    OPTIONS,
   );
   expect(switchFailed.ok).toBe(false);
   expect(switchFailed.ok === false && switchFailed.message).toContain("switch-client");
@@ -151,6 +276,7 @@ test("a failed tmux call is reported rather than swallowed", () => {
       detachClient: () => false,
     }),
     { TMUX: "x" },
+    OPTIONS,
   );
   expect(detachFailed.ok).toBe(false);
   expect(detachFailed.ok === false && detachFailed.message).toContain("detach-client");

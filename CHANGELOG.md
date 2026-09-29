@@ -3,6 +3,14 @@
 Notable changes per release. Written for someone deciding whether to upgrade,
 so it says what changed for a user rather than listing every commit.
 
+## Unreleased
+
+**`PREFIX G` toggles the dash.** Pressed in the dash, `murmur dash --goto` now
+goes back to the pane you pressed it in: the side panel, an agent, or anything
+else. If that pane has closed it goes to its window. When no dash is running it
+opens one in a dedicated `murmur-dash` session instead of printing
+`no murmur dash is running`. The tmux binding does not change.
+
 ## 1.0.1
 
 **A host whose tmux server has stopped no longer shows its old panes.** When

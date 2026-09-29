@@ -184,33 +184,45 @@ Typing in pick matches agent name, workstream or tmux session, host, and the
 state word as literal substrings — so `blocked` narrows without a dedicated
 binding.
 
-## One key back to the dash
+## One key to the dash and back
 
 After a jump, getting back depends on where the agent lives: a local agent is
 an ordinary tmux move, a remote one hands the keyboard to the remote server.
 Bind one key that covers both:
 
 ```tmux
-bind -N "go to murmur dash" G run-shell -b "murmur dash --goto"
+bind -N "toggle murmur dash" G run-shell -b "murmur dash --goto"
 ```
 
 Add it on every machine you jump to, not just the one you sit at — on a remote
 host it is the remote tmux that reads the key.
 
-`murmur dash --goto` has three outcomes:
+`murmur dash --goto` decides in this order:
 
-- **In a murmur-controlled remote session** it detaches. The wrapper's own
-  restore command then returns the local client to the dash you came from.
-- **Anywhere else** it switches to the pane a running `murmur dash` occupies —
-  including an ordinary `ssh` login to a machine that has its own dash.
-- **With no dash running** it prints `no murmur dash is running` and exits
-  nonzero.
+1. **In a murmur-controlled remote session** it detaches. The wrapper's own
+   restore command then returns the local client to where the jump started.
+2. **In the dash** it goes back to the pane you pressed the key in last. If that
+   pane is gone it goes to its window. If the window is gone too, it stays in
+   the dash and says `nothing to go back to`.
+3. **With a dash running** it records where you are and switches to the dash.
+   This includes an ordinary `ssh` login to a machine that has its own dash.
+4. **With no dash running** it records where you are, opens `murmur dash` in a
+   window of the dedicated `murmur-dash` session, and switches to it. On a node
+   without `murmur init` it refuses instead, because the dash would exit at once.
+
+The side panel is an ordinary pane, so the key works there and the split is
+left alone: back returns you to the panel as you left it.
 
 A dash marks its pane for as long as it runs, and murmur marks the one client
-its own jump attaches. Both are tmux options, so nothing is inferred from
-process ancestry or history, and a second login to a host murmur has jumped to
-keeps the ordinary switch behaviour. A dash killed with `SIGKILL` cannot clear
-its marker, so `--goto` checks the pane is still alive before switching.
+its own jump attaches. The way back is one option per client,
+`@murmur_return_<client>`, so two terminals toggling at once do not trade
+places. All three are tmux options, so nothing is inferred from process
+ancestry or history. A dash killed with `SIGKILL` cannot clear its marker, so
+`--goto` checks the pane is still alive before switching and opens a new dash
+if it is not.
+
+The `murmur-dash` session has `detach-on-destroy off`: quitting the dash with `q`
+moves your client to another session instead of detaching the terminal.
 
 `run-shell -b` backgrounds the call, so the key never blocks the server. The
 cost is that a failure message goes nowhere; run `murmur dash --goto` by hand
