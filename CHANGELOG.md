@@ -3,13 +3,23 @@
 Notable changes per release. Written for someone deciding whether to upgrade,
 so it says what changed for a user rather than listing every commit.
 
-## Unreleased
+## 1.0.2
 
 **`PREFIX G` toggles the dash.** Pressed in the dash, `murmur dash --goto` now
 goes back to the pane you pressed it in: the side panel, an agent, or anything
 else. If that pane has closed it goes to its window. When no dash is running it
 opens one in a dedicated `murmur-dash` session instead of printing
 `no murmur dash is running`. The tmux binding does not change.
+
+**A dash started inside another tmux server no longer deletes your agents.**
+murmur asked the default tmux server for its panes without naming it, so tmux
+answered for whichever server the dash ran in. Inside a nested or private `-L`
+server, murmur saw none of the real agents' panes and removed their rows. It now
+names the default server explicitly.
+
+**The side panel fits its content.** It opens at 25 percent of the window
+(25–40 columns) and then shrinks to its widest line. Compact rows in the dash and
+the side panel now line up in columns across agents.
 
 ## 1.0.1
 
