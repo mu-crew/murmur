@@ -86,10 +86,11 @@ Add focus hooks so looking at a finished agent clears its badge — see
 [docs/setup.md](docs/setup.md#tmux-focus-hooks). Wire Codex / Cursor /
 opencode notify hooks in the same file.
 
-`PREFIX G` returns you to the dash from anywhere: it switches to the running
-dash, or leaves a murmur-controlled remote session so the local client comes
-back on its own — see
-[docs/setup.md](docs/setup.md#one-key-back-to-the-dash).
+`PREFIX G` toggles the dash from anywhere. It switches to the running dash, or
+opens one in a `murmur-dash` session. Pressed in the dash, it takes you back to
+where you were. In a murmur-controlled remote session it leaves, so the local
+client comes back on its own. See
+[docs/setup.md](docs/setup.md#one-key-to-the-dash-and-back).
 
 ### Watch more than one machine
 
@@ -97,7 +98,7 @@ back on its own — see
 murmur peer add devbox
 murmur doctor            # is peering mutual?
 bind -N "agent state picker" a display-popup -E -w 80% -h 60% "murmur pick"
-bind -N "go to murmur dash" G run-shell -b "murmur dash --goto"
+bind -N "toggle murmur dash" G run-shell -b "murmur dash --goto"
 bind -N "agent side panel" C-m run-shell "murmur sidepanel"
 ```
 

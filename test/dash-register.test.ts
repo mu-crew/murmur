@@ -91,12 +91,17 @@ test("declaring the CLI does not load ink", async () => {
   }
 });
 
-test("--goto reports a missing dash on stderr and exits nonzero", () => {
+test("--goto reports a dash it could not open on stderr and exits nonzero", () => {
   // `run-shell -b` shows neither, but the run that matters is the one a human
   // does by hand when the key appears to do nothing.
   const errors: string[] = [];
-  expect(dashGoto(fakeMux(), { TMUX: "x" }, (message) => errors.push(message))).toBe(false);
-  expect(errors.join("")).toContain("no murmur dash is running");
+  expect(
+    dashGoto(fakeMux(), { TMUX: "x" }, (message) => errors.push(message), {
+      initialised: true,
+      dashCommand: ["murmur", "dash"],
+    }),
+  ).toBe(false);
+  expect(errors.join("")).toContain("could not open a dash");
   expect(process.exitCode).toBe(1);
 });
 
@@ -115,6 +120,7 @@ test("--goto switches to a live dash and stays silent", () => {
     }),
     { TMUX: "x" },
     (message) => errors.push(message),
+    { initialised: true, dashCommand: ["murmur", "dash"] },
   );
 
   expect(ok).toBe(true);

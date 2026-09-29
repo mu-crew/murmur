@@ -60,7 +60,8 @@ import {
   scrollLabel,
 } from "../dash-tick.js";
 import { dashCrewCount, dashRows, dashStateCount } from "../dash-view.js";
-import { runGoto } from "../goto.js";
+import { type GotoOptions, runGoto } from "../goto.js";
+import { loadIdentity } from "../identity.js";
 import { asPaneId } from "../ids.js";
 import { type Mux, tmux } from "../mux.js";
 import {
@@ -1102,8 +1103,14 @@ export function dashGoto(
   mux: Mux = tmux,
   env: NodeJS.ProcessEnv = process.env,
   writeError: (message: string) => unknown = process.stderr.write.bind(process.stderr),
+  options: GotoOptions = {
+    initialised: loadIdentity() !== null,
+    // This install's own node and entry point: the tmux server's $PATH may
+    // hold a different murmur, or none.
+    dashCommand: [process.execPath, process.argv[1] ?? "murmur", "dash"],
+  },
 ): boolean {
-  const result = runGoto(mux, env);
+  const result = runGoto(mux, env, options);
   if (result.ok) return true;
   // stderr and a nonzero exit, even though the usual caller is `run-shell -b`
   // which shows neither: the same command is run by hand when the key "does

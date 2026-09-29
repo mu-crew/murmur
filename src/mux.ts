@@ -87,6 +87,18 @@ export interface Mux {
   // ssh attaches, which is what keeps an ordinary human login unmarked.
   armJumpMarkerCommand(): string;
   detachClient(client: string): boolean;
+  // The pane and window of the client running this command -- the key press's
+  // client. Untargeted on purpose: `run-shell` exports no $TMUX_PANE.
+  clientLocation(): { pane: PaneId; window: WindowId } | null;
+  // Same null-versus-empty contract as livePanes.
+  liveWindows(): Set<WindowId> | null;
+  option(name: string): string | null;
+  setOption(name: string, value: string): void;
+  // Switch this client to a pane or window id.
+  showTarget(target: PaneId | WindowId): boolean;
+  // Start a dash as a new window of `session`, creating the session when
+  // absent. Returns the new pane, or null.
+  openDash(session: string, command: string[]): PaneId | null;
 }
 
 /**
@@ -538,6 +550,66 @@ export const tmux: Mux = {
 
   detachClient(client) {
     return runTmux(["detach-client", "-t", client]) !== null;
+  },
+
+  clientLocation() {
+    const out = runTmux(["display-message", "-p", "#{pane_id} #{window_id}"]);
+    const [pane, window] = out?.split(" ") ?? [];
+    return pane && window ? { pane: asPaneId(pane), window: asWindowId(window) } : null;
+  },
+
+  liveWindows() {
+    const out = runTmux(["list-windows", "-a", "-F", "#{window_id}"]);
+    return out === null ? null : new Set(out.split("\n").filter(Boolean).map(asWindowId));
+  },
+
+  option(name) {
+    return runTmux(["show-options", "-gqv", name]) || null;
+  },
+
+  setOption(name, value) {
+    runTmux(["set-option", "-gq", name, value]);
+  },
+
+  showTarget(target) {
+    return runTmux(["switch-client", "-t", target]) !== null;
+  },
+
+  openDash(session, command) {
+    const created = !this.sessionNamed(session);
+    const out = created
+      ? runTmux([
+          "new-session",
+          "-d",
+          "-s",
+          session,
+          "-n",
+          "dash",
+          "-P",
+          "-F",
+          "#{pane_id}",
+          "--",
+          ...command,
+        ])
+      : runTmux([
+          "new-window",
+          "-d",
+          "-t",
+          exactPaneTarget(session),
+          "-n",
+          "dash",
+          "-P",
+          "-F",
+          "#{pane_id}",
+          "--",
+          ...command,
+        ]);
+    if (!out || !/^%\d+$/.test(out)) return null;
+    // Quitting the dash destroys its session. The default `on` would then
+    // detach the terminal; `off` moves it to another session instead.
+    if (created)
+      runTmux(["set-option", "-t", exactPaneTarget(session), "detach-on-destroy", "off"]);
+    return asPaneId(out);
   },
 
   // The window a pane belongs to, for a pane murmur holds no row for: clearing a
