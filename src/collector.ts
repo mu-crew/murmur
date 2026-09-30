@@ -92,6 +92,18 @@ export const COLLECT_JITTER_MS = 20_000;
 export const COLLECT_UNREACHABLE_CAP_MS = 300_000;
 
 /**
+ * Pause before the one retry of a fetch refused for a busy session channel.
+ *
+ * On a `MaxSessions 1` host every tool riding the master shares one channel, so
+ * a collect that lands while another process (a backup's rsync, say) holds it is
+ * refused, and the next collect a floor later succeeds. One retry turns that
+ * collision into a slower fetch rather than a failed one. Half a second clears
+ * a short command and leaves room inside COLLECT_DEADLINE_MS; a long holder
+ * still fails, and the deadline bounds the cost either way.
+ */
+export const BUSY_RETRY_MS = 500;
+
+/**
  * What one pool slot did: settled either way, claimed but unfinished
  * (`pending`), or -- as `undefined` -- never claimed at all.
  *
@@ -188,6 +200,8 @@ export type CollectOptions = {
    * `duePeers`, since the probe is ~20ms per host on a path that runs per tick.
    */
   warm?: (target: string) => boolean;
+  /** Pause before retrying a busy session channel. Injected so tests need not wait. */
+  busyRetryMs?: number;
 };
 
 /**
@@ -482,7 +496,14 @@ export async function collect(
   now = Date.now(),
   options: CollectOptions = {},
 ): Promise<CollectResult[]> {
-  const { deadline, mux = tmux, floorMs = 0, random = Math.random, warm = hasWarmSocket } = options;
+  const {
+    deadline,
+    mux = tmux,
+    floorMs = 0,
+    random = Math.random,
+    warm = hasWarmSocket,
+    busyRetryMs = BUSY_RETRY_MS,
+  } = options;
   const results: CollectResult[] = [];
   let timer: NodeJS.Timeout | undefined;
   try {
@@ -504,7 +525,16 @@ export async function collect(
     const fetches = await mapSettled(
       peers,
       MAX_CONCURRENT_PEERS,
-      async (peer) => parseSnapshot(await channel.exec(peer.target, ["murmur", "export"])),
+      async (peer) => {
+        const fetch = () => channel.exec(peer.target, ["murmur", "export"]);
+        try {
+          return parseSnapshot(await fetch());
+        } catch (error) {
+          if (!(error instanceof Error && sessionChannelBusy(error.message))) throw error;
+          await new Promise((resolve) => setTimeout(resolve, busyRetryMs));
+          return parseSnapshot(await fetch());
+        }
+      },
       bounded,
     );
     for (const [index, peer] of peers.entries()) {

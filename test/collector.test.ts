@@ -947,3 +947,43 @@ test("collect republishes a pane that reconciliation marks crashed", async () =>
   expect(panes).toEqual([["%1", "crashed"]]);
   expect(windows).toEqual([["@1", "crashed"]]);
 });
+
+const BUSY =
+  "mux_client_request_session: session request failed: Session open refused by peer\n" +
+  "mtrojer@dev: Permission denied (keyboard-interactive).";
+
+test("a fetch refused for a busy session channel is retried once", async () => {
+  // A `MaxSessions 1` host shares its one channel with every tool riding the
+  // master, so a collect that collides with, say, a backup's rsync is refused.
+  // The holder is usually done a moment later.
+  store.addPeer("dev", "dev.example");
+  let calls = 0;
+  const channel: Channel = {
+    exec: async () => {
+      calls += 1;
+      if (calls === 1) throw new Error(BUSY);
+      return snapshot([pane("%1")]);
+    },
+  };
+
+  const results = await collect(store, channel, 1_000, { busyRetryMs: 0 });
+  expect(calls).toBe(2);
+  expect(results[0]).toMatchObject({ peer: "dev", ok: true, panes: 1 });
+});
+
+test("a channel still busy on the retry fails, and other errors are not retried", async () => {
+  store.addPeer("dev", "dev.example");
+  const busy = counting(() => {
+    throw new Error(BUSY);
+  });
+  const [stillBusy] = await collect(store, busy.channel, 1_000, { busyRetryMs: 0 });
+  expect(busy.calls()).toBe(2);
+  expect(stillBusy).toMatchObject({ ok: false });
+  expect(sessionChannelBusy(stillBusy?.error ?? "")).toBe(true);
+
+  const denied = counting(() => {
+    throw new Error("Permission denied (keyboard-interactive).");
+  });
+  await collect(store, denied.channel, 2_000, { busyRetryMs: 0 });
+  expect(denied.calls()).toBe(1);
+});
