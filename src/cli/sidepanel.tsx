@@ -1,8 +1,28 @@
-import { Box, render, Text, useApp, useInput, useWindowSize } from "ink";
+import {
+  Box,
+  type DOMElement,
+  measureElement,
+  render,
+  Text,
+  useApp,
+  useInput,
+  useStdin,
+  useStdout,
+  useWindowSize,
+} from "ink";
 import { type ReactElement, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { type JumpResult, jumpToAgent } from "../agents.js";
 import { ssh } from "../channel.js";
 import { COLLECT_FLOOR_MS } from "../collector.js";
+import {
+  type ClickMemory,
+  classifyClick,
+  disableMouse,
+  enableMouse,
+  isMouseInput,
+  parseMouseEvents,
+  pointInRect,
+} from "../dash-mouse.js";
 import { DASH_CHROME_COLOR, DASH_COLOR } from "../dash-paint.js";
 import { type DashPrefs, loadDashPrefs, saveDashPrefs } from "../dash-prefs.js";
 import { type DashStore, openDashStore, refreshDashStore } from "../dash-store.js";
@@ -47,6 +67,9 @@ export function sidepanelHelpSections(view: {
         { chord: "g/home", label: "top" },
         { chord: "G/end", label: "bottom" },
         { chord: "enter", label: "jump" },
+        { chord: "click", label: "select" },
+        { chord: "2click", label: "jump" },
+        { chord: "wheel", label: "move" },
       ],
     },
     {
@@ -241,6 +264,11 @@ export function App({
   const [message, setMessage] = useState("");
   const [helpOpen, setHelpOpen] = useState(false);
   const mounted = useRef(false);
+  const rowNodesRef = useRef(new Map<string, DOMElement>());
+  const listNodeRef = useRef<DOMElement | null>(null);
+  const clickMemoryRef = useRef<ClickMemory | null>(null);
+  const { stdin } = useStdin();
+  const { stdout } = useStdout();
   const rows = useMemo(() => sidepanelRows(view.panes, prefs, now), [view.panes, prefs, now]);
   const selection = reconcileSidepanelSelection(rows, selectedKey, fallbackIndex);
   const selectedIndex = selection.index;
@@ -321,7 +349,77 @@ export function App({
     else setMessage(result.message);
   }, [deps.close, exit, origin]);
 
+  const select = useCallback(
+    (index: number) => {
+      setFallbackIndex(index);
+      setSelectedKey(rows[index]?.key ?? null);
+    },
+    [rows],
+  );
+
+  const activate = useCallback(
+    (pane: PaneView) => {
+      void activateSidepanelSelection(dashStore.store, pane, origin, deps).then((result) => {
+        setMessage(result.error ?? "");
+        if (result.close) exit();
+      });
+    },
+    [dashStore.store, origin, deps, exit],
+  );
+
+  const mouseLiveRef = useRef({
+    helpOpen,
+    rows,
+    panes: view.panes,
+    selectedIndex,
+    select,
+    activate,
+  });
+  mouseLiveRef.current = { helpOpen, rows, panes: view.panes, selectedIndex, select, activate };
+
+  useEffect(() => {
+    if (!stdin.isTTY || !stdout.isTTY) return;
+    enableMouse(stdout);
+    let rest = "";
+    const onData = (buffer: Buffer | string) => {
+      const parsed = parseMouseEvents(rest + buffer.toString());
+      rest = parsed.rest;
+      const live = mouseLiveRef.current;
+      if (live.helpOpen) return;
+      for (const event of parsed.events) {
+        if (event.kind === "press" && event.button === "left") {
+          for (const [key, node] of rowNodesRef.current) {
+            if (!pointInRect(event.x, event.y, measureElement(node))) continue;
+            const classified = classifyClick(clickMemoryRef.current, key, Date.now());
+            clickMemoryRef.current = classified.next;
+            const index = live.rows.findIndex((row) => row.key === key);
+            if (index < 0) break;
+            live.select(index);
+            if (classified.double) {
+              const pane = live.panes.find((entry) => sidepanelPaneKey(entry) === key);
+              if (pane) live.activate(pane);
+            }
+            break;
+          }
+          continue;
+        }
+        if (event.kind !== "wheel" || live.rows.length === 0) continue;
+        const delta = event.button === "up" ? -1 : event.button === "down" ? 1 : 0;
+        const list = listNodeRef.current;
+        if (delta === 0 || !list || !pointInRect(event.x, event.y, measureElement(list))) continue;
+        live.select(Math.max(0, Math.min(live.rows.length - 1, live.selectedIndex + delta)));
+      }
+    };
+    stdin.on("data", onData);
+    return () => {
+      stdin.off("data", onData);
+      disableMouse(stdout);
+    };
+  }, [stdin, stdout]);
+
   useInput((input, key) => {
+    // Mouse packets reach Ink too; the stdin listener above owns them.
+    if (isMouseInput(input)) return;
     const action = routeSidepanelInput(helpOpen, input, key, selected !== undefined);
     if (action.type === "help-open") {
       setHelpOpen(true);
@@ -330,18 +428,13 @@ export function App({
     } else if (action.type === "close") {
       close();
     } else if (action.type === "move") {
-      const index = moveSidepanelSelection(selectedIndex, action.key, rows.length);
-      setFallbackIndex(index);
-      setSelectedKey(rows[index]?.key ?? null);
+      select(moveSidepanelSelection(selectedIndex, action.key, rows.length));
     } else if (action.type === "crew") {
       setPrefs((current) => toggleSidepanelCrew(current, deps.save ?? saveDashPrefs));
     } else if (action.type === "compact") {
       setPrefs((current) => toggleSidepanelCompact(current, deps.save ?? saveDashPrefs));
     } else if (action.type === "activate" && selected) {
-      void activateSidepanelSelection(dashStore.store, selected, origin, deps).then((result) => {
-        setMessage(result.error ?? "");
-        if (result.close) exit();
-      });
+      activate(selected);
     }
   });
 
@@ -353,17 +446,23 @@ export function App({
       {helpOpen ? (
         <SidepanelHelp prefs={prefs} />
       ) : (
-        <Box flexDirection="column" flexGrow={1} overflow="hidden">
+        <Box ref={listNodeRef} flexDirection="column" flexGrow={1} overflow="hidden">
           {rows.length === 0 ? <Text wrap="truncate-end">No visible agents</Text> : null}
           {shown.map((row) => {
             const selectedRow = row.key === rows[selectedIndex]?.key;
             const color = selectedRow ? DASH_CHROME_COLOR.accent : DASH_COLOR[row.state];
+            const rowRef = (node: DOMElement | null) => {
+              if (node) rowNodesRef.current.set(row.key, node);
+              else rowNodesRef.current.delete(row.key);
+            };
             return prefs.compact ? (
-              <Text key={row.key} bold={selectedRow} color={color} wrap="truncate-end">
-                {sidepanelCompactLine(row, columns, selectedRow, compactLayout)}
-              </Text>
+              <Box key={row.key} ref={rowRef}>
+                <Text bold={selectedRow} color={color} wrap="truncate-end">
+                  {sidepanelCompactLine(row, columns, selectedRow, compactLayout)}
+                </Text>
+              </Box>
             ) : (
-              <Box key={row.key} flexDirection="column">
+              <Box key={row.key} ref={rowRef} flexDirection="column">
                 <Text bold={selectedRow} color={color} wrap="truncate-end">
                   {`${row.icon} ${row.name}`}
                 </Text>
@@ -425,6 +524,7 @@ export async function runSidepanelRenderer(): Promise<void> {
     );
     await instance.waitUntilExit();
   } finally {
+    disableMouse(process.stdout);
     await settleSidepanelRenderer(refreshTracker, () => dashStore.store.close());
   }
 }
