@@ -151,6 +151,9 @@ test("help lists every side panel key", () => {
         { chord: "g/home", label: "top" },
         { chord: "G/end", label: "bottom" },
         { chord: "enter", label: "jump" },
+        { chord: "click", label: "select" },
+        { chord: "2click", label: "jump" },
+        { chord: "wheel", label: "move" },
       ],
     },
     {

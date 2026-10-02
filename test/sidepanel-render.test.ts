@@ -259,3 +259,48 @@ test("an in-flight refresh settles before the store closes after unmount", async
   expect(events).toEqual(["refresh", "unmounted", "closed"]);
   expect(writes).toHaveLength(writesAfterUnmount);
 });
+
+test("click selects a row and double-click jumps to it", async () => {
+  const jumped: string[] = [];
+  const input = new PassThrough() as unknown as NodeJS.ReadStream;
+  const output = new PassThrough() as unknown as NodeJS.WriteStream;
+  const writes: Buffer[] = [];
+  Object.assign(input, {
+    isTTY: true,
+    setRawMode: () => input,
+    ref: () => undefined,
+    unref: () => undefined,
+  });
+  Object.assign(output, { isTTY: true, columns: 40, rows: 12 });
+  output.on("data", (chunk: Buffer) => writes.push(chunk));
+  const second = pane({ pane: asPaneId("%2"), agent_name: "reviewer-1" });
+  const instance = renderInk(
+    createElement(App, {
+      dashStore,
+      initial: view([pane(), second]),
+      origin,
+      initialPrefs: { ...DEFAULT_DASH_PREFS, compact: true },
+      dimensions: { columns: 40, rows: 12 },
+      deps: {
+        refresh: async () => view([pane(), second]),
+        jump: (_store, selected) => {
+          jumped.push(selected.agent_name ?? "");
+          return { ok: true as const };
+        },
+        close: () => ({ ok: true as const }),
+      },
+    }),
+    { stdin: input, stdout: output, patchConsole: false, interactive: true },
+  );
+
+  await vi.waitFor(() => expect(Buffer.concat(writes).toString()).toContain("reviewer-1"));
+  // Mouse mode is switched on for the panel's terminal.
+  expect(Buffer.concat(writes).toString()).toContain("\x1b[?1000h");
+  // Header is row 1, worker-1 row 2, reviewer-1 row 3 (SGR is 1-based).
+  input.write("\x1b[<0;5;3M\x1b[<0;5;3m");
+  await vi.waitFor(() => expect(Buffer.concat(writes).toString()).toMatch(/▸[^\n]*reviewer-1/));
+  expect(jumped).toEqual([]);
+  input.write("\x1b[<0;5;3M");
+  await vi.waitFor(() => expect(jumped).toEqual(["reviewer-1"]));
+  await instance.unmount();
+});
