@@ -64,8 +64,9 @@ spans the full viewport even when the existing layout is nested, and takes focus
 Press `j` or `Down` to select the next agent, and `k` or `Up` to select the
 previous agent. Press `g` or `Home` to select the first agent, and `G` or `End`
 to select the last agent. Press `?` to show all panel keys. Press `?` or
-`Escape` to close the help panel. Press `c` to toggle compact one-line rows. The
-side panel and dashboard share this compact setting, along with the saved sort
+`Escape` to close the help panel. Press `c` to toggle compact one-line rows. With
+the mouse, click a row to select it, double-click it to jump to that agent, and
+scroll the wheel to move the selection. The side panel and dashboard share this compact setting, along with the saved sort
 and visibility settings.
 
 ## Harnesses other than pi

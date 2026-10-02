@@ -3,6 +3,18 @@
 Notable changes per release. Written for someone deciding whether to upgrade,
 so it says what changed for a user rather than listing every commit.
 
+## 1.0.3
+
+**The side panel takes the mouse.** Click a row to select it, double-click it
+to jump to that agent, and scroll the wheel to move the selection: the same
+gestures as the dash. `?` lists them.
+
+**A busy ssh session channel no longer fails the peer.** On a host whose sshd
+sets `MaxSessions 1`, another tool sharing the ControlMaster (an rsync backup,
+say) made an overlapping collect fail with `Session open refused by peer`, and
+the peer read as failed until the next collect. murmur now waits half a second
+and retries once. Other errors, such as an auth wall, are still not retried.
+
 ## 1.0.2
 
 **`PREFIX G` toggles the dash.** Pressed in the dash, `murmur dash --goto` now

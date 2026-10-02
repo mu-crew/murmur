@@ -40,7 +40,8 @@ enter sends, `ctrl-e` stops the agent, and escape returns to the dashboard.
 saved sort and visibility preferences. Press `?` for all keys. Press `a` to
 toggle crew agents and `c` to toggle compact one-line rows. Both settings are
 shared with the dashboard. Press `j` or `k` to move, `g` or `G` to jump to an
-edge, and enter to jump to the selected agent. A successful jump closes the
+edge, and enter to jump to the selected agent. Click selects, double-click jumps, and
+the wheel moves the selection. A successful jump closes the
 panel; a failed jump leaves it open and shows the error. Press `q` or `Ctrl-C`
 to close it. See [side panel setup](docs/setup.md#side-panel).
 
@@ -126,7 +127,7 @@ factor / `BatchMode`, `MaxSessions 1`, Eternal Terminal): [SSH.md](SSH.md).
 | [docs/VOCABULARY.md](docs/VOCABULARY.md) | Protocol and identity terms |
 | [AGENTS.md](AGENTS.md) | Repo gate for agents working on murmur |
 
-**1.0.2.** Ready for daily use. Known gaps live at the end of
+**1.0.3.** Ready for daily use. Known gaps live at the end of
 [ARCHITECTURE.md](ARCHITECTURE.md#known-gaps).
 
 ---
