@@ -3,7 +3,7 @@
 Notable changes per release. Written for someone deciding whether to upgrade,
 so it says what changed for a user rather than listing every commit.
 
-## Unreleased
+## 1.2.0
 
 **Notifications.** Put an executable at `~/.config/murmur/on-attention` and
 murmur runs it once for each new `done`, `blocked`, `error` or `crashed`, on
@@ -19,7 +19,7 @@ user abort is still not an error. A Cursor stop with `status: error` is `error`
 too, no longer `blocked`. `@murmur_pane_state`, `@murmur_window_state`,
 `@murmur_session_state` and `@murmur_count_error` can now say `error`; formats
 that match states by name show nothing for it until updated. The mu-crew
-dotfiles are.
+dotfiles are, and mu 3.6.1 reads `error` as a worker waiting on someone.
 
 **Snapshot version 5.** Every node must upgrade together; a mixed fleet refuses
 each other's snapshots. The local store rebuilds on first open.
