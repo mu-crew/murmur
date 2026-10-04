@@ -25,7 +25,7 @@ if (!entry) throw new Error("MURMUR_EXTENSION_ENTRY is required");
 const { default: murmurPi } = await import(entry);
 
 const handlers = new Map();
-murmurPi({ on: (event, handler) => handlers.set(event, handler) });
+murmurPi({ on: (event, handler) => handlers.set(event, handler), events: { on: () => {} } });
 
 await handlers.get(state === "working" ? "agent_start" : "agent_end")?.();
 // The handlers are `void enqueue(...)`, so they return before the write runs.

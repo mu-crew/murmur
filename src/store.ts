@@ -39,7 +39,7 @@ import { MURMUR_VERSION } from "./version.js";
  * typed, deletes the file, and recreates the schema. No ALTER TABLE anywhere, so
  * there is no additive path to forget to use.
  */
-const SCHEMA_USER_VERSION = 6;
+const SCHEMA_USER_VERSION = 7;
 
 /**
  * The effort vocabulary as a SQL value list, generated from the one tuple.
@@ -72,6 +72,7 @@ const RUNTIME_COLUMNS = [
   "context_tokens",
   "context_window",
   "usage",
+  "pending",
 ] as const satisfies readonly (keyof AgentRuntime)[];
 
 /**
@@ -119,6 +120,7 @@ const SCHEMA = `
     usage        TEXT,
     effort       TEXT    CHECK (effort IS NULL OR effort IN (${EFFORT_SQL_LIST})),
     context_pct  REAL    CHECK (context_pct IS NULL OR (context_pct >= 0 AND context_pct <= 100)),
+    pending      INTEGER CHECK (pending IS NULL OR pending >= 0),
     claimed_at   INTEGER NOT NULL,
     updated_at   INTEGER NOT NULL,
     UNIQUE (server_kind, server_value, pane)
@@ -236,6 +238,7 @@ type AgentDbRow = {
   context_window: number | null;
   provider_effort: string | null;
   usage: string | null;
+  pending: number | null;
   claimed_at: number;
   updated_at: number;
 };
@@ -470,6 +473,7 @@ function toAgent(row: AgentDbRow): SnapshotAgent {
     // a row written by an older build, or edited by hand, must degrade to null
     // rather than hand a render path a shape it never checked.
     usage: parseStoredUsage(row.usage),
+    pending: row.pending,
     claimed_at: row.claimed_at,
     updated_at: row.updated_at,
   };

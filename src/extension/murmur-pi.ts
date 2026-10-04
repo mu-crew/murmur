@@ -5,7 +5,9 @@ import type { Store } from "../store.js";
 import type { Activity, AgentMeta, AgentRuntime, Location } from "../types.js";
 import {
   driverFromEnv,
+  foldPending,
   isReportableTurn,
+  PENDING_CHANNEL,
   type RuntimeContext,
   type RuntimeMessage,
   runtimeFromContext,
@@ -48,6 +50,8 @@ type ExtensionAPI = {
   // this one must return nothing.
   on(event: "message_end", handler: (event: { message?: RuntimeMessage }) => void): void;
   getSessionName?(): string | undefined;
+  // pi's in-process bus between extensions.
+  events: { on(channel: string, handler: (data: unknown) => void): unknown };
 };
 
 // Where to import the store from.
@@ -192,6 +196,9 @@ export default function murmurPi(pi: ExtensionAPI): void {
    * both of which follow persistence of the whole turn, tool results included.
    */
   let pendingTurn: RuntimeMessage | null = null;
+  /** Outstanding background work per source, from `murmur:pending`. */
+  const pendingWork = new Map<string, number>();
+  let pendingTotal = 0;
   let queue: Promise<void> = Promise.resolve();
 
   const enqueue = (work: () => Promise<void>): Promise<void> => {
@@ -430,9 +437,12 @@ export default function murmurPi(pi: ExtensionAPI): void {
   // message, and each re-entry emits its own start/end pair. Only
   // `agent_settled` means finished and waiting. See the table in decide.ts.
   pi.on("agent_settled", () => {
+    // Read at the event: a delegate answering while the queue lags must not
+    // turn this settle -- the one that ended to WAIT for it -- into a `done`.
+    const pending = pendingTotal;
     void enqueue(async () => {
       const location = here();
-      const settled = settledState(focused(location.pane), muManaged);
+      const settled = settledState(focused(location.pane), muManaged, pending);
       if (settled === null) return;
       try {
         const store = await getStore();
@@ -449,6 +459,20 @@ export default function murmurPi(pi: ExtensionAPI): void {
       } catch {
         dropStore();
       }
+    });
+  });
+
+  // Background work another extension started (mu delegates). Reported as a
+  // runtime field so every surface can show it, and republished because it
+  // moves the pane between `idle` and `waiting`. Read at the event, written in
+  // the queue, like the turn reports.
+  pi.events.on(PENDING_CHANNEL, (data) => {
+    const total = foldPending(pendingWork, data);
+    if (total === null || total === pendingTotal) return;
+    pendingTotal = total;
+    void enqueue(async () => {
+      await reportRuntime({ pending: total });
+      publish(here());
     });
   });
 
@@ -476,6 +500,10 @@ export default function murmurPi(pi: ExtensionAPI): void {
       }
       agentId = null;
       pendingTurn = null;
+      // The producers' watchers die with the runtime too; a re-claim starts at
+      // nothing outstanding.
+      pendingWork.clear();
+      pendingTotal = 0;
       dropStore();
     });
   });

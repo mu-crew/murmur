@@ -57,6 +57,7 @@ function pane(id: string): SnapshotPane {
       context_window: null,
       provider_effort: null,
       usage: null,
+      pending: null,
       effort: null,
       context_pct: null,
       claimed_at: 1,
@@ -68,7 +69,7 @@ function pane(id: string): SnapshotPane {
 
 function snapshot(panes: SnapshotPane[], hostId = "REMOTE", over: Partial<Snapshot> = {}): string {
   return JSON.stringify({
-    murmur_snapshot: 3,
+    murmur_snapshot: 4,
     host_id: hostId,
     display_name: "Remote",
     murmur_version: "0.2.0",

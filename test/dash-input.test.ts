@@ -71,6 +71,7 @@ function pane(local: boolean, id = "%9"): PaneView {
     context_tokens: null,
     context_window: null,
     usage: null,
+    pending: null,
     updated_at: 1,
     snapshot_at: null,
     fetched_at: null,

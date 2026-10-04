@@ -22,7 +22,7 @@ function cell(over: Partial<Pick<PeerRecord, "murmur_version" | "snapshot_versio
 /** A document, as a peer's `murmur export` would print it. */
 function wire(over: Partial<Snapshot> = {}): string {
   return JSON.stringify({
-    murmur_snapshot: 3,
+    murmur_snapshot: 4,
     host_id: "REMOTE",
     display_name: "bubba",
     murmur_version: "0.1.4",
@@ -48,7 +48,7 @@ test("this node's own snapshot states its version and speaks the current snapsho
   expect(snapshot.murmur_version).toBe(VERSION);
   // A literal, not the constant. Comparing the document against the constant
   // passes whatever the constant is, so it cannot notice a bump at all.
-  expect(snapshot.murmur_snapshot).toBe(3);
+  expect(snapshot.murmur_snapshot).toBe(4);
 });
 
 test("a collect records what the peer is running, out of the document itself", async () => {
@@ -68,7 +68,7 @@ test("a collect records what the peer is running, out of the document itself", a
   store.close();
 });
 
-test("a peer speaking snapshot v2 is refused with expected 3 and actual 2", async () => {
+test("a peer speaking snapshot v2 is refused with expected 4 and actual 2", async () => {
   const store = openStore();
   store.addPeer("older", "older");
 
@@ -79,7 +79,7 @@ test("a peer speaking snapshot v2 is refused with expected 3 and actual 2", asyn
   );
 
   expect(results[0]).toMatchObject({ ok: false, unreachable: false });
-  expect(store.peers()[0]?.last_error).toContain("murmur_snapshot: expected 3, got 2");
+  expect(store.peers()[0]?.last_error).toContain("murmur_snapshot: expected 4, got 2");
   expect(store.peers()[0]?.snapshot).toBeNull();
   store.close();
 });
@@ -191,7 +191,7 @@ test("peer list shows a VERSION column once a peer has reported, and names a rea
     ok: true,
     at: Date.now(),
     snapshot: {
-      murmur_snapshot: 3,
+      murmur_snapshot: 4,
       host_id: "M",
       display_name: "macmini",
       murmur_version: "0.1.4",

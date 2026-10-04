@@ -51,6 +51,7 @@ function view(over: Partial<PaneView> = {}): PaneView {
     context_tokens: null,
     context_window: null,
     usage: null,
+    pending: null,
     updated_at: 1_000,
     snapshot_at: null,
     fetched_at: null,
@@ -69,6 +70,7 @@ test("header state counts include every crew state only when crew is on", () => 
     blocked: 0,
     done: 1,
     running: 2,
+    waiting: 0,
     idle: 0,
   };
   const orchestrated_counts = {
@@ -76,6 +78,7 @@ test("header state counts include every crew state only when crew is on", () => 
     blocked: 2,
     done: 3,
     running: 4,
+    waiting: 0,
     idle: 5,
   };
   const status = { counts, orchestrated_counts };
@@ -107,6 +110,7 @@ test("a crew row that needs a human stays visible with crew off", () => {
     context_tokens: null,
     context_window: null,
     usage: null,
+    pending: null,
     attention: [{ kind: "blocked", requested_at: 500, message: "which approach?" }],
   });
   expect(dashVisible(blocked, prefs())).toBe(true);

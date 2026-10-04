@@ -176,6 +176,17 @@ export type AgentRuntime = {
   provider_effort: string | null;
   /** Tokens and money, or null when no turn has completed. See `AgentUsage`. */
   usage: AgentUsage | null;
+  /**
+   * Background work this agent started and is still waiting on, such as mu
+   * delegates: running, starting and queued. Null when the harness does not
+   * report it; 0 when it does and nothing is outstanding.
+   *
+   * Stopped with work pending renders `waiting` rather than `idle`, and the pi
+   * extension holds `done` back until the count is zero: an agent that ended
+   * its turn to wait on delegates has not finished, and the last answer
+   * re-runs it, so the settle after that is the real `done`.
+   */
+  pending: number | null;
 };
 
 /** Owner-reported metadata about the agent in a pane. */
@@ -218,7 +229,7 @@ export type PeerRecord = {
  * that every peer speaking the new version was incompatible, because its copy
  * still said 1.
  */
-export const SNAPSHOT_VERSION = 3;
+export const SNAPSHOT_VERSION = 4;
 
 /**
  * One node's whole current state. Complete, never a delta: a peer that returns

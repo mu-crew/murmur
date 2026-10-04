@@ -284,14 +284,14 @@ test("a pane with nothing to say is a pane nobody mentions, locally or on the wi
   expect(parseSnapshot(JSON.stringify(built)).panes).toHaveLength(1);
 });
 
-test("a snapshot states its own version and speaks snapshot 3", () => {
+test("a snapshot states its own version and speaks snapshot 4", () => {
   const built = store().buildLocalSnapshot(IDENTITY, {
     server: { kind: "default" },
     panes: live(),
     now: 1,
   });
 
-  expect(built.murmur_snapshot).toBe(3);
+  expect(built.murmur_snapshot).toBe(4);
   expect(built.murmur_version).toMatch(/^\d+\.\d+\.\d+/);
   // An empty node is a valid, complete document: it says "nothing here", which
   // is a fact, not an absence of one.
@@ -312,7 +312,7 @@ test.each<[TmuxServer, TmuxServer]>([
   ],
 ])("server tag %j round-trips exactly", (server, expected) => {
   const document = {
-    murmur_snapshot: 3,
+    murmur_snapshot: 4,
     host_id: "H",
     display_name: "d",
     murmur_version: "0.5.0",
@@ -364,7 +364,7 @@ test.each([
   ],
 ])("rejects %s with its exact server field path", (_why, server, path, detail) => {
   const document = {
-    murmur_snapshot: 3,
+    murmur_snapshot: 4,
     host_id: "H",
     display_name: "d",
     murmur_version: "0.5.0",
@@ -389,7 +389,7 @@ test.each([
 
 test("a pane missing its server tag is rejected at the pane path", () => {
   const document = {
-    murmur_snapshot: 3,
+    murmur_snapshot: 4,
     host_id: "H",
     display_name: "d",
     murmur_version: "0.5.0",
@@ -422,7 +422,7 @@ test("the same pane id is valid on different tmux servers", () => {
     attention: [{ kind: "done", message: "", source: "pi", requested_at: 1 }],
   };
   const document = {
-    murmur_snapshot: 3,
+    murmur_snapshot: 4,
     host_id: "H",
     display_name: "d",
     murmur_version: "0.5.0",
@@ -448,7 +448,7 @@ test("snapshot v2 is deliberately incompatible and names both versions", () => {
         panes: [],
       }),
     ),
-  ).toThrow("murmur_snapshot: expected 3, got 2");
+  ).toThrow("murmur_snapshot: expected 4, got 2");
 });
 
 test("parseSnapshot names the first failing path so an operator can act", () => {
@@ -456,7 +456,7 @@ test("parseSnapshot names the first failing path so an operator can act", () => 
   // shows `last_error` and nothing else. "invalid snapshot" would send them to
   // read code on another machine.
   const bad = JSON.stringify({
-    murmur_snapshot: 3,
+    murmur_snapshot: 4,
     host_id: "H",
     display_name: "d",
     murmur_version: "0.1.0",
@@ -481,7 +481,7 @@ test("parseSnapshot names the first failing path so an operator can act", () => 
 
 test("nothing is coerced, defaulted or carried through", () => {
   const base = {
-    murmur_snapshot: 3,
+    murmur_snapshot: 4,
     host_id: "H",
     display_name: "d",
     murmur_version: "0.1.0",
@@ -514,6 +514,7 @@ test("nothing is coerced, defaulted or carried through", () => {
     context_window: null,
     provider_effort: null,
     usage: null,
+    pending: null,
     effort: null,
     context_pct: null,
     claimed_at: 1,
@@ -526,15 +527,15 @@ test("nothing is coerced, defaulted or carried through", () => {
     // Both directions, because compatibility is offered in neither: a reader
     // that accepted the older document would be guessing at the fields that
     // version added, which are exactly the state a human acts on.
-    ["a newer protocol", { ...base, murmur_snapshot: 4 }],
-    ["an older protocol", { ...base, murmur_snapshot: 2 }],
+    ["a newer protocol", { ...base, murmur_snapshot: 5 }],
+    ["an older protocol", { ...base, murmur_snapshot: 3 }],
     ["a stringly-typed clock", { ...base, generated_at: "1" }],
     ["a fractional clock", { ...base, generated_at: 1.5 }],
     ["a negative clock", { ...base, generated_at: -1 }],
     ["an empty host_id", { ...base, host_id: "" }],
     [
       "a missing murmur_version",
-      { murmur_snapshot: 3, host_id: "H", display_name: "d", generated_at: 1, panes: [] },
+      { murmur_snapshot: 4, host_id: "H", display_name: "d", generated_at: 1, panes: [] },
     ],
     ["an unknown top-level key", { ...base, extra: 3 }],
     ["panes as an object", { ...base, panes: {} }],
@@ -550,6 +551,12 @@ test("nothing is coerced, defaulted or carried through", () => {
     ["a numeric pi_session", { ...base, panes: [{ ...pane, agent: { ...owner, pi_session: 7 } }] }],
     ["a numeric workstream", { ...base, panes: [{ ...pane, agent: { ...owner, workstream: 7 } }] }],
     ["a numeric role", { ...base, panes: [{ ...pane, agent: { ...owner, role: 7 } }] }],
+    ["a negative pending", { ...base, panes: [{ ...pane, agent: { ...owner, pending: -1 } }] }],
+    ["a fractional pending", { ...base, panes: [{ ...pane, agent: { ...owner, pending: 1.5 } }] }],
+    [
+      "a missing pending",
+      { ...base, panes: [{ ...pane, agent: { ...owner, pending: undefined } }] },
+    ],
     ["a duplicate pane", { ...base, panes: [pane, pane] }],
     [
       // An agent_id is minted per process instance, so the same id in two panes
@@ -635,7 +642,7 @@ test("murmur export prints exactly one snapshot document and nothing else", () =
   // and parse each piece, which is a reader that can act on half a document.
   expect(stdout.trimEnd().split("\n")).toHaveLength(1);
   const parsed: Snapshot = parseSnapshot(stdout);
-  expect(parsed).toMatchObject({ murmur_snapshot: 3, display_name: "exporter", panes: [] });
+  expect(parsed).toMatchObject({ murmur_snapshot: 4, display_name: "exporter", panes: [] });
 });
 
 test("murmur export takes no options: an unknown flag is rejected, not ignored", () => {
@@ -697,7 +704,7 @@ const VALID_USAGE = {
 
 function agentDocument(runtime: Record<string, unknown>): string {
   return JSON.stringify({
-    murmur_snapshot: 3,
+    murmur_snapshot: 4,
     host_id: "H",
     display_name: "d",
     murmur_version: "0.4.0",
@@ -724,6 +731,7 @@ function agentDocument(runtime: Record<string, unknown>): string {
           context_window: null,
           provider_effort: null,
           usage: null,
+          pending: null,
           claimed_at: 1,
           updated_at: 1,
           // Spread LAST, and `model`, `effort` and `context_pct` are
@@ -743,7 +751,7 @@ test("a version 2 document is rejected as firmly as a newer one", () => {
   // accepted the older document would default its missing server identity,
   // potentially addressing the same pane id on the wrong tmux server.
   const older = agentDocument({ model: null, effort: null, context_pct: null }).replace(
-    '"murmur_snapshot":3',
+    '"murmur_snapshot":4',
     '"murmur_snapshot":2',
   );
   expect(() => parseSnapshot(older)).toThrow(SnapshotInvalidError);
@@ -774,6 +782,7 @@ test("every runtime field is nullable", () => {
     context_window: null,
     provider_effort: null,
     usage: null,
+    pending: null,
     effort: null,
     context_pct: null,
   });

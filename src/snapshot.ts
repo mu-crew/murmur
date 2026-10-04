@@ -92,6 +92,15 @@ function percentOrNull(value: unknown, path: string): number | null {
   return value;
 }
 
+/** A count of things, or null when the owner does not report it. */
+function countOrNull(value: unknown, path: string): number | null {
+  if (value === null) return null;
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
+    fail(path, "expected a non-negative integer or null");
+  }
+  return value;
+}
+
 function timestamp(value: unknown, path: string): number {
   if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
     fail(path, "expected a non-negative integer");
@@ -145,6 +154,7 @@ const AGENT_KEYS = [
   "provider",
   "provider_effort",
   "usage",
+  "pending",
   "claimed_at",
   "updated_at",
 ] as const;
@@ -235,6 +245,7 @@ function parseAgent(value: unknown, path: string): SnapshotAgent | null {
     provider: textOrNull(row.provider, `${path}.provider`),
     provider_effort: textOrNull(row.provider_effort, `${path}.provider_effort`),
     usage: parseUsage(row.usage, `${path}.usage`),
+    pending: countOrNull(row.pending, `${path}.pending`),
     claimed_at: timestamp(row.claimed_at, `${path}.claimed_at`),
     updated_at: timestamp(row.updated_at, `${path}.updated_at`),
   };

@@ -40,6 +40,9 @@ test("agent_settled asks for a human only when unseen and not mu-managed", () =>
   expect(settledState(true, false)).toBeNull();
   expect(settledState(false, true)).toBeNull();
   expect(settledState(true, true)).toBeNull();
+  // Delegates outstanding: the agent ended its turn to wait, it is not done.
+  expect(settledState(false, false, 2)).toBeNull();
+  expect(settledState(false, false, 0)).toBe("done");
 });
 
 // agent_end writes activity `stopped` unconditionally: there is no per-focus,
@@ -182,6 +185,7 @@ test("runtime is reported per turn without activating pi's turn_end boundary", a
   murmurPi({
     on: (event: string, handler: (event: unknown, ctx: unknown) => unknown) =>
       void handlers.set(event, handler),
+    events: { on: () => {} },
   } as never);
   const fire = (event: string, payload: unknown = {}, ctx: unknown = {}) =>
     handlers.get(event)?.(payload, ctx);
@@ -290,6 +294,7 @@ test("a failed write closes the store it is dropping", async () => {
   murmurPi({
     on: (event: string, handler: (event: unknown, ctx: unknown) => unknown) =>
       handlers.set(event, () => handler({}, {}) as void | Promise<void>),
+    events: { on: () => {} },
   } as never);
 
   // agent_start/agent_end are fire-and-forget (`void enqueue`), so drive the
@@ -368,6 +373,7 @@ test("a transient write failure does not silence the agent for the rest of its l
   murmurPi({
     on: (event: string, handler: (event: unknown, ctx: unknown) => unknown) =>
       handlers.set(event, () => handler({}, {}) as void | Promise<void>),
+    events: { on: () => {} },
   } as never);
 
   // First turn: the write throws and the handle is dropped. Waited on the
@@ -427,6 +433,7 @@ test("a missing murmur is given up on after one attempt, not retried per event",
   murmurPi({
     on: (event: string, handler: (event: unknown, ctx: unknown) => unknown) =>
       handlers.set(event, () => handler({}, {}) as void | Promise<void>),
+    events: { on: () => {} },
   } as never);
 
   for (let turn = 0; turn < 3; turn += 1) {
@@ -500,6 +507,7 @@ test("a pane moved to another window keeps its identity and stops badging the ol
   murmurPi({
     on: (event: string, handler: (event: unknown, ctx: unknown) => unknown) =>
       handlers.set(event, () => handler({}, {}) as void | Promise<void>),
+    events: { on: () => {} },
   } as never);
   await handlers.get("agent_start")?.();
   await until(() => reports.length === 1, "first turn's write");
@@ -599,6 +607,7 @@ test("session_shutdown does not permanently silence the extension, because /relo
   murmurPi({
     on: (event: string, handler: (event: unknown, ctx: unknown) => unknown) =>
       handlers.set(event, () => handler({}, {}) as void | Promise<void>),
+    events: { on: () => {} },
   } as never);
 
   // The full documented cycle: pi fires session_shutdown for the old instance,
@@ -679,6 +688,7 @@ test("session_start re-arms an extension that gave up, so a reload is a real rec
   murmurPi({
     on: (event: string, handler: (event: unknown, ctx: unknown) => unknown) =>
       handlers.set(event, () => handler({}, {}) as void | Promise<void>),
+    events: { on: () => {} },
   } as never);
 
   // No identity: the extension gives up permanently, by design.
@@ -786,6 +796,7 @@ async function driveExtension(options: { focused: boolean; muManaged?: boolean }
   murmurPi({
     on: (event: string, handler: (event: unknown, ctx: unknown) => unknown) =>
       handlers.set(event, () => handler({}, {}) as void | Promise<void>),
+    events: { on: () => {} },
   } as never);
   return { handlers, reports, badges, panes };
 }
@@ -969,6 +980,7 @@ test("a refused claim means no report and no badge, for the life of the process"
   murmurPi({
     on: (event: string, handler: (event: unknown, ctx: unknown) => unknown) =>
       handlers.set(event, () => handler({}, {}) as void | Promise<void>),
+    events: { on: () => {} },
   } as never);
 
   // A full turn, plus a settle, plus a /reload cycle. None of it may produce a
@@ -1031,6 +1043,7 @@ test("a claim the store retained keeps reporting, which is what /reload needs", 
     murmurPi({
       on: (event: string, handler: (event: unknown, ctx: unknown) => unknown) =>
         handlers.set(event, () => handler({}, {}) as void | Promise<void>),
+      events: { on: () => {} },
     } as never);
 
     await handlers.get("agent_start")?.();
@@ -1088,6 +1101,7 @@ test("a stale owner's write returning false is silence, not an error", async () 
   murmurPi({
     on: (event: string, handler: (event: unknown, ctx: unknown) => unknown) =>
       handlers.set(event, () => handler({}, {}) as void | Promise<void>),
+    events: { on: () => {} },
   } as never);
 
   await handlers.get("agent_start")?.();

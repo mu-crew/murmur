@@ -25,7 +25,14 @@ export const DEFAULT_DASH_PREFS: DashPrefs = {
 };
 
 const SORTS = new Set<DashSort>(["priority", "node", "age"]);
-const RENDER_STATES = new Set<RenderState>(["crashed", "blocked", "done", "running", "idle"]);
+const RENDER_STATES = new Set<RenderState>([
+  "crashed",
+  "blocked",
+  "done",
+  "running",
+  "waiting",
+  "idle",
+]);
 
 function defaults(): DashPrefs {
   return { ...DEFAULT_DASH_PREFS, hidden_states: [] };

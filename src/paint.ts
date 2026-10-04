@@ -45,6 +45,7 @@ export const COLOUR: Record<string, string> = {
   blocked: "\u001b[33m",
   done: "\u001b[36m",
   running: "\u001b[37m",
+  waiting: "\u001b[34m",
   idle: "\u001b[90m",
 };
 // Built from a char class rather than written literally: a bare \u001b in a

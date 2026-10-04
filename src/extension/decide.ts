@@ -20,6 +20,11 @@ import { type AgentRuntime, type Driver, EFFORTS } from "../types.js";
  * nothing to request -- the user is looking at it. An orchestrated one is mu's
  * to consume, and raising attention there would put every finishing worker in
  * the status bar and unhide its picker row.
+ *
+ * Nor does a settle with background work outstanding. An agent that fans out
+ * mu delegates ends its turn to wait for them, and each answer arrives as a
+ * follow-up that re-runs it -- so the settle after the LAST answer is the real
+ * `done`, and the earlier ones would be a false "look here".
  */
 
 /**
@@ -28,9 +33,38 @@ import { type AgentRuntime, type Driver, EFFORTS } from "../types.js";
  * `"done"` is the whole range: an owner can report that it finished, and only
  * an external notifier can report `blocked`.
  */
-export function settledState(focused: boolean, muManaged: boolean): "done" | null {
-  if (muManaged) return null;
+export function settledState(focused: boolean, muManaged: boolean, pending = 0): "done" | null {
+  if (muManaged || pending > 0) return null;
   return focused ? null : "done";
+}
+
+/**
+ * The in-process channel other extensions report outstanding background work
+ * on, as `{ source: string, count: number }`. Per source, so two producers do
+ * not overwrite each other; the agent's `pending` is the sum. mu's `mu_delegate`
+ * is the first producer. Named here, not imported from mu: murmur depends on no
+ * producer, and a producer depends on nothing but this string.
+ */
+export const PENDING_CHANNEL = "murmur:pending";
+
+/**
+ * Fold one `murmur:pending` report into the per-source counts, and return the
+ * new total, or null when the payload is not a report.
+ *
+ * Validated, because the payload crosses an extension boundary as `unknown`:
+ * a bad count must be dropped here, not reach a CHECK-constrained column and
+ * cost the whole runtime write.
+ */
+export function foldPending(counts: Map<string, number>, data: unknown): number | null {
+  if (typeof data !== "object" || data === null) return null;
+  const { source, count } = data as { source?: unknown; count?: unknown };
+  if (typeof source !== "string" || !source) return null;
+  if (typeof count !== "number" || !Number.isInteger(count) || count < 0) return null;
+  if (count === 0) counts.delete(source);
+  else counts.set(source, count);
+  let total = 0;
+  for (const n of counts.values()) total += n;
+  return total;
 }
 
 export function driverFromEnv(env: NodeJS.ProcessEnv): Driver {
