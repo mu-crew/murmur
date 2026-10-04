@@ -7,6 +7,7 @@ import {
   NEEDS_HUMAN,
   type PaneAttention,
   type PaneView,
+  pendingSummary,
   RENDER_PRIORITY,
   renderState,
   STALENESS_MS,
@@ -64,6 +65,7 @@ function view(over: Partial<PaneView> = {}): PaneView {
     context_tokens: null,
     context_window: null,
     usage: null,
+    pending: null,
     updated_at: 1_000,
     snapshot_at: null,
     fetched_at: null,
@@ -108,7 +110,14 @@ test("RENDER_PRIORITY is the one ordering table and every render state is in it"
   // One table, so no two surfaces can disagree about whether `crashed` or
   // `blocked` leads. A state missing from it would sort by a fallback, which is
   // how a row moves under the keypress aimed at it.
-  expect([...RENDER_PRIORITY]).toEqual(["crashed", "blocked", "done", "running", "idle"]);
+  expect([...RENDER_PRIORITY]).toEqual([
+    "crashed",
+    "blocked",
+    "done",
+    "running",
+    "waiting",
+    "idle",
+  ]);
   const states = new Set(RENDER_PRIORITY);
   for (const attention of [["crashed"], ["blocked"], ["done"], []] as AttentionKind[][]) {
     for (const activity of ["running", "stopped", null] as PaneView["activity"][]) {
@@ -472,4 +481,22 @@ test("attention priority is an order-consistent subset of render priority", () =
   // Exhaustive over the type, which is what lets the rank lookup have no
   // meaningful fallback.
   expect(new Set(ATTENTION_PRIORITY).size).toBe(3);
+});
+
+test("a stopped agent with delegates out is waiting, not idle; attention still wins", () => {
+  expect(renderState(view({ activity: "stopped", pending: 2 }))).toBe("waiting");
+  expect(renderState(view({ activity: "stopped", pending: 0 }))).toBe("idle");
+  expect(renderState(view({ activity: "stopped", pending: null }))).toBe("idle");
+  // Running says more than waiting: it is doing something right now.
+  expect(renderState(view({ activity: "running", pending: 2 }))).toBe("running");
+  expect(renderState(view({ activity: "stopped", pending: 2, attention: at(["done"]) }))).toBe(
+    "done",
+  );
+});
+
+test("the delegate count is shown whenever it is non-zero", () => {
+  expect(pendingSummary(view({ pending: 1 }))).toBe("1 delegate");
+  expect(pendingSummary(view({ pending: 3, activity: "running" }))).toBe("3 delegates");
+  expect(pendingSummary(view({ pending: 0 }))).toBe("");
+  expect(pendingSummary(view({ pending: null }))).toBe("");
 });

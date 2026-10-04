@@ -17,7 +17,11 @@ function sameServer(left: TmuxServer, right: TmuxServer): boolean {
 }
 
 function paneState(pane: LocalPane): RenderState {
-  return renderState({ activity: pane.agent?.activity ?? null, attention: pane.attention });
+  return renderState({
+    activity: pane.agent?.activity ?? null,
+    attention: pane.attention,
+    pending: pane.agent?.pending ?? null,
+  });
 }
 
 /** The strongest non-idle state, or null. Idle is the absence of news. */

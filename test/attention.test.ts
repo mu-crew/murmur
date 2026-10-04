@@ -167,6 +167,7 @@ test("notify then focus cannot alter one byte of a live agent's row", () => {
     context_window: null,
     provider_effort: null,
     usage: null,
+    pending: null,
     effort: null,
     context_pct: null,
     claimed_at: 1000,

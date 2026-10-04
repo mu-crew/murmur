@@ -88,7 +88,7 @@ test("a file that is not TOML at all reads as the defaults", () => {
 test("a hidden state that is no longer a render state is dropped", () => {
   // States get renamed. A hand-edited or older file naming one that went away
   // must not hide nothing under a name nothing matches.
-  write('hidden_states = ["done", "waiting", "idle"]\n');
+  write('hidden_states = ["done", "sleeping", "idle"]\n');
 
   expect(loadDashPrefs(dir).hidden_states).toEqual(["done", "idle"]);
 });

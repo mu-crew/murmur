@@ -63,6 +63,7 @@ function view(over: Partial<PaneView> = {}): PaneView {
     context_tokens: null,
     context_window: null,
     usage: null,
+    pending: null,
     updated_at: 1,
     snapshot_at: null,
     fetched_at: null,
@@ -117,7 +118,7 @@ function peer(name: string, hostId: string, panes: string[] = [], jumpCommand?: 
     ok: true,
     at: 1_000,
     snapshot: {
-      murmur_snapshot: 3,
+      murmur_snapshot: 4,
       host_id: hostId,
       display_name: name,
       murmur_version: "0.2.0",

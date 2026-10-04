@@ -35,15 +35,16 @@ const pane: PaneView = {
   context_tokens: null,
   context_window: null,
   usage: null,
+  pending: null,
   updated_at: 1,
   snapshot_at: null,
   fetched_at: null,
   attached_pane: null,
 };
-const counts = { crashed: 0, blocked: 0, done: 0, running: 1, idle: 0 };
+const counts = { crashed: 0, blocked: 0, done: 0, running: 1, waiting: 0, idle: 0 };
 const initial: Status = {
   counts,
-  orchestrated_counts: { crashed: 0, blocked: 0, done: 0, running: 0, idle: 0 },
+  orchestrated_counts: { crashed: 0, blocked: 0, done: 0, running: 0, waiting: 0, idle: 0 },
   panes: [pane],
   peers: [],
 };

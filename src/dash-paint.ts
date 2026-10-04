@@ -8,6 +8,7 @@ export const DASH_GLYPH: Record<RenderState, string> = {
   blocked: "\uf075", // nf-fa-comment
   done: "\uf058", // nf-fa-check_circle
   running: "\uf04b", // nf-fa-play
+  waiting: "\uf252", // nf-fa-hourglass_half
   idle: "\uf186", // nf-fa-moon_o
 };
 
@@ -16,6 +17,7 @@ export const DASH_COLOR: Record<RenderState, string> = {
   blocked: "#fab387",
   done: "#94e2d5",
   running: "#a6adc8",
+  waiting: "#74c7ec",
   idle: "#6c7086",
 };
 

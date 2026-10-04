@@ -42,6 +42,7 @@ const base: PaneView = {
   context_tokens: null,
   context_window: null,
   usage: null,
+  pending: null,
   updated_at: null,
   snapshot_at: null,
   fetched_at: null,

@@ -38,6 +38,7 @@ function pane(over: Partial<PaneView> = {}): PaneView {
     context_tokens: null,
     context_window: null,
     usage: null,
+    pending: null,
     updated_at: 1,
     snapshot_at: null,
     fetched_at: null,
@@ -46,7 +47,7 @@ function pane(over: Partial<PaneView> = {}): PaneView {
   };
 }
 
-const counts = { crashed: 0, blocked: 0, done: 0, running: 0, idle: 0 };
+const counts = { crashed: 0, blocked: 0, done: 0, running: 0, waiting: 0, idle: 0 };
 const dashStore = {
   store: {},
   generation: { dev: 0n, ino: 0n },

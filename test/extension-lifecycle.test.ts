@@ -37,6 +37,10 @@ type Rig = {
   labels: [string, string | null][];
   opens: () => number;
   closes: () => number;
+  attention: string[];
+  runtime: Record<string, unknown>[];
+  /** Deliver a payload on pi's in-process event bus, as another extension would. */
+  emit: (channel: string, data: unknown) => void;
 };
 
 /**
@@ -52,6 +56,8 @@ async function rig(claimAnswers: Claim[], options: { setActivity?: boolean } = {
   const releases: Rig["releases"] = [];
   const badges: Rig["badges"] = [];
   const labels: Rig["labels"] = [];
+  const attention: string[] = [];
+  const runtime: Record<string, unknown>[] = [];
   let opens = 0;
   let closes = 0;
   let asked = 0;
@@ -73,7 +79,11 @@ async function rig(claimAnswers: Claim[], options: { setActivity?: boolean } = {
           writes.push(update);
           return options.setActivity ?? true;
         },
-        requestAttention: () => {},
+        requestAttention: (request: { kind: string }) => void attention.push(request.kind),
+        setRuntime: (update: Record<string, unknown>) => {
+          runtime.push(update);
+          return true;
+        },
         // What publishAgentStates reads: this process's pane, idle.
         localPanes: () => [
           {
@@ -131,12 +141,19 @@ async function rig(claimAnswers: Claim[], options: { setActivity?: boolean } = {
   // usage, so the runtime report is skipped and these tests keep asserting only
   // activity and ownership.
   const handlers = new Map<string, () => void | Promise<void>>();
+  const bus = new Map<string, (data: unknown) => void>();
   murmurPi({
     on: (event: string, handler: (event: unknown, ctx: unknown) => unknown) =>
       handlers.set(event, () => handler({}, {}) as void | Promise<void>),
+    events: {
+      on: (channel: string, handler: (data: unknown) => void) => bus.set(channel, handler),
+    },
   } as never);
 
   return {
+    attention,
+    runtime,
+    emit: (channel, data) => bus.get(channel)?.(data),
     handlers,
     claims,
     writes,
@@ -342,6 +359,51 @@ test("a release only ever quotes this process's own claim", async () => {
   expect(r.releases).toMatchObject([
     { agent_id: "a1", owner_pid: process.pid, location: { pane: "%1" } },
   ]);
+
+  unmock();
+});
+
+test("a settle with delegates outstanding raises no done; the settle after the last answer does", async () => {
+  // The false "look here": an agent fans out mu delegates, ends its turn to wait
+  // for them, and settles. Nothing is finished. Each answer re-runs it, so the
+  // settle once the count is back to zero is the real `done`.
+  const r = await rig([{ outcome: "claimed", agent_id: "a1" }]);
+  await until(() => r.claims.length === 1);
+
+  r.emit("murmur:pending", { source: "mu_delegate", count: 2 });
+  await until(() => r.runtime.length === 1);
+  expect(r.runtime[0]).toMatchObject({ agent_id: "a1", pending: 2 });
+
+  await r.handlers.get("agent_settled")?.();
+  // Waits for something that must not arrive.
+  await until(() => r.attention.length > 0);
+  expect(r.attention).toEqual([]);
+
+  r.emit("murmur:pending", { source: "mu_delegate", count: 0 });
+  await until(() => r.runtime.length === 2);
+  expect(r.runtime[1]).toMatchObject({ pending: 0 });
+
+  await r.handlers.get("agent_settled")?.();
+  await until(() => r.attention.length > 0);
+  expect(r.attention).toEqual(["done"]);
+
+  unmock();
+});
+
+test("pending counts sum across sources and a malformed report changes nothing", async () => {
+  const r = await rig([{ outcome: "claimed", agent_id: "a1" }]);
+  await until(() => r.claims.length === 1);
+
+  r.emit("murmur:pending", { source: "mu_delegate", count: 1 });
+  r.emit("murmur:pending", { source: "jobs", count: 2 });
+  r.emit("murmur:pending", { source: "jobs", count: -1 });
+  r.emit("murmur:pending", { count: 5 });
+  r.emit("murmur:pending", "3");
+  // A repeat of the current total is not a change worth a write.
+  r.emit("murmur:pending", { source: "jobs", count: 2 });
+  await until(() => r.runtime.length >= 2);
+
+  expect(r.runtime.map((write) => write.pending)).toEqual([1, 3]);
 
   unmock();
 });

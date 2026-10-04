@@ -84,6 +84,7 @@ export {
   NEEDS_HUMAN,
   type PaneView,
   paneViews,
+  pendingSummary,
   RENDER_PRIORITY,
   type RenderState,
   renderState,

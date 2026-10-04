@@ -4,7 +4,7 @@ import { DASH_GLYPH } from "./dash-paint.js";
 import type { DashPrefs } from "./dash-prefs.js";
 import { type CompactRowLayout, compactRow, compactRowLayout } from "./dash-tick.js";
 import { dashRows } from "./dash-view.js";
-import { age, type PaneView, type RenderState, renderState } from "./view.js";
+import { age, type PaneView, pendingSummary, type RenderState, renderState } from "./view.js";
 
 export function sidepanelPaneKey(pane: PaneView): string {
   return JSON.stringify([
@@ -40,7 +40,7 @@ export function sidepanelRows(
       state,
       icon: DASH_GLYPH[state],
       name: agentLabel(pane),
-      facts: [state, host, elapsed].filter(Boolean).join(" · "),
+      facts: [state, pendingSummary(pane), host, elapsed].filter(Boolean).join(" · "),
       host,
       age: elapsed,
       stream: pane.workstream ?? pane.session_name,

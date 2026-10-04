@@ -20,7 +20,7 @@ From 1.0.0, the following interfaces are stable. A breaking change to one of
 them requires a major version:
 
 - tmux pane options `@murmur_pane_state` (`crashed`, `blocked`, `done`,
-  `working`, or `idle`), `@murmur_pane_since` (milliseconds since the epoch),
+  `working`, `waiting`, or `idle`), `@murmur_pane_since` (milliseconds since the epoch),
   and `@murmur_pane_label`
 - tmux window, session, and server options `@murmur_window_state`,
   `@murmur_window_has_agent`, `@murmur_session_state`, and
@@ -82,8 +82,10 @@ Three facts, independent, each with exactly one writer:
 They are never folded into one enum, and no stored value spans two of them.
 There is no `cleared`: absence of an attention row *is* "nothing to see", and
 absence of an agent row *is* "no agent here". The words a surface paints
-(`crashed`, `blocked`, `done`, `running`, `idle`) are derived at read time by
-`renderState` and stored nowhere.
+(`crashed`, `blocked`, `done`, `running`, `waiting`, `idle`) are derived at read
+time by `renderState` and stored nowhere. `waiting` is a stopped agent whose
+runtime field `pending` (outstanding background work, such as mu delegates) is
+above zero.
 
 Why three and not one. A crashed agent on an unreachable host is crashed *and*
 stale, on different axes; a running agent that a notifier flagged as blocked is
@@ -223,7 +225,7 @@ Tmux state also has to be cleared from outside, which is why `murmur clear --pan
   entered its current state. It changes only with the state and is unset with it.
 - `@murmur_pane_label`: one pane's agent name, falling back to its pi session and CLI
 - `@murmur_count_<state>` (global): this host's agent counts for a status pill,
-  one option per state (`crashed`, `blocked`, `done`, `working`, `idle`) plus
+  one option per state (`crashed`, `blocked`, `done`, `working`, `waiting`, `idle`) plus
   `@murmur_count_crew`. Unset at zero so a format can test presence. Same fold
   as `murmur status` (`statusRollup`), but local only: remote peers still need
   `murmur status`.
@@ -368,7 +370,8 @@ three surfaces carried machinery for it:
 | --- | --- | --- |
 | `activity = running` | pi extension | `agent_start` |
 | `activity = stopped` | pi extension | `agent_end` |
-| attention `done` | pi extension | `agent_settled`, pane unfocused, `driver = human` |
+| attention `done` | pi extension | `agent_settled`, pane unfocused, `driver = human`, no pending work |
+| runtime `pending` | pi extension | a `murmur:pending` report on pi's event bus |
 | attention `done` | `murmur notify` | a harness event meaning "turn over, waiting" (`agent-turn-complete`, `session.idle`) |
 | attention `blocked` | `murmur notify` | any other outside-in call, including an event murmur does not recognise |
 | attention `crashed` | `reconcileLocal` | pane alive, owner pid gone, activity was `running` |
@@ -377,7 +380,18 @@ three surfaces carried machinery for it:
 
 Nothing writes `crashed` from inside an agent, for the obvious reason.
 
-**Versioning is one strategy, not two.** On open, if `user_version` is not 6,
+**Pending work holds `done` back.** Other extensions in the same pi report
+outstanding background work on pi's in-process bus as
+`pi.events.emit("murmur:pending", { source, count })`; mu's `mu_delegate` is
+the first producer. The extension sums the counts by source, writes the total
+as the agent's `pending`, and raises no `done` on a settle while it is above
+zero. A parent that fans out delegates ends its turn to wait for them, so that
+settle is not completion. Each answer arrives as a follow-up that runs the
+agent again, and the producer reports zero before it delivers the last one, so
+the settle after that run raises the real `done`. The channel name is a
+string on both sides, so neither package imports the other.
+
+**Versioning is one strategy, not two.** On open, if `user_version` is not 7,
 murmur salvages `SELECT name, target FROM peers` — the two fields a human typed
 — deletes the database and its `-wal`/`-shm` sidecars, recreates the schema, and
 re-inserts those peers with every observed column `NULL`. There is no

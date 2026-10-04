@@ -44,6 +44,7 @@ function pane(over: Partial<PaneView> = {}): PaneView {
     context_tokens: null,
     context_window: null,
     usage: null,
+    pending: null,
     updated_at: 0,
     snapshot_at: null,
     fetched_at: null,

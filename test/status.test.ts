@@ -91,7 +91,7 @@ function localAgent(
 
 function remoteSnapshot(panes: SnapshotPane[], generatedAt = 1_000): Snapshot {
   return {
-    murmur_snapshot: 3,
+    murmur_snapshot: 4,
     host_id: "REMOTE",
     display_name: "container-id-nobody-can-type",
     murmur_version: "0.2.0",
@@ -132,6 +132,7 @@ function remotePane(pane: string, over: Partial<SnapshotPane> = {}): SnapshotPan
       context_window: null,
       provider_effort: null,
       usage: null,
+      pending: null,
       effort: null,
       context_pct: null,
       claimed_at: 1,
@@ -151,7 +152,14 @@ test("counts group by render state, and attention beats activity", () => {
 
   const result = status(store, IDENTITY);
 
-  expect(result.counts).toEqual({ crashed: 1, blocked: 1, done: 1, running: 1, idle: 1 });
+  expect(result.counts).toEqual({
+    crashed: 1,
+    blocked: 1,
+    done: 1,
+    running: 1,
+    waiting: 0,
+    idle: 1,
+  });
   // Both facts survive on the row that carries both, which is the point of
   // keeping them separate: a running agent CAN be waiting on a human.
   const blocked = result.panes.find((pane) => pane.pane === "%2");
@@ -181,6 +189,7 @@ test("a remote worker points back to its matching local attachment", () => {
           context_window: null,
           provider_effort: null,
           usage: null,
+          pending: null,
           effort: null,
           context_pct: null,
           claimed_at: 1,
@@ -233,6 +242,7 @@ test("a remote worker has no back-reference when no local pane matches", () => {
           context_window: null,
           provider_effort: null,
           usage: null,
+          pending: null,
           effort: null,
           context_pct: null,
           claimed_at: 1,
@@ -279,6 +289,7 @@ function remoteWorkerStore(name: string) {
           context_window: null,
           provider_effort: null,
           usage: null,
+          pending: null,
           effort: null,
           context_pct: null,
           claimed_at: 1,

@@ -72,7 +72,14 @@ import {
   sessionNotice,
 } from "../paint.js";
 import { type Status, status, statusWithCollect } from "../status.js";
-import { age, oneLiner, type PaneView, RENDER_PRIORITY, renderState } from "../view.js";
+import {
+  age,
+  oneLiner,
+  type PaneView,
+  pendingSummary,
+  RENDER_PRIORITY,
+  renderState,
+} from "../view.js";
 import { clearPane } from "./clear.js";
 import { requireIdentity } from "./identity-guard.js";
 
@@ -249,6 +256,7 @@ function Card({
   // card is ~38 columns wide, so anything past that was never visible anyway.
   const summary = clipGlanceLine(oneLiner(pane, glanceLine), CARD_TEXT_WIDTH);
   const elapsed = age(pane.updated_at === null ? null : now - pane.updated_at);
+  const pending = pendingSummary(pane);
 
   return (
     <Box
@@ -269,6 +277,12 @@ function Card({
         </Text>
         {pane.driver === "orchestrated" ? `  ${DASH_CHROME.crew}` : ""}
         {stream ? `  ${terminalText(stream)}` : ""}
+        {pending ? (
+          <Text color={DASH_COLOR.waiting}>
+            {"  "}
+            {DASH_GLYPH.waiting} {pending}
+          </Text>
+        ) : null}
         {stale ? <Text color={DASH_CHROME_COLOR.stale}> {DASH_CHROME.stale} stale</Text> : null}
       </Text>
       <Text dimColor={stale || !summary} wrap="truncate-end">
@@ -303,6 +317,7 @@ function compactFields(
     flags: [
       pane.driver === "orchestrated" ? DASH_CHROME.crew : "",
       pane.freshness === "stale" ? DASH_CHROME.stale : "",
+      (pane.pending ?? 0) > 0 ? `${DASH_GLYPH.waiting}${pane.pending}` : "",
     ]
       .filter(Boolean)
       .join(" "),

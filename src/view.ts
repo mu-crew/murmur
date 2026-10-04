@@ -19,7 +19,7 @@ export type Freshness = "fresh" | "stale";
  * What a surface paints. Presentation only, derived from the three independent
  * facts and never stored.
  */
-export type RenderState = "crashed" | "blocked" | "done" | "running" | "idle";
+export type RenderState = "crashed" | "blocked" | "done" | "running" | "waiting" | "idle";
 
 /**
  * THE single ordering table: which state matters most, for sorting and for
@@ -33,6 +33,7 @@ export const RENDER_PRIORITY: readonly RenderState[] = [
   "blocked",
   "done",
   "running",
+  "waiting",
   "idle",
 ];
 
@@ -267,6 +268,8 @@ export type PaneView = {
   context_tokens: number | null;
   context_window: number | null;
   usage: AgentUsage | null;
+  /** Outstanding background work (delegates), null when not reported. */
+  pending: number | null;
   driver: Driver;
   // ages
   /** When the pane's own node last said something. Never `fetched_at`. */
@@ -335,15 +338,32 @@ export function freshness(
  *
  * A running agent with `blocked` attention is valid and expected, and surfaces
  * that can show both do -- this is only for the ones that must pick one.
+ *
+ * `waiting` is a stopped agent with background work outstanding: it ended its
+ * turn to wait on delegates, and their answers will re-run it. Not idle, and
+ * not news either, so it ranks between the two.
  */
 export function renderState(view: {
   activity: Activity | null;
   attention: readonly { kind: AttentionKind }[];
+  pending?: number | null;
 }): RenderState {
   for (const kind of ["crashed", "blocked", "done"] as const) {
     if (wants(view, kind)) return kind;
   }
-  return view.activity === "running" ? "running" : "idle";
+  if (view.activity === "running") return "running";
+  return (view.pending ?? 0) > 0 ? "waiting" : "idle";
+}
+
+/**
+ * "3 delegates", or "" when nothing is outstanding.
+ *
+ * Shown in every state, not only `waiting`: a running agent with delegates out
+ * is the common case, and a `done` one is a bug worth seeing.
+ */
+export function pendingSummary(view: { pending?: number | null }): string {
+  const n = view.pending ?? 0;
+  return n > 0 ? `${n} delegate${n === 1 ? "" : "s"}` : "";
 }
 
 /** The later of two clock readings, either of which may be absent. */
@@ -404,6 +424,7 @@ function paneView(pane: SnapshotPane, source: ViewSource): PaneView {
     context_tokens: agent?.context_tokens ?? null,
     context_window: agent?.context_window ?? null,
     usage: agent?.usage ?? null,
+    pending: agent?.pending ?? null,
     driver: agent?.driver ?? DEFAULT_DRIVER,
     // The NEWER of the two, not the agent row with attention as a fallback.
     //
@@ -484,7 +505,7 @@ const ORDER = new Map<RenderState, number>(RENDER_PRIORITY.map((state, index) =>
  * seconds ago, every single time the newer one appeared. The list a human opens
  * to unblock things sorted the longest-waiting thing to the bottom.
  *
- * `running` and `idle` ask for nothing, so the direction there is only a
+ * `running`, `waiting` and `idle` ask for nothing, so the direction there is only a
  * tiebreak and newest reads best: it is the pane you last touched.
  */
 const OLDEST_FIRST: readonly RenderState[] = ["crashed", "blocked"];
