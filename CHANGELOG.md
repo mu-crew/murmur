@@ -3,7 +3,7 @@
 Notable changes per release. Written for someone deciding whether to upgrade,
 so it says what changed for a user rather than listing every commit.
 
-## Unreleased
+## 1.1.0
 
 **`done` waits for mu delegates.** A pi agent that fans out `mu_delegate`
 calls and ends its turn to wait no longer shows `done` while the delegates
@@ -11,6 +11,8 @@ run. It now shows the new `waiting` state (hourglass, sapphire) instead, and
 `done` appears once the last answer has come back and the agent has finished
 with it. Every card and side-panel row shows the outstanding count
 (`3 delegates`) whenever it is not zero, in any state. Crew agents show it too.
+Needs mu 3.5.0 or later; with an older mu nothing reports pending work and
+`done` behaves as before.
 
 **Snapshot version 4.** The agent record carries a new `pending` field, so
 every node must run this version at once: a mixed fleet refuses each other's
