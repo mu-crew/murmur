@@ -13,6 +13,6 @@
   with version 2.
 - **activity** — whether the pane's owning process reports `running` or
   `stopped`.
-- **attention** — a `done`, `blocked`, or `crashed` request associated with a
-  pane address.
+- **attention** — a `done`, `blocked`, `error`, or `crashed` request associated
+  with a pane address.
 - **freshness** — how recently the reader fetched the node's snapshot.

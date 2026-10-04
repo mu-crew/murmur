@@ -1,10 +1,12 @@
 import { publishAgentStates } from "./agent-state.js";
+import { type AlertRunner, alertHook, fireAlerts, runHook } from "./alert.js";
 import { type Channel, hasWarmSocket } from "./channel.js";
+import { loadIdentity, type NodeIdentity } from "./identity.js";
 import { type Mux, tmux } from "./mux.js";
 import { parseSnapshot, SnapshotInvalidError } from "./snapshot.js";
 import type { Store } from "./store.js";
 import type { PeerRecord, TmuxServer } from "./types.js";
-import { STALENESS_MS } from "./view.js";
+import { paneViews, STALENESS_MS } from "./view.js";
 
 export { STALENESS_MS };
 
@@ -202,6 +204,11 @@ export type CollectOptions = {
   warm?: (target: string) => boolean;
   /** Pause before retrying a busy session channel. Injected so tests need not wait. */
   busyRetryMs?: number;
+  /**
+   * The on-attention hook, its runner, and the identity the merged view needs.
+   * Injected so a test needs no executable on disk and no `murmur init`.
+   */
+  alerts?: { hook?: string | null; run?: AlertRunner; identity?: NodeIdentity | null };
 };
 
 /**
@@ -633,6 +640,18 @@ export async function collect(
     } catch {
       // Housekeeping must not fail a command, and it must not report either.
     }
+  }
+
+  // After reconciliation, so a crash found this run alerts this run, and after
+  // every peer is applied, so remote events alert from the same place.
+  try {
+    const identity = options.alerts?.identity ?? loadIdentity();
+    const hook = options.alerts && "hook" in options.alerts ? options.alerts.hook : alertHook();
+    if (identity && hook) {
+      fireAlerts(store, paneViews(store, identity, now), now, hook, options.alerts?.run ?? runHook);
+    }
+  } catch {
+    // Same rule as housekeeping: an alert must never fail a collect.
   }
   return results;
 }

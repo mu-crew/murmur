@@ -67,6 +67,7 @@ function prefs(over: Partial<DashPrefs> = {}): DashPrefs {
 test("header state counts include every crew state only when crew is on", () => {
   const counts = {
     crashed: 0,
+    error: 0,
     blocked: 0,
     done: 1,
     running: 2,
@@ -75,6 +76,7 @@ test("header state counts include every crew state only when crew is on", () => 
   };
   const orchestrated_counts = {
     crashed: 1,
+    error: 1,
     blocked: 2,
     done: 3,
     running: 4,
@@ -89,7 +91,8 @@ test("header state counts include every crew state only when crew is on", () => 
   expect(dashStateCount(status, "idle", true)).toBe(5);
   expect(dashStateCount(status, "blocked", false)).toBe(2);
   expect(dashStateCount(status, "crashed", false)).toBe(1);
-  expect(dashCrewCount(status)).toBe(15);
+  expect(dashStateCount(status, "error", false)).toBe(1);
+  expect(dashCrewCount(status)).toBe(16);
 });
 
 test("crew rows are hidden unless prefs.crew, and agree with isVisible", () => {

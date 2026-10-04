@@ -10,7 +10,7 @@ import type { PaneId, SessionId, WindowId } from "./ids.js";
  * no agent row means "no agent here".
  */
 export type Activity = "running" | "stopped";
-export type AttentionKind = "done" | "blocked" | "crashed";
+export type AttentionKind = "done" | "blocked" | "error" | "crashed";
 
 /**
  * Attention kinds, most urgent first. Beside the type they order.
@@ -28,7 +28,7 @@ export type AttentionKind = "done" | "blocked" | "crashed";
  * an order-consistent subset of `RENDER_PRIORITY` rather than importing one into
  * the other.
  */
-export const ATTENTION_PRIORITY: readonly AttentionKind[] = ["crashed", "blocked", "done"];
+export const ATTENTION_PRIORITY: readonly AttentionKind[] = ["crashed", "error", "blocked", "done"];
 
 /**
  * Who is waiting on this agent -- a human, or a supervisor that consumes the
@@ -229,7 +229,7 @@ export type PeerRecord = {
  * that every peer speaking the new version was incompatible, because its copy
  * still said 1.
  */
-export const SNAPSHOT_VERSION = 4;
+export const SNAPSHOT_VERSION = 5;
 
 /**
  * One node's whole current state. Complete, never a delta: a peer that returns

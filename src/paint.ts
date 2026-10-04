@@ -42,6 +42,7 @@ export const GLYPH = DASH_GLYPH;
 // teal is finished-unseen, grey is busy or idle and carries no signal.
 export const COLOUR: Record<string, string> = {
   crashed: "\u001b[31m",
+  error: "\u001b[35m",
   blocked: "\u001b[33m",
   done: "\u001b[36m",
   running: "\u001b[37m",

@@ -61,7 +61,7 @@ function finding(over: Partial<Finding> = {}): Finding {
 /** A snapshot document, as a peer's `murmur export` prints it. */
 function wire(host_id: string, display_name: string): string {
   return JSON.stringify({
-    murmur_snapshot: 4,
+    murmur_snapshot: 5,
     host_id,
     display_name,
     murmur_version: "0.2.1",

@@ -27,6 +27,7 @@ export const DEFAULT_DASH_PREFS: DashPrefs = {
 const SORTS = new Set<DashSort>(["priority", "node", "age"]);
 const RENDER_STATES = new Set<RenderState>([
   "crashed",
+  "error",
   "blocked",
   "done",
   "running",

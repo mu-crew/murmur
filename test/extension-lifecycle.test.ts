@@ -29,7 +29,7 @@ async function until(condition: () => boolean): Promise<void> {
 type Claim = { outcome: "claimed" | "retained" | "replaced" | "refused"; agent_id?: string };
 
 type Rig = {
-  handlers: Map<string, () => void | Promise<void>>;
+  handlers: Map<string, (event?: unknown) => void | Promise<void>>;
   claims: { owner_pid: number; pane: string }[];
   writes: { activity: string; agent_id: string; owner_pid: number }[];
   releases: { agent_id: string; owner_pid: number; location: { pane: string } }[];
@@ -38,6 +38,7 @@ type Rig = {
   opens: () => number;
   closes: () => number;
   attention: string[];
+  messages: string[];
   runtime: Record<string, unknown>[];
   /** Deliver a payload on pi's in-process event bus, as another extension would. */
   emit: (channel: string, data: unknown) => void;
@@ -57,6 +58,7 @@ async function rig(claimAnswers: Claim[], options: { setActivity?: boolean } = {
   const badges: Rig["badges"] = [];
   const labels: Rig["labels"] = [];
   const attention: string[] = [];
+  const messages: string[] = [];
   const runtime: Record<string, unknown>[] = [];
   let opens = 0;
   let closes = 0;
@@ -79,7 +81,10 @@ async function rig(claimAnswers: Claim[], options: { setActivity?: boolean } = {
           writes.push(update);
           return options.setActivity ?? true;
         },
-        requestAttention: (request: { kind: string }) => void attention.push(request.kind),
+        requestAttention: (request: { kind: string; message: string }) => {
+          attention.push(request.kind);
+          messages.push(request.message);
+        },
         setRuntime: (update: Record<string, unknown>) => {
           runtime.push(update);
           return true;
@@ -140,11 +145,11 @@ async function rig(claimAnswers: Claim[], options: { setActivity?: boolean } = {
   // ctx, which is the older-pi case: no model, no thinking level, no context
   // usage, so the runtime report is skipped and these tests keep asserting only
   // activity and ownership.
-  const handlers = new Map<string, () => void | Promise<void>>();
+  const handlers = new Map<string, (event?: unknown) => void | Promise<void>>();
   const bus = new Map<string, (data: unknown) => void>();
   murmurPi({
     on: (event: string, handler: (event: unknown, ctx: unknown) => unknown) =>
-      handlers.set(event, () => handler({}, {}) as void | Promise<void>),
+      handlers.set(event, (payload = {}) => handler(payload, {}) as void | Promise<void>),
     events: {
       on: (channel: string, handler: (data: unknown) => void) => bus.set(channel, handler),
     },
@@ -152,6 +157,7 @@ async function rig(claimAnswers: Claim[], options: { setActivity?: boolean } = {
 
   return {
     attention,
+    messages,
     runtime,
     emit: (channel, data) => bus.get(channel)?.(data),
     handlers,
@@ -404,6 +410,43 @@ test("pending counts sum across sources and a malformed report changes nothing",
   await until(() => r.runtime.length >= 2);
 
   expect(r.runtime.map((write) => write.pending)).toEqual([1, 3]);
+
+  unmock();
+});
+
+test("a run whose last turn errored raises error with pi's message, even with delegates out", async () => {
+  const r = await rig([{ outcome: "claimed", agent_id: "a1" }]);
+  await until(() => r.claims.length === 1);
+
+  r.emit("murmur:pending", { source: "mu_delegate", count: 1 });
+  await until(() => r.runtime.length === 1);
+  await r.handlers.get("message_end")?.({
+    message: { role: "assistant", stopReason: "error", errorMessage: "529 overloaded" },
+  });
+  await r.handlers.get("agent_settled")?.();
+  await until(() => r.attention.length > 0);
+
+  expect(r.attention).toEqual(["error"]);
+  expect(r.messages).toEqual(["529 overloaded"]);
+
+  unmock();
+});
+
+test("a later successful turn clears the error, and an abort is not one", async () => {
+  const r = await rig([{ outcome: "claimed", agent_id: "a1" }]);
+  await until(() => r.claims.length === 1);
+
+  // pi's auto-retry: the failure, then the retry that worked.
+  await r.handlers.get("message_end")?.({ message: { role: "assistant", stopReason: "error" } });
+  await r.handlers.get("message_end")?.({ message: { role: "assistant", stopReason: "stop" } });
+  await r.handlers.get("agent_settled")?.();
+  await until(() => r.attention.length > 0);
+  expect(r.attention).toEqual(["done"]);
+
+  await r.handlers.get("message_end")?.({ message: { role: "assistant", stopReason: "aborted" } });
+  await r.handlers.get("agent_settled")?.();
+  await until(() => r.attention.length > 1);
+  expect(r.attention).toEqual(["done", "done"]);
 
   unmock();
 });

@@ -95,7 +95,7 @@ function pane(id: string, over: Partial<SnapshotPane> = {}): SnapshotPane {
 
 function document(panes: SnapshotPane[], over: Partial<Snapshot> = {}): Snapshot {
   return {
-    murmur_snapshot: 4,
+    murmur_snapshot: 5,
     host_id: "REMOTE",
     display_name: "dev",
     murmur_version: "0.2.0",
@@ -373,11 +373,15 @@ test("the store exposes no reader-side mutation of remote state", () => {
   // THIS node's own agent reports about itself. There is deliberately no
   // counterpart for a remote agent's runtime -- those arrive inside a peer's
   // snapshot, which `replacePeerSnapshot` takes whole.
+  //
+  // `claimAlerts` writes only its own dedup table: which events the
+  // on-attention hook has run for. It says nothing about any pane.
   expect(Object.keys(store()).sort()).toEqual([
     "acknowledgePane",
     "addPeer",
     "buildLocalSnapshot",
     "claimAgent",
+    "claimAlerts",
     "close",
     "localPanes",
     "peers",

@@ -87,7 +87,7 @@ test("a field-level snapshot failure still names its path first", () => {
   // The other half of the same join: a real path must be prefixed exactly as
   // before, or the fix for the empty case would cost every useful message.
   const bad = JSON.stringify({
-    murmur_snapshot: 4,
+    murmur_snapshot: 5,
     host_id: "H",
     display_name: "d",
     murmur_version: "0.1.0",
@@ -107,7 +107,7 @@ test("a field-level snapshot failure still names its path first", () => {
   });
 
   expect(() => parseSnapshot(bad)).toThrow(
-    "panes[0].attention[0].kind: expected one of done, blocked, crashed",
+    "panes[0].attention[0].kind: expected one of crashed, error, blocked, done",
   );
 });
 

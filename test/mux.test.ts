@@ -193,13 +193,14 @@ test("state counts go out in one tmux call, unset at zero", () => {
   tmuxCalls.length = 0;
 
   tmux.setStateCounts({
-    totals: { crashed: 0, blocked: 2, done: 0, running: 1, waiting: 0, idle: 3 },
+    totals: { crashed: 0, error: 1, blocked: 2, done: 0, running: 1, waiting: 0, idle: 3 },
     crew: 4,
   });
 
   expect(tmuxCalls).toEqual([
     [
       ...["set-option", "-gqu", "@murmur_count_crashed", ";"],
+      ...["set-option", "-gq", "@murmur_count_error", "1", ";"],
       ...["set-option", "-gq", "@murmur_count_blocked", "2", ";"],
       ...["set-option", "-gqu", "@murmur_count_done", ";"],
       ...["set-option", "-gq", "@murmur_count_working", "1", ";"],

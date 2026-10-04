@@ -6,6 +6,7 @@ import { RENDER_PRIORITY } from "../src/view.js";
 test("every render state has its single-codepoint Nerd Font glyph", () => {
   expect(DASH_GLYPH).toEqual({
     crashed: "\uf057",
+    error: "\uf071",
     blocked: "\uf075",
     done: "\uf058",
     running: "\uf04b",
@@ -25,6 +26,7 @@ test("every render state has its single-codepoint Nerd Font glyph", () => {
 test("dash state colors use the Catppuccin Mocha palette", () => {
   expect(DASH_COLOR).toEqual({
     crashed: "#f38ba8",
+    error: "#eba0ac",
     blocked: "#fab387",
     done: "#94e2d5",
     running: "#a6adc8",

@@ -112,6 +112,7 @@ test("RENDER_PRIORITY is the one ordering table and every render state is in it"
   // how a row moves under the keypress aimed at it.
   expect([...RENDER_PRIORITY]).toEqual([
     "crashed",
+    "error",
     "blocked",
     "done",
     "running",
@@ -119,7 +120,13 @@ test("RENDER_PRIORITY is the one ordering table and every render state is in it"
     "idle",
   ]);
   const states = new Set(RENDER_PRIORITY);
-  for (const attention of [["crashed"], ["blocked"], ["done"], []] as AttentionKind[][]) {
+  for (const attention of [
+    ["crashed"],
+    ["error"],
+    ["blocked"],
+    ["done"],
+    [],
+  ] as AttentionKind[][]) {
     for (const activity of ["running", "stopped", null] as PaneView["activity"][]) {
       expect(states.has(renderState(view({ activity, attention: at(attention) })))).toBe(true);
     }
@@ -132,11 +139,11 @@ test("NEEDS_HUMAN is the one table deciding which crew states reach a human", ()
   // "which orchestrated states does a human have to see" identically, or a
   // blocked crew agent is counted in the status bar and hidden from the list you
   // open to act on it.
-  expect([...NEEDS_HUMAN]).toEqual(["blocked", "crashed"]);
+  expect([...NEEDS_HUMAN]).toEqual(["blocked", "error", "crashed"]);
 
   // Every entry names an attention kind, not a render state. A `running` or
   // `idle` here would ask a human to answer a description rather than a request.
-  const kinds = new Set<AttentionKind>(["done", "blocked", "crashed"]);
+  const kinds = new Set<AttentionKind>(["done", "blocked", "error", "crashed"]);
   for (const kind of NEEDS_HUMAN) expect(kinds.has(kind)).toBe(true);
 
   // `done` is deliberately absent: a supervisor consumes a finished worker's
@@ -480,7 +487,7 @@ test("attention priority is an order-consistent subset of render priority", () =
   expect([...ATTENTION_PRIORITY]).toEqual(inRenderOrder);
   // Exhaustive over the type, which is what lets the rank lookup have no
   // meaningful fallback.
-  expect(new Set(ATTENTION_PRIORITY).size).toBe(3);
+  expect(new Set(ATTENTION_PRIORITY).size).toBe(4);
 });
 
 test("a stopped agent with delegates out is waiting, not idle; attention still wins", () => {

@@ -30,12 +30,37 @@ import { type AgentRuntime, type Driver, EFFORTS } from "../types.js";
 /**
  * Whether `agent_settled` raises attention. Null means say nothing.
  *
- * `"done"` is the whole range: an owner can report that it finished, and only
- * an external notifier can report `blocked`.
+ * An owner can report that it finished (`done`) or that its last turn failed
+ * (`error`); only an external notifier can report `blocked`.
+ *
+ * `error` overrides the crew and pending gates, because nobody else will say
+ * it: a supervisor sees a stopped worker, not a provider failure, and a parent
+ * whose own run failed is not about to be re-run by its delegates. A focused
+ * pane still says nothing -- the error is on the screen being looked at.
  */
-export function settledState(focused: boolean, muManaged: boolean, pending = 0): "done" | null {
+export function settledState(
+  focused: boolean,
+  muManaged: boolean,
+  pending = 0,
+  errored = false,
+): "done" | "error" | null {
+  if (focused) return null;
+  if (errored) return "error";
   if (muManaged || pending > 0) return null;
-  return focused ? null : "done";
+  return "done";
+}
+
+/**
+ * The failure a settled run ended on, or null when its last assistant message
+ * did not fail.
+ *
+ * `aborted` is not a failure: a human pressed escape and is looking at the pane.
+ * pi retries a failed request itself, and a retry that succeeds is a later
+ * assistant message, so only the LAST one decides.
+ */
+export function turnError(message: RuntimeMessage | undefined): string | null {
+  if (message?.role !== "assistant" || message.stopReason !== "error") return null;
+  return message.errorMessage?.trim() || "error";
 }
 
 /**
@@ -97,6 +122,7 @@ export type RuntimeContext = {
 export type RuntimeMessage = {
   role?: string | undefined;
   stopReason?: string | undefined;
+  errorMessage?: string | undefined;
   usage?:
     | {
         input: number;

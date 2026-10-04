@@ -5,6 +5,7 @@ import type { Store } from "./store.js";
 import {
   type Activity,
   type AgentUsage,
+  ATTENTION_PRIORITY,
   type AttentionKind,
   DEFAULT_DRIVER,
   type Driver,
@@ -19,7 +20,7 @@ export type Freshness = "fresh" | "stale";
  * What a surface paints. Presentation only, derived from the three independent
  * facts and never stored.
  */
-export type RenderState = "crashed" | "blocked" | "done" | "running" | "waiting" | "idle";
+export type RenderState = "crashed" | "error" | "blocked" | "done" | "running" | "waiting" | "idle";
 
 /**
  * THE single ordering table: which state matters most, for sorting and for
@@ -30,6 +31,7 @@ export type RenderState = "crashed" | "blocked" | "done" | "running" | "waiting"
  */
 export const RENDER_PRIORITY: readonly RenderState[] = [
   "crashed",
+  "error",
   "blocked",
   "done",
   "running",
@@ -51,7 +53,7 @@ export const RENDER_PRIORITY: readonly RenderState[] = [
  * one question is how a row that needed a human became one a human could not
  * see.
  */
-export const NEEDS_HUMAN: readonly AttentionKind[] = ["blocked", "crashed"];
+export const NEEDS_HUMAN: readonly AttentionKind[] = ["blocked", "error", "crashed"];
 
 export type StateCounts = Record<RenderState, number>;
 
@@ -348,7 +350,7 @@ export function renderState(view: {
   attention: readonly { kind: AttentionKind }[];
   pending?: number | null;
 }): RenderState {
-  for (const kind of ["crashed", "blocked", "done"] as const) {
+  for (const kind of ATTENTION_PRIORITY) {
     if (wants(view, kind)) return kind;
   }
   if (view.activity === "running") return "running";
@@ -508,7 +510,7 @@ const ORDER = new Map<RenderState, number>(RENDER_PRIORITY.map((state, index) =>
  * `running`, `waiting` and `idle` ask for nothing, so the direction there is only a
  * tiebreak and newest reads best: it is the pane you last touched.
  */
-const OLDEST_FIRST: readonly RenderState[] = ["crashed", "blocked"];
+const OLDEST_FIRST: readonly RenderState[] = ["crashed", "error", "blocked"];
 
 /**
  * How much a signal is worth, in MINUTES OF WAITING.
