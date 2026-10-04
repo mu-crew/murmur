@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test, vi } from "vitest";
-import { driverFromEnv, settledState } from "../src/extension/decide.js";
+import { driverFromEnv, settledState, turnError } from "../src/extension/decide.js";
 import { builtArtifact, runBuiltCli } from "./helpers/built.js";
 
 /**
@@ -1114,4 +1114,22 @@ test("a stale owner's write returning false is silence, not an error", async () 
   expect(closes).toBe(0);
 
   unmockExtension();
+});
+
+test("an errored settle is error for crew and with pending work, but not when focused", () => {
+  expect(settledState(false, false, 0, true)).toBe("error");
+  expect(settledState(false, true, 0, true)).toBe("error");
+  expect(settledState(false, false, 3, true)).toBe("error");
+  expect(settledState(true, false, 0, true)).toBeNull();
+});
+
+test("turnError reads only a failed assistant message", () => {
+  expect(
+    turnError({ role: "assistant", stopReason: "error", errorMessage: " 429 rate limit " }),
+  ).toBe("429 rate limit");
+  expect(turnError({ role: "assistant", stopReason: "error" })).toBe("error");
+  expect(turnError({ role: "assistant", stopReason: "aborted" })).toBeNull();
+  expect(turnError({ role: "assistant", stopReason: "stop" })).toBeNull();
+  expect(turnError({ role: "user", stopReason: "error" })).toBeNull();
+  expect(turnError(undefined)).toBeNull();
 });

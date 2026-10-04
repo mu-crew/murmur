@@ -1,7 +1,14 @@
 import { agentLabel } from "./agents.js";
 import type { DashPrefs } from "./dash-prefs.js";
 import { isVisible } from "./paint.js";
-import { type PaneView, RENDER_PRIORITY, type RenderState, renderState, viewSort } from "./view.js";
+import {
+  NEEDS_HUMAN,
+  type PaneView,
+  RENDER_PRIORITY,
+  type RenderState,
+  renderState,
+  viewSort,
+} from "./view.js";
 
 /**
  * Which rows the dash paints, and in what order.
@@ -22,7 +29,7 @@ type StateCounts = {
 
 /** Count a state using the same crew visibility rule as the dash rows. */
 export function dashStateCount(view: StateCounts, state: RenderState, crew: boolean): number {
-  const showCrew = crew || state === "crashed" || state === "blocked";
+  const showCrew = crew || (NEEDS_HUMAN as readonly RenderState[]).includes(state);
   return view.counts[state] + (showCrew ? view.orchestrated_counts[state] : 0);
 }
 

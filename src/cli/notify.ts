@@ -106,6 +106,7 @@ export function cursorStopKind(payload: NotifyPayload): RequestableKind | null {
   if (event !== "stop" && event !== "Stop") return null;
   const status = typeof payload.status === "string" ? payload.status.trim() : "";
   if (status === "completed") return "done";
+  if (status === "error") return "error";
   return "blocked";
 }
 

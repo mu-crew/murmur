@@ -12,6 +12,7 @@ import {
   type RuntimeMessage,
   runtimeFromContext,
   settledState,
+  turnError,
   usageFromMessage,
 } from "./decide.js";
 import type { StoreModule } from "./store-api.js";
@@ -196,6 +197,8 @@ export default function murmurPi(pi: ExtensionAPI): void {
    * both of which follow persistence of the whole turn, tool results included.
    */
   let pendingTurn: RuntimeMessage | null = null;
+  /** The last assistant message's failure, if it failed. Read at settle. */
+  let lastError: string | null = null;
   /** Outstanding background work per source, from `murmur:pending`. */
   const pendingWork = new Map<string, number>();
   let pendingTotal = 0;
@@ -395,6 +398,7 @@ export default function murmurPi(pi: ExtensionAPI): void {
   // reader never sees this turn's cost beside last turn's context.
   pi.on("message_end", (event) => {
     const message = event?.message;
+    if (message?.role === "assistant") lastError = turnError(message);
     if (isReportableTurn(message)) pendingTurn = message ?? null;
   });
 
@@ -440,9 +444,11 @@ export default function murmurPi(pi: ExtensionAPI): void {
     // Read at the event: a delegate answering while the queue lags must not
     // turn this settle -- the one that ended to WAIT for it -- into a `done`.
     const pending = pendingTotal;
+    const error = lastError;
+    lastError = null;
     void enqueue(async () => {
       const location = here();
-      const settled = settledState(focused(location.pane), muManaged, pending);
+      const settled = settledState(focused(location.pane), muManaged, pending, error !== null);
       if (settled === null) return;
       try {
         const store = await getStore();
@@ -452,7 +458,7 @@ export default function murmurPi(pi: ExtensionAPI): void {
         store.requestAttention({
           kind: settled,
           location,
-          message: "",
+          message: settled === "error" ? (error ?? "") : "",
           source: "pi",
         });
         publishAgentStates(location.window, tmux, store, location.server);
@@ -500,6 +506,7 @@ export default function murmurPi(pi: ExtensionAPI): void {
       }
       agentId = null;
       pendingTurn = null;
+      lastError = null;
       // The producers' watchers die with the runtime too; a re-claim starts at
       // nothing outstanding.
       pendingWork.clear();

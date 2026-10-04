@@ -39,7 +39,7 @@ import { MURMUR_VERSION } from "./version.js";
  * typed, deletes the file, and recreates the schema. No ALTER TABLE anywhere, so
  * there is no additive path to forget to use.
  */
-const SCHEMA_USER_VERSION = 7;
+const SCHEMA_USER_VERSION = 8;
 
 /**
  * The effort vocabulary as a SQL value list, generated from the one tuple.
@@ -130,7 +130,7 @@ const SCHEMA = `
     server_kind  TEXT    NOT NULL CHECK (server_kind IN ('default', 'label', 'path')),
     server_value TEXT    NOT NULL,
     pane         TEXT    NOT NULL,
-    kind         TEXT    NOT NULL CHECK (kind IN ('done', 'blocked', 'crashed')),
+    kind         TEXT    NOT NULL CHECK (kind IN ('done', 'blocked', 'error', 'crashed')),
     message      TEXT    NOT NULL,
     source       TEXT    NOT NULL,
     session      TEXT    NOT NULL,
@@ -139,6 +139,15 @@ const SCHEMA = `
     window_name  TEXT,
     requested_at INTEGER NOT NULL,
     PRIMARY KEY (server_kind, server_value, pane, kind)
+  ) STRICT;
+
+  -- Which attention events the on-attention hook has already been run for, so
+  -- concurrent collects (status bar, dash, side panel) fire each one once. The
+  -- key names the event, not the row: host, server, pane, kind and
+  -- requested_at, so a re-raised request is a new event.
+  CREATE TABLE alerted (
+    key          TEXT    NOT NULL PRIMARY KEY,
+    alerted_at   INTEGER NOT NULL
   ) STRICT;
 
   CREATE TABLE peers (
@@ -202,6 +211,23 @@ export interface Store {
   localPanes(): LocalPane[];
   reconcileLocal(world: LocalWorld): ReconcileSummary;
   buildLocalSnapshot(identity: NodeIdentity, worlds: LocalWorld | readonly LocalWorld[]): Snapshot;
+
+  // --- alert dedup --------------------------------------------------------
+  /**
+   * Claim attention events for the on-attention hook, and answer which keys
+   * this caller won. Atomic per key, so two processes collecting at once never
+   * both fire one event.
+   *
+   * Also forgets claims older than `retainMs` whose event is no longer in
+   * `current`. The age gate keeps a reader that read before a newer event
+   * landed from deleting another process's fresh claim and re-firing it.
+   */
+  claimAlerts(
+    keys: readonly string[],
+    current: readonly string[],
+    now: number,
+    retainMs: number,
+  ): string[];
 
   // --- peer cache ---------------------------------------------------------
   peers(): PeerRecord[];
@@ -496,6 +522,7 @@ function toAgent(row: AgentDbRow): SnapshotAgent {
  */
 const RANK: Record<AttentionKind, number> = {
   crashed: ATTENTION_PRIORITY.indexOf("crashed"),
+  error: ATTENTION_PRIORITY.indexOf("error"),
   blocked: ATTENTION_PRIORITY.indexOf("blocked"),
   done: ATTENTION_PRIORITY.indexOf("done"),
 };
@@ -1063,6 +1090,24 @@ export function openStore(): Store {
         // produce an empty one.
         panes: readLocalPanes(),
       };
+    },
+
+    claimAlerts(keys, current, now, retainMs) {
+      const insert = database.prepare(
+        "INSERT OR IGNORE INTO alerted (key, alerted_at) VALUES (?, ?)",
+      );
+      return database
+        .transaction(() => {
+          const won = keys.filter((key) => insert.run(key, now).changes === 1);
+          const live = new Set(current);
+          const old = database
+            .prepare("SELECT key FROM alerted WHERE alerted_at < ?")
+            .all(now - retainMs) as { key: string }[];
+          const forget = database.prepare("DELETE FROM alerted WHERE key = ?");
+          for (const { key } of old) if (!live.has(key)) forget.run(key);
+          return won;
+        })
+        .immediate();
     },
 
     peers() {

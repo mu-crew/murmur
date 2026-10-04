@@ -188,7 +188,7 @@ test("enter focuses an attached local pane instead of opening another remote ses
     ok: true,
     at: Date.now(),
     snapshot: {
-      murmur_snapshot: 4,
+      murmur_snapshot: 5,
       host_id: "REMOTE",
       display_name: "dev",
       murmur_version: "0.2.0",
@@ -269,7 +269,7 @@ test("a cold remote jump warns and still proceeds when confirmed", async () => {
     ok: true,
     at: Date.now(),
     snapshot: {
-      murmur_snapshot: 4,
+      murmur_snapshot: 5,
       host_id: "REMOTE",
       display_name: "dev",
       murmur_version: "0.2.0",
@@ -316,7 +316,7 @@ test("a cold remote jump can be cancelled after the warning", async () => {
     ok: true,
     at: Date.now(),
     snapshot: {
-      murmur_snapshot: 4,
+      murmur_snapshot: 5,
       host_id: "REMOTE",
       display_name: "dev",
       murmur_version: "0.2.0",
@@ -427,7 +427,7 @@ test("a selection is resolved on host AND pane, not on the pane alone", async ()
     ok: true,
     at: Date.now(),
     snapshot: {
-      murmur_snapshot: 4,
+      murmur_snapshot: 5,
       host_id: "REMOTE",
       display_name: "container-id",
       murmur_version: "0.2.0",

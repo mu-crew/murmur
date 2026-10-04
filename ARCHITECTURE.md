@@ -19,7 +19,7 @@ spends most of its effort refusing to solve harder problems nearby.
 From 1.0.0, the following interfaces are stable. A breaking change to one of
 them requires a major version:
 
-- tmux pane options `@murmur_pane_state` (`crashed`, `blocked`, `done`,
+- tmux pane options `@murmur_pane_state` (`crashed`, `error`, `blocked`, `done`,
   `working`, `waiting`, or `idle`), `@murmur_pane_since` (milliseconds since the epoch),
   and `@murmur_pane_label`
 - tmux window, session, and server options `@murmur_window_state`,
@@ -31,6 +31,9 @@ them requires a major version:
   `panes[].updated_at`
 - environment variables read from agent panes: `MU_MANAGED_AGENT`,
   `MU_AGENT_NAME`, `MU_WORKSTREAM`, and `MU_ROLE`
+- the `on-attention` hook: its path in the config dir and the `MURMUR_KIND`,
+  `MURMUR_AGENT`, `MURMUR_HOST`, `MURMUR_LOCAL`, `MURMUR_PANE` and
+  `MURMUR_MESSAGE` variables it runs with
 
 Everything else, including the store schema and other JSON fields, is internal.
 
@@ -76,13 +79,13 @@ Three facts, independent, each with exactly one writer:
 | Fact | Meaning | Stored as | Written by |
 | --- | --- | --- | --- |
 | **activity** | is a process working in this pane | `agents.activity` = `running` \| `stopped` | the pane's owning process only |
-| **attention** | does someone need to look at this pane address | rows in `attention`, kind `done` \| `blocked` \| `crashed` | owner (`done`), external notifier (`done`/`blocked`, per event type), local reconciliation (`crashed`) |
+| **attention** | does someone need to look at this pane address | rows in `attention`, kind `done` \| `blocked` \| `error` \| `crashed` | owner (`done`/`error`), external notifier (`done`/`blocked`/`error`, per event type), local reconciliation (`crashed`) |
 | **freshness** | how recently we reached the node that reported | `peers.fetched_at` | the collector |
 
 They are never folded into one enum, and no stored value spans two of them.
 There is no `cleared`: absence of an attention row *is* "nothing to see", and
 absence of an agent row *is* "no agent here". The words a surface paints
-(`crashed`, `blocked`, `done`, `running`, `waiting`, `idle`) are derived at read
+(`crashed`, `error`, `blocked`, `done`, `running`, `waiting`, `idle`) are derived at read
 time by `renderState` and stored nowhere. `waiting` is a stopped agent whose
 runtime field `pending` (outstanding background work, such as mu delegates) is
 above zero.
@@ -139,8 +142,8 @@ Three consequences worth stating, because each is easy to violate by accident:
   construction.** Its whole request type is `{kind, location, message, source}`
   — there is no `agent_id`, no pid, no activity and no metadata field, so it
   cannot say anything about a process being alive even by accident. Its range is
-  `done` and `blocked`, the two kinds a human can answer, chosen from the event
-  type the harness itself reports; `crashed` and both activities remain
+  `done`, `blocked` and `error`, the kinds a human can answer, chosen from the
+  event type the harness itself reports; `crashed` and both activities remain
   reconciliation's and the owner's.
 
   It was hard-coded to `blocked`, and that was wrong on every call for the
@@ -287,8 +290,10 @@ command rather than an interface to implement.
 
 ## The data model
 
-Three tables in `state.db`, all `STRICT`, `user_version = 6`. `agents` and
-`attention` are local truth; `peers` is a cache of other nodes.
+Four tables in `state.db`, all `STRICT`, `user_version = 8`. `agents` and
+`attention` are local truth; `peers` is a cache of other nodes; `alerted`
+remembers which attention events the `on-attention` hook has run for (see
+[Alerting](#alerting)).
 
 ```sql
 CREATE TABLE agents (
@@ -313,7 +318,7 @@ CREATE TABLE attention (
   server_kind  TEXT    NOT NULL CHECK (server_kind IN ('default', 'label', 'path')),
   server_value TEXT    NOT NULL,
   pane         TEXT    NOT NULL,
-  kind         TEXT    NOT NULL CHECK (kind IN ('done', 'blocked', 'crashed')),
+  kind         TEXT    NOT NULL CHECK (kind IN ('done', 'blocked', 'error', 'crashed')),
   message      TEXT    NOT NULL,
   source       TEXT    NOT NULL,
   session      TEXT    NOT NULL,               -- its own location: see below
@@ -371,8 +376,10 @@ three surfaces carried machinery for it:
 | `activity = running` | pi extension | `agent_start` |
 | `activity = stopped` | pi extension | `agent_end` |
 | attention `done` | pi extension | `agent_settled`, pane unfocused, `driver = human`, no pending work |
+| attention `error` | pi extension | `agent_settled`, pane unfocused, last assistant message `stopReason: "error"`; any driver, any pending count |
 | runtime `pending` | pi extension | a `murmur:pending` report on pi's event bus |
 | attention `done` | `murmur notify` | a harness event meaning "turn over, waiting" (`agent-turn-complete`, `session.idle`) |
+| attention `error` | `murmur notify` | a Cursor stop with `status: error` |
 | attention `blocked` | `murmur notify` | any other outside-in call, including an event murmur does not recognise |
 | attention `crashed` | `reconcileLocal` | pane alive, owner pid gone, activity was `running` |
 | (row removed) | `releaseAgent` | `session_shutdown` |
@@ -391,7 +398,7 @@ agent again, and the producer reports zero before it delivers the last one, so
 the settle after that run raises the real `done`. The channel name is a
 string on both sides, so neither package imports the other.
 
-**Versioning is one strategy, not two.** On open, if `user_version` is not 7,
+**Versioning is one strategy, not two.** On open, if `user_version` is not 8,
 murmur salvages `SELECT name, target FROM peers` — the two fields a human typed
 — deletes the database and its `-wal`/`-shm` sidecars, recreates the schema, and
 re-inserts those peers with every observed column `NULL`. There is no
@@ -590,6 +597,32 @@ for thirty seconds.
 peers. That is the only housekeeping left, and it lives here rather than on
 `export` because `export` only runs when a peer asks, so a single-machine node
 would otherwise reconcile never.
+
+### Alerting
+
+`collect` ends by running `~/.config/murmur/on-attention`, if present and
+executable, once per attention event it has not alerted before. It is the one
+place that sees every node: local rows, the peer snapshots it just applied, and
+the `crashed` rows that only the reconcile just before it can write. Firing
+from each writer instead would be instant, but local only, and would leave
+`crashed` with no writer to fire it.
+
+An event is `(host_id, server, pane, kind, requested_at)`. `requested_at` is
+kept on a repeat and is new after an acknowledgement, so a request raised
+again after you cleared it is a new event, and a re-asserted one is not.
+`claimAlerts` is `INSERT OR IGNORE` in one immediate transaction, so the status
+bar, the dash and the side panel collecting at once fire each event once.
+Claims are forgotten an hour after their event leaves every view.
+
+Events older than `ALERT_WINDOW_MS` (15 minutes, on the owning node's clock)
+never fire. That covers the backlog on first install, after a store rebuild,
+and from a peer that comes back after a long absence: none of it is news. With
+no hook installed, nothing is claimed, so installing one later still fires
+for anything recent.
+
+The hook is detached, with the event in the environment rather than on stdin:
+`murmur status` exits as soon as it prints, and a pipe write still in flight
+would be lost. murmur ignores its output and exit code.
 
 ### Reconciliation
 

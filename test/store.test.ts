@@ -600,7 +600,7 @@ test("buildLocalSnapshot reconciles, drops empty panes and never carries a pid",
   );
 
   expect(snapshot).toMatchObject({
-    murmur_snapshot: 4,
+    murmur_snapshot: 5,
     host_id: "H",
     display_name: "here",
     generated_at: 42,
@@ -616,7 +616,7 @@ test("a successful fetch replaces the whole document; a pane absent after is gon
   const s = store();
   s.addPeer("dev", "dev.example");
   const base = {
-    murmur_snapshot: 4 as const,
+    murmur_snapshot: 5 as const,
     host_id: "REMOTE",
     display_name: "dev",
     murmur_version: "9.9.9",
@@ -668,7 +668,7 @@ test("a failed fetch keeps the previous snapshot and leaves fetched_at alone", (
     ok: true,
     at: 1_000,
     snapshot: {
-      murmur_snapshot: 4,
+      murmur_snapshot: 5,
       host_id: "REMOTE",
       display_name: "dev",
       murmur_version: "1.0.0",
@@ -721,7 +721,7 @@ test("addPeer corrects a target without discarding the cache", () => {
     ok: true,
     at: 1_000,
     snapshot: {
-      murmur_snapshot: 4,
+      murmur_snapshot: 5,
       host_id: "REMOTE",
       display_name: "dev",
       murmur_version: "1.0.0",
@@ -806,7 +806,7 @@ test("an existing database upgrades without losing peers", () => {
     ok: true,
     at: 1_000,
     snapshot: {
-      murmur_snapshot: 4,
+      murmur_snapshot: 5,
       host_id: "REMOTE",
       display_name: "dev",
       murmur_version: "1.0.0",

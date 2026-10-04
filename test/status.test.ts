@@ -91,7 +91,7 @@ function localAgent(
 
 function remoteSnapshot(panes: SnapshotPane[], generatedAt = 1_000): Snapshot {
   return {
-    murmur_snapshot: 4,
+    murmur_snapshot: 5,
     host_id: "REMOTE",
     display_name: "container-id-nobody-can-type",
     murmur_version: "0.2.0",
@@ -149,11 +149,13 @@ test("counts group by render state, and attention beats activity", () => {
   localAgent("%3", { attention: ["crashed"] });
   localAgent("%4", { attention: ["done"] });
   localAgent("%5");
+  localAgent("%6", { attention: ["error", "done"] });
 
   const result = status(store, IDENTITY);
 
   expect(result.counts).toEqual({
     crashed: 1,
+    error: 1,
     blocked: 1,
     done: 1,
     running: 1,

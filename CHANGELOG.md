@@ -3,6 +3,27 @@
 Notable changes per release. Written for someone deciding whether to upgrade,
 so it says what changed for a user rather than listing every commit.
 
+## Unreleased
+
+**Notifications.** Put an executable at `~/.config/murmur/on-attention` and
+murmur runs it once for each new `done`, `blocked`, `error` or `crashed`, on
+any node, with the event in `MURMUR_*` environment variables. Wire it to
+`notify-send`, `osascript`, ntfy or anything else. See
+[docs/setup.md](docs/setup.md#notifications).
+
+**New attention kind and tmux state `error`.** A pi run whose last turn failed
+(provider error, retries exhausted) now raises `error` with pi's error message,
+instead of a plain `done`. It sorts between `crashed` and `blocked`, shows for
+crew agents as `blocked` does, and fires even while delegates are pending. A
+user abort is still not an error. A Cursor stop with `status: error` is `error`
+too, no longer `blocked`. `@murmur_pane_state`, `@murmur_window_state`,
+`@murmur_session_state` and `@murmur_count_error` can now say `error`; formats
+that match states by name show nothing for it until updated. The mu-crew
+dotfiles are.
+
+**Snapshot version 5.** Every node must upgrade together; a mixed fleet refuses
+each other's snapshots. The local store rebuilds on first open.
+
 ## 1.1.0
 
 **`done` waits for mu delegates.** A pi agent that fans out `mu_delegate`

@@ -11,7 +11,7 @@ import { DOCTOR_DEADLINE_MS, surveyPeer } from "../src/doctor.js";
 /** A document, as a peer's `murmur export` prints it. */
 function wire(over: Record<string, unknown> = {}): string {
   return JSON.stringify({
-    murmur_snapshot: 4,
+    murmur_snapshot: 5,
     host_id: "REMOTE-HOST-ID",
     display_name: "bubba",
     murmur_version: "0.2.1",

@@ -69,7 +69,7 @@ function pane(id: string): SnapshotPane {
 
 function snapshot(panes: SnapshotPane[], hostId = "REMOTE", over: Partial<Snapshot> = {}): string {
   return JSON.stringify({
-    murmur_snapshot: 4,
+    murmur_snapshot: 5,
     host_id: hostId,
     display_name: "Remote",
     murmur_version: "0.2.0",

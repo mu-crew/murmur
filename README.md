@@ -24,9 +24,13 @@ agent over ssh without leaving it.
 
 All four read the same list. Local jump is a window switch; remote jump opens
 over ssh (or your `--jump-command`). Orchestrated (`crew`) agents stay hidden
-from state rollups unless they are `blocked` or `crashed`, because their
+from state rollups unless they are `blocked`, `error` or `crashed`, because their
 supervisor consumes anything else. `murmur status` also emits their total as a
 separate `crew` record, including those urgent agents.
+
+murmur can also notify you: an executable `~/.config/murmur/on-attention` runs
+once per new `done`, `blocked`, `error` or `crashed`, on any node. See
+[notifications](docs/setup.md#notifications).
 
 `murmur dash` wants a [Nerd Font](https://www.nerdfonts.com/) and a Catppuccin
 Mocha terminal. Press `?` for its shortcut panel. `/` filters cards by agent,
@@ -121,7 +125,7 @@ factor / `BatchMode`, `MaxSessions 1`, Eternal Terminal): [SSH.md](SSH.md).
 
 | Doc | For |
 | --- | --- |
-| [docs/setup.md](docs/setup.md) | Hooks, side panel, harness notify, peers, doctor, jump |
+| [docs/setup.md](docs/setup.md) | Hooks, side panel, harness notify, notifications, peers, doctor, jump |
 | [SSH.md](SSH.md) | Auth, session caps, control masters |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Model, design choices, gaps |
 | [docs/VOCABULARY.md](docs/VOCABULARY.md) | Protocol and identity terms |

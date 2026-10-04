@@ -5,6 +5,7 @@ import type { RenderState } from "./view.js";
 // stable across Nerd Font versions.
 export const DASH_GLYPH: Record<RenderState, string> = {
   crashed: "\uf057", // nf-fa-times_circle
+  error: "\uf071", // nf-fa-exclamation_triangle
   blocked: "\uf075", // nf-fa-comment
   done: "\uf058", // nf-fa-check_circle
   running: "\uf04b", // nf-fa-play
@@ -14,6 +15,7 @@ export const DASH_GLYPH: Record<RenderState, string> = {
 
 export const DASH_COLOR: Record<RenderState, string> = {
   crashed: "#f38ba8",
+  error: "#eba0ac",
   blocked: "#fab387",
   done: "#94e2d5",
   running: "#a6adc8",

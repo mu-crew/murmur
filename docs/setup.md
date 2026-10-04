@@ -119,7 +119,7 @@ an event murmur does not know.
 ```
 
 `~/.cursor/hooks.json` (user) or `.cursor/hooks.json` (project). `status:
-completed` → `done`; `aborted` or `error` → `blocked`. The agent must run inside
+completed` → `done`; `error` → `error`; `aborted` → `blocked`. The agent must run inside
 tmux. Interactive `agent` sessions are the target; non-interactive `agent -p`
 has been observed to omit `stop`.
 
@@ -141,6 +141,45 @@ badges. `murmur clear` (or focus, with the hooks above) takes it back.
 `notify` outside tmux records nothing and exits 0, so it cannot break the
 caller's exit code. A pane reached only via notify is still a full jumpable
 row.
+
+## Notifications
+
+murmur runs `~/.config/murmur/on-attention` (or `$MURMUR_CONFIG_DIR/on-attention`)
+once for each new `done`, `blocked`, `error` or `crashed`, on any node. Make it
+executable; nothing else is configured. It runs detached, with its output
+discarded, and these variables set:
+
+| Variable | Value |
+| --- | --- |
+| `MURMUR_KIND` | `done`, `blocked`, `error` or `crashed` |
+| `MURMUR_AGENT` | the agent name, as the picker shows it |
+| `MURMUR_HOST` | the peer name, or this node's display name |
+| `MURMUR_LOCAL` | `1` for this node, `0` for a peer |
+| `MURMUR_PANE` | the pane id on its node |
+| `MURMUR_MESSAGE` | the request text; for `error`, pi's error message |
+| `MURMUR_EVENT` | all of the above and more, as JSON |
+
+```sh
+#!/bin/sh
+# ~/.config/murmur/on-attention
+case "$MURMUR_KIND" in
+  done) urgency=low ;;
+  *) urgency=critical ;;
+esac
+notify-send -u "$urgency" "murmur: $MURMUR_AGENT $MURMUR_KIND" \
+  "$MURMUR_HOST${MURMUR_MESSAGE:+ — $MURMUR_MESSAGE}"
+```
+
+On macOS, use `osascript -e "display notification \"$MURMUR_MESSAGE\" with title \"$MURMUR_AGENT $MURMUR_KIND\""`.
+For a phone, `curl -d "$MURMUR_AGENT $MURMUR_KIND" ntfy.sh/<topic>`.
+
+The hook fires from `murmur collect`, which `murmur status` runs on each
+status-bar tick, as do the dash and side panel. So an event arrives within one
+tick, and only on a node that runs one of those. Run the hook on the machine
+you sit at; peers need no hook. Each event fires once even when several
+surfaces collect at the same time. Events older than 15 minutes do not fire, so
+installing the hook does not replay the backlog. A crew agent's `done` fires
+too; filter on `MURMUR_EVENT`'s `driver` if you do not want it.
 
 ## Peers and doctor
 

@@ -11,7 +11,7 @@ import type {
   SnapshotPane,
   TmuxServer,
 } from "./types.js";
-import { EFFORTS, SNAPSHOT_VERSION } from "./types.js";
+import { ATTENTION_PRIORITY, EFFORTS, SNAPSHOT_VERSION } from "./types.js";
 
 /**
  * A peer answered, and what it said is not a snapshot.
@@ -117,7 +117,7 @@ function member<T extends string>(value: unknown, path: string, allowed: readonl
 
 const ACTIVITIES: readonly Activity[] = ["running", "stopped"];
 const DRIVERS: readonly Driver[] = ["human", "orchestrated"];
-const KINDS: readonly AttentionKind[] = ["done", "blocked", "crashed"];
+const KINDS: readonly AttentionKind[] = ATTENTION_PRIORITY;
 
 const TOP_KEYS = [
   "murmur_snapshot",
