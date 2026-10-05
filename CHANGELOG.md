@@ -3,7 +3,11 @@
 Notable changes per release. Written for someone deciding whether to upgrade,
 so it says what changed for a user rather than listing every commit.
 
-## Unreleased
+## 1.2.1
+
+Upgrade with `npm i -g @mu-crew/murmur@1.2.1`, then `/reload` in running pi
+sessions so the extension can re-claim a deleted row. No snapshot change;
+nodes can upgrade one at a time.
 
 **Host colors.** Each host gets a stable accent color, hashed from its short
 name exactly as the mu-crew dotfiles' `@mu_crew_host_color` does. The dash (cards
