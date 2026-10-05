@@ -157,6 +157,9 @@ discarded, and these variables set:
 | `MURMUR_LOCAL` | `1` for this node, `0` for a peer |
 | `MURMUR_PANE` | the pane id on its node |
 | `MURMUR_MESSAGE` | the request text; for `error`, pi's error message |
+| `MURMUR_HOST_COLOR` | the host's accent hex, as the dash colors it |
+| `MURMUR_GLYPH` | the kind's Nerd Font glyph, as every murmur surface shows it |
+| `MURMUR_KIND_COLOR` | the kind's hex color, as every murmur surface shows it |
 | `MURMUR_EVENT` | all of the above and more, as JSON |
 
 ```sh
@@ -169,6 +172,12 @@ esac
 notify-send -u "$urgency" "murmur: $MURMUR_AGENT $MURMUR_KIND" \
   "$MURMUR_HOST${MURMUR_MESSAGE:+ — $MURMUR_MESSAGE}"
 ```
+
+A host's color is a crc32 of its short name over eight Catppuccin accents, the
+same hash the mu-crew dotfiles' tmux hostname pill uses, so one host is one
+color in the status bar, the dash, the side panel, the picker and your
+notifications. For a peer the name
+is the one given to `peer add`.
 
 On macOS, use `osascript -e "display notification \"$MURMUR_MESSAGE\" with title \"$MURMUR_AGENT $MURMUR_KIND\""`.
 For a phone, `curl -d "$MURMUR_AGENT $MURMUR_KIND" ntfy.sh/<topic>`.

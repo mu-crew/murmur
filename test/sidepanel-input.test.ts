@@ -229,6 +229,7 @@ function row(key: string): SidepanelRow {
     name: key,
     facts: "running",
     host: "here",
+    hostColor: "#a6e3a1",
     age: "",
     stream: null,
   };

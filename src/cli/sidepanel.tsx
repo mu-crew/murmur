@@ -36,8 +36,9 @@ import {
 } from "../sidepanel-controller.js";
 import {
   moveSidepanelSelection,
+  type SidepanelRow,
   sidepanelCompactLayout,
-  sidepanelCompactLine,
+  sidepanelCompactParts,
   sidepanelContentWidth,
   sidepanelPaneKey,
   sidepanelResizeTarget,
@@ -457,9 +458,13 @@ export function App({
             };
             return prefs.compact ? (
               <Box key={row.key} ref={rowRef}>
-                <Text bold={selectedRow} color={color} wrap="truncate-end">
-                  {sidepanelCompactLine(row, columns, selectedRow, compactLayout)}
-                </Text>
+                <CompactLine
+                  row={row}
+                  columns={columns}
+                  selected={selectedRow}
+                  layout={compactLayout}
+                  color={color}
+                />
               </Box>
             ) : (
               <Box key={row.key} ref={rowRef} flexDirection="column">
@@ -470,7 +475,7 @@ export function App({
                   color={selectedRow ? DASH_CHROME_COLOR.accent : undefined}
                   wrap="truncate-end"
                 >
-                  {row.facts}
+                  <Facts row={row} selected={selectedRow} />
                 </Text>
                 <Text dimColor wrap="truncate-end">
                   {row.stream ?? " "}
@@ -490,6 +495,43 @@ export function App({
         {FOOTER}
       </Text>
     </Box>
+  );
+}
+
+function CompactLine({
+  row,
+  columns,
+  selected,
+  layout,
+  color,
+}: {
+  row: SidepanelRow;
+  columns: number;
+  selected: boolean;
+  layout: ReturnType<typeof sidepanelCompactLayout>;
+  color: string;
+}) {
+  const { before, host, after } = sidepanelCompactParts(row, columns, selected, layout);
+  return (
+    <Text bold={selected} color={color} wrap="truncate-end">
+      {before}
+      {host && !selected ? <Text color={row.hostColor}>{host}</Text> : host}
+      {after}
+    </Text>
+  );
+}
+
+/** The facts line with the host in its accent; selection keeps one color. */
+function Facts({ row, selected }: { row: SidepanelRow; selected: boolean }) {
+  if (selected) return <>{row.facts}</>;
+  const marker = ` · ${row.host}`;
+  const at = row.facts.indexOf(marker);
+  if (at < 0) return <>{row.facts}</>;
+  return (
+    <>
+      {row.facts.slice(0, at)} · <Text color={row.hostColor}>{row.host}</Text>
+      {row.facts.slice(at + marker.length)}
+    </>
   );
 }
 

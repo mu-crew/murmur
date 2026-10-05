@@ -3,6 +3,23 @@
 Notable changes per release. Written for someone deciding whether to upgrade,
 so it says what changed for a user rather than listing every commit.
 
+## Unreleased
+
+**Host colors.** Each host gets a stable accent color, hashed from its short
+name exactly as the mu-crew dotfiles' tmux hostname pill does. The dash (cards
+and compact rows), the side panel and the picker paint the host in it, the
+local one included; it was green or dim for here and blue or cyan for every
+peer. The notification hook gets it as
+`MURMUR_HOST_COLOR`, along with `MURMUR_GLYPH` and `MURMUR_KIND_COLOR`, the
+kind's glyph and color as murmur paints them.
+
+**A live agent survives a misread tmux.** A `murmur status` run with a
+foreign `TMUX_TMPDIR` (a test rig's) read the default tmux server as empty and
+deleted every agent on the machine. Reconciliation now keeps a missing pane's
+row while its owner process is alive, and a pi whose row was deleted anyway
+claims it again on its next event instead of staying invisible until
+`/reload`.
+
 ## 1.2.0
 
 **Notifications.** Put an executable at `~/.config/murmur/on-attention` and

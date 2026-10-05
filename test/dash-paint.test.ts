@@ -1,5 +1,12 @@
 import { expect, test } from "vitest";
-import { DASH_CHROME, DASH_CHROME_COLOR, DASH_COLOR, DASH_GLYPH } from "../src/dash-paint.js";
+import {
+  DASH_CHROME,
+  DASH_CHROME_COLOR,
+  DASH_COLOR,
+  DASH_GLYPH,
+  HOST_COLORS,
+  hostColor,
+} from "../src/dash-paint.js";
 import { GLYPH } from "../src/paint.js";
 import { RENDER_PRIORITY } from "../src/view.js";
 
@@ -44,8 +51,6 @@ test("dash chrome uses Nerd Font glyphs and Catppuccin accents", () => {
     stale: "\uf017",
   });
   expect(DASH_CHROME_COLOR).toEqual({
-    here: "#a6e3a1",
-    remote: "#74c7ec",
     stale: "#f9e2af",
     furniture: "#6c7086",
     selectedFallback: "#b4befe",
@@ -53,4 +58,14 @@ test("dash chrome uses Nerd Font glyphs and Catppuccin accents", () => {
     text: "#cdd6f4",
     info: "#89b4fa",
   });
+});
+
+test("a host's color is the tmux pill's: crc32 of the short name over the palette", () => {
+  // Pinned against Python's zlib.crc32, which the mu-crew dotfiles' hostname
+  // pill uses. A drift here splits one host into two colors.
+  expect(hostColor("linuxpc")).toBe(HOST_COLORS[621039107 % 8]);
+  expect(hostColor("linuxpc.lan")).toBe(hostColor("linuxpc"));
+  expect(hostColor("")).toBe(HOST_COLORS[0]);
+  const colors = new Set(["devbox", "macbook", "linuxpc", "bub", "odin"].map(hostColor));
+  expect(colors.size).toBeGreaterThan(2);
 });

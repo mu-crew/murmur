@@ -464,6 +464,20 @@ export function compactRow(
   layout: CompactRowLayout,
   marker: string,
 ): string {
+  const { before, host, after } = compactRowParts(row, layout, marker);
+  return before + host + after;
+}
+
+/**
+ * The same row, split around the host cell so a surface can color the host
+ * alone. `host` is empty when the layout dropped the column or the width cut
+ * the row before it.
+ */
+export function compactRowParts(
+  row: CompactRowFields,
+  layout: CompactRowLayout,
+  marker: string,
+): { before: string; host: string; after: string } {
   const cells = [
     compactCell(row.state, layout.widths.state),
     compactCell(row.agent, layout.widths.agent),
@@ -475,7 +489,19 @@ export function compactRow(
     const summary = alignedSummary(row.summary, layout.segments);
     line += `${COMPACT_SEPARATOR}${compactCell(summary, Math.max(0, remaining))}`;
   }
-  return compactCell(line, layout.width);
+  const full = compactCell(line, layout.width);
+  const hostIndex = layout.columns.indexOf("host");
+  if (hostIndex < 0) return { before: full, host: "", after: "" };
+  const prefix = `${marker}${cells.slice(0, 2 + hostIndex).join(COMPACT_SEPARATOR)}${COMPACT_SEPARATOR}`;
+  const hostCell = cells[2 + hostIndex] ?? "";
+  // Only split a row whose start the width left intact; anything clipped
+  // earlier keeps the single string, uncolored, rather than mis-cut.
+  if (!full.startsWith(prefix + hostCell)) return { before: full, host: "", after: "" };
+  return {
+    before: prefix,
+    host: hostCell,
+    after: full.slice(prefix.length + hostCell.length),
+  };
 }
 
 export type DashKeyRoute = "help-open" | "help-close" | "help-inert" | "dash";

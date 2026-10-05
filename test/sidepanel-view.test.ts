@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 import { visibleWidth } from "../src/ansi.js";
-import { DASH_GLYPH } from "../src/dash-paint.js";
+import { DASH_GLYPH, hostColor } from "../src/dash-paint.js";
 import { type DashPrefs, DEFAULT_DASH_PREFS } from "../src/dash-prefs.js";
 import { asPaneId, asSessionId, asWindowId } from "../src/ids.js";
 import {
@@ -79,6 +79,7 @@ test("rows name the agent, rendered state, host, age, and workstream", () => {
     icon: DASH_GLYPH.running,
     facts: "running · here · 2m",
     host: "here",
+    hostColor: hostColor("localhost"),
     age: "2m",
     stream: "murmur",
   });
@@ -102,6 +103,7 @@ test("rows name the agent, rendered state, host, age, and workstream", () => {
   expect(remote).toMatchObject({
     key: '["R","default",null,"%2"]',
     facts: "running · devbox",
+    hostColor: hostColor("devbox"),
     stream: "review",
   });
 });

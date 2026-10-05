@@ -5,6 +5,7 @@ import {
   clipGlanceLine,
   compactRow,
   compactRowLayout,
+  compactRowParts,
   compactSelectionMarker,
   dashFooterHints,
   dashHelpSections,
@@ -350,6 +351,19 @@ test("compact rows align fields of different lengths", () => {
   expect(lines[0]?.indexOf("here")).toBe(lines[1]?.indexOf("build-server"));
   expect(lines[0]?.indexOf("dash")).toBe(lines[1]?.indexOf("release"));
   expect(lines.every((line) => [...line].length === 80)).toBe(true);
+});
+
+test("compact row parts isolate the host cell and rejoin to the row", () => {
+  const layout = compactRowLayout(COMPACT_ROWS, 80);
+  for (const row of COMPACT_ROWS) {
+    const parts = compactRowParts(row, layout, "  ");
+    expect(parts.before + parts.host + parts.after).toBe(compactRow(row, layout, "  "));
+    expect(parts.host.trimEnd()).toBe(row.host);
+  }
+  // A layout that dropped the host column has nothing to color.
+  const narrow = compactRowLayout(COMPACT_ROWS, 20);
+  expect(narrow.columns).not.toContain("host");
+  expect(compactRowParts(COMPACT_ROWS[0], narrow, "  ").host).toBe("");
 });
 
 test("compact column widths stay stable across visible windows and cap outliers", () => {
