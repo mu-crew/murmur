@@ -1,8 +1,8 @@
 import { agentLabel } from "./agents.js";
 import { visibleWidth } from "./ansi.js";
-import { DASH_GLYPH } from "./dash-paint.js";
+import { DASH_GLYPH, hostColor } from "./dash-paint.js";
 import type { DashPrefs } from "./dash-prefs.js";
-import { type CompactRowLayout, compactRow, compactRowLayout } from "./dash-tick.js";
+import { type CompactRowLayout, compactRowLayout, compactRowParts } from "./dash-tick.js";
 import { dashRows } from "./dash-view.js";
 import { age, type PaneView, pendingSummary, type RenderState, renderState } from "./view.js";
 
@@ -22,6 +22,8 @@ export type SidepanelRow = {
   name: string;
   facts: string;
   host: string;
+  /** The host's accent, the same on every surface. */
+  hostColor: string;
   age: string;
   stream: string | null;
 };
@@ -42,6 +44,7 @@ export function sidepanelRows(
       name: agentLabel(pane),
       facts: [state, pendingSummary(pane), host, elapsed].filter(Boolean).join(" · "),
       host,
+      hostColor: hostColor(pane.host),
       age: elapsed,
       stream: pane.workstream ?? pane.session_name,
     };
@@ -73,7 +76,18 @@ export function sidepanelCompactLine(
   selected: boolean,
   layout = sidepanelCompactLayout([row], width),
 ): string {
-  return compactRow(compactFields(row), layout, selected ? "▸ " : "  ");
+  const { before, host, after } = sidepanelCompactParts(row, width, selected, layout);
+  return before + host + after;
+}
+
+/** The compact line split around its host cell, for coloring the host alone. */
+export function sidepanelCompactParts(
+  row: SidepanelRow,
+  width: number,
+  selected: boolean,
+  layout = sidepanelCompactLayout([row], width),
+) {
+  return compactRowParts(compactFields(row), layout, selected ? "▸ " : "  ");
 }
 
 export function moveSidepanelSelection(

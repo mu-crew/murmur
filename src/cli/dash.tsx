@@ -32,15 +32,21 @@ import {
   parseMouseEvents,
   pointInRect,
 } from "../dash-mouse.js";
-import { DASH_CHROME, DASH_CHROME_COLOR, DASH_COLOR, DASH_GLYPH } from "../dash-paint.js";
+import {
+  DASH_CHROME,
+  DASH_CHROME_COLOR,
+  DASH_COLOR,
+  DASH_GLYPH,
+  hostColor,
+} from "../dash-paint.js";
 import { type DashPrefs, type DashSort, loadDashPrefs, saveDashPrefs } from "../dash-prefs.js";
 import { type DashStore, openDashStore, refreshDashStore } from "../dash-store.js";
 import {
   type CompactRowFields,
   cardWindow,
   clipGlanceLine,
-  compactRow,
   compactRowLayout,
+  compactRowParts,
   compactSelectionMarker,
   type DashFooterMode,
   type DashInputFocus,
@@ -270,7 +276,7 @@ function Card({
         {DASH_GLYPH[state]} {agentLabel(pane)} {elapsed}
       </Text>
       <Text wrap="truncate-end">
-        <Text color={pane.local ? DASH_CHROME_COLOR.here : DASH_CHROME_COLOR.remote}>
+        <Text color={hostColor(pane.host)}>
           {pane.local
             ? `${DASH_CHROME.here} here`
             : `${DASH_CHROME.remote} ${terminalText(pane.host)}`}
@@ -346,7 +352,7 @@ function CompactRow({
   // Colour alone carried selection and focus on a borderless line; the gutter
   // makes both survive a low-contrast or colour-blind terminal.
   const marker = compactSelectionMarker(selected, cardsFocused);
-  const line = compactRow(fields, layout, marker);
+  const { before, host, after } = compactRowParts(fields, layout, marker);
 
   return (
     <Box ref={elementRef} width={layout.width} height={1}>
@@ -363,7 +369,9 @@ function CompactRow({
         dimColor={!selected && stale}
         wrap="truncate-end"
       >
-        {line}
+        {before}
+        {host && !selected ? <Text color={hostColor(pane.host)}>{host}</Text> : host}
+        {after}
       </Text>
     </Box>
   );

@@ -1,7 +1,7 @@
 import { agentLabel, agentLocation, terminalText } from "./agents.js";
 import { visibleWidth } from "./ansi.js";
 import { warmSocketCommand } from "./channel.js";
-import { DASH_GLYPH } from "./dash-paint.js";
+import { DASH_GLYPH, hostColor } from "./dash-paint.js";
 import { type GlanceRunner, glance } from "./glance.js";
 import type { Status } from "./status.js";
 import type { Store } from "./store.js";
@@ -58,9 +58,16 @@ const ANSI_PATTERN = `${String.fromCharCode(27)}\\[[0-9;]*m`;
 // sequences.
 const ANSI_AT_START = new RegExp(`^${ANSI_PATTERN}`);
 const ANSI_AT_END = new RegExp(`(?:${ANSI_PATTERN})+$`);
-// Remote rows get a colour of their own: cyan reads as "elsewhere" without
-// competing with the state colours, which own red/peach/teal.
-const REMOTE = "\u001b[36m";
+/**
+ * A host in its accent, as truecolor SGR: the same color the dash, the side
+ * panel and the notification hook give it, so a host reads the same
+ * everywhere. Local rows say "here" but keep this machine's color.
+ */
+function hostSgr(host: string): string {
+  const hex = hostColor(host);
+  const [r, g, b] = [1, 3, 5].map((at) => Number.parseInt(hex.slice(at, at + 2), 16));
+  return `\u001b[38;2;${r};${g};${b}m`;
+}
 const BOLD = "\u001b[1m";
 export const DIM = "\u001b[2m";
 // For the column header only, so the grid's labels read as attached to the grid
@@ -288,8 +295,8 @@ export function pickerRow(
   // vertical run you can scan without reading a word.
   const host = showHost
     ? local
-      ? `${DIM}  here${RESET}`
-      : `${REMOTE}\u2192 ${terminalText(agent.host)}${RESET}`
+      ? `${hostSgr(agent.host)}  here${RESET}`
+      : `${hostSgr(agent.host)}\u2192 ${terminalText(agent.host)}${RESET}`
     : "";
   // Workstream if mu set one, otherwise the tmux session name: both answer
   // "which piece of work is this", and only mu-spawned agents have a workstream.
@@ -360,8 +367,8 @@ export function previewText(
     // Whether "where" is this machine decides if the glance below is a local
     // capture-pane or an ssh, so it is stated rather than inferred.
     agent.local
-      ? `${DIM}here  ${agentLocation(agent)}${RESET}`
-      : `${REMOTE}\u2192 ${terminalText(agent.host)}${RESET}  ${DIM}${agentLocation(agent)}${RESET}`,
+      ? `${hostSgr(agent.host)}here${RESET}  ${DIM}${agentLocation(agent)}${RESET}`
+      : `${hostSgr(agent.host)}\u2192 ${terminalText(agent.host)}${RESET}  ${DIM}${agentLocation(agent)}${RESET}`,
   ];
   // Three independent facts, each named, visible at once: `activity` is what the
   // pane's process said, `attention` is who is wanted, `freshness` is how

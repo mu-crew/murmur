@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { accessSync, constants } from "node:fs";
 import { join } from "node:path";
 import { agentLabel } from "./agents.js";
+import { DASH_COLOR, DASH_GLYPH, hostColor } from "./dash-paint.js";
 import { configDir } from "./paths.js";
 import type { Store } from "./store.js";
 import type { AttentionKind } from "./types.js";
@@ -48,6 +49,11 @@ export type AlertEvent = {
   window_name: string | null;
   workstream: string | null;
   driver: PaneView["driver"];
+  /** The host's accent, as the tmux hostname pill and the dash color it. */
+  host_color: string;
+  /** The kind's glyph and color, as every murmur surface paints it. */
+  glyph: string;
+  kind_color: string;
 };
 
 /** One event per attention request, keyed so a re-raised request is new. */
@@ -73,6 +79,9 @@ export function alertEvents(views: readonly PaneView[]): AlertEvent[] {
       window_name: view.window_name,
       workstream: view.workstream,
       driver: view.driver,
+      host_color: hostColor(view.host),
+      glyph: DASH_GLYPH[entry.kind],
+      kind_color: DASH_COLOR[entry.kind],
     })),
   );
 }
@@ -98,6 +107,9 @@ export const runHook: AlertRunner = (hook, event) => {
       MURMUR_LOCAL: event.local ? "1" : "0",
       MURMUR_PANE: event.pane,
       MURMUR_MESSAGE: event.message,
+      MURMUR_HOST_COLOR: event.host_color,
+      MURMUR_GLYPH: event.glyph,
+      MURMUR_KIND_COLOR: event.kind_color,
       MURMUR_EVENT: JSON.stringify(event),
     },
   });

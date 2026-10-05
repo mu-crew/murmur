@@ -11,6 +11,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, expect, test } from "vitest";
 import { ALERT_WINDOW_MS, type AlertEvent, alertHook, fireAlerts, runHook } from "../src/alert.js";
 import { collect } from "../src/collector.js";
+import { DASH_COLOR, DASH_GLYPH, hostColor } from "../src/dash-paint.js";
 import { asPaneId, asSessionId, asWindowId } from "../src/ids.js";
 import { openStore, type Store } from "../src/store.js";
 import type { AttentionKind, Location, Snapshot } from "../src/types.js";
@@ -152,7 +153,7 @@ test("the hook runs with the event in its environment", async () => {
   const hook = join(dir, "on-attention");
   writeFileSync(
     hook,
-    `#!/bin/sh\nprintf '%s|%s|%s' "$MURMUR_KIND" "$MURMUR_AGENT" "$MURMUR_MESSAGE" > '${out}'\n`,
+    `#!/bin/sh\nprintf '%s|%s|%s|%s|%s|%s' "$MURMUR_KIND" "$MURMUR_AGENT" "$MURMUR_MESSAGE" "$MURMUR_HOST_COLOR" "$MURMUR_GLYPH" "$MURMUR_KIND_COLOR" > '${out}'\n`,
   );
   chmodSync(hook, 0o755);
   expect(alertHook(dir)).toBe(hook);
@@ -162,7 +163,9 @@ test("the hook runs with the event in its environment", async () => {
   expect(event?.agent).toBe("w");
 
   for (let i = 0; i < 200 && !existsSync(out); i += 1) await new Promise((r) => setTimeout(r, 10));
-  expect(readFileSync(out, "utf8")).toBe("error|w|429 rate limit");
+  expect(readFileSync(out, "utf8")).toBe(
+    `error|w|429 rate limit|${hostColor("here")}|${DASH_GLYPH.error}|${DASH_COLOR.error}`,
+  );
 });
 
 test("a hook that is missing or not executable is no hook", () => {

@@ -2,7 +2,7 @@ import { expect, test } from "vitest";
 import { agentLabel } from "../src/agents.js";
 import { warmSocketCommand } from "../src/channel.js";
 import { headerRow, isPopup, isVisible, pickerRow, sessionNotice } from "../src/cli/pick.js";
-import { DASH_GLYPH } from "../src/dash-paint.js";
+import { DASH_GLYPH, hostColor } from "../src/dash-paint.js";
 import { asPaneId, asSessionId, asWindowId } from "../src/ids.js";
 import { tmux } from "../src/mux.js";
 import type { Status } from "../src/status.js";
@@ -124,6 +124,17 @@ test("local and remote rows are distinguishable without knowing your hostname", 
   expect(remote).toContain("→ bubba");
   expect(local).toContain("here");
   expect(local).not.toContain("→");
+});
+
+test("a host is painted in its accent, here included", () => {
+  // The picker used cyan for every peer and dim for here; a host now has one
+  // color on every surface, so the same host reads the same in the picker.
+  const sgr = (hex: string) =>
+    `\u001b[38;2;${[1, 3, 5].map((at) => Number.parseInt(hex.slice(at, at + 2), 16)).join(";")}m`;
+  const remote = pickerRow(base, true, false, false);
+  const local = pickerRow({ ...base, host: "linuxpc" }, true, false, true);
+  expect(remote).toContain(`${sgr(hostColor(base.host))}→ bubba`);
+  expect(local).toContain(`${sgr(hostColor("linuxpc"))}  here`);
 });
 
 test("here and the arrow start in the same column", () => {
