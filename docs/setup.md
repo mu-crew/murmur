@@ -174,10 +174,14 @@ notify-send -u "$urgency" "murmur: $MURMUR_AGENT $MURMUR_KIND" \
 ```
 
 A host's color is a crc32 of its short name over eight Catppuccin accents, the
-same hash the mu-crew dotfiles' tmux hostname pill uses, so one host is one
+same hash the mu-crew dotfiles publish as `@mu_crew_host_color`, so one host is one
 color in the status bar, the dash, the side panel, the picker and your
 notifications. For a peer the name
 is the one given to `peer add`.
+
+The [mu-crew dotfiles](https://github.com/mu-crew/dotfiles#notifications)
+ship a ready hook that turns these into notifications with an icon: a frame in
+the host color around the kind's glyph.
 
 On macOS, use `osascript -e "display notification \"$MURMUR_MESSAGE\" with title \"$MURMUR_AGENT $MURMUR_KIND\""`.
 For a phone, `curl -d "$MURMUR_AGENT $MURMUR_KIND" ntfy.sh/<topic>`.

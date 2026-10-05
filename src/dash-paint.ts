@@ -48,10 +48,11 @@ export const DASH_CHROME_COLOR = {
 /**
  * A host's accent: stable per short hostname, distinct between hosts at a glance.
  *
- * The same hash and palette order as the mu-crew dotfiles' tmux hostname pill
- * (crc32 of the short name, modulo this list), so a host has one color in the
- * status bar, the dash and a notification. Append only: reordering moves every
- * host's color.
+ * The same hash and palette order as the mu-crew dotfiles'
+ * `tmux/scripts/mu-crew-host-color` (crc32 of the short name, modulo this
+ * list), so a host has one color in the status bar, the dash and a
+ * notification. Append only: reordering moves every host's color, and both
+ * sides pin crc32("linuxpc") in a test.
  */
 export const HOST_COLORS = [
   "#fab387", // peach
