@@ -380,7 +380,8 @@ test("an empty peer list touches no channel and still reconciles locally", async
       session_name: null,
       window_name: null,
     },
-    owner_pid: process.pid,
+    // Dead: a vanished pane with a live owner keeps its row.
+    owner_pid: 2 ** 22,
     meta: {
       agent_name: null,
       pi_session: null,
@@ -418,12 +419,12 @@ test("collect reconciles each tmux server independently with one query per serve
   };
   store.claimAgent({
     location: { ...base, server: { kind: "default" } },
-    owner_pid: process.pid,
+    owner_pid: 2 ** 22,
     meta,
   });
   store.claimAgent({
     location: { ...base, server: { kind: "label", value: "mule" } },
-    owner_pid: process.pid,
+    owner_pid: 2 ** 22,
     meta,
   });
 

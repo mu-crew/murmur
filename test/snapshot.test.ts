@@ -189,7 +189,8 @@ test("a snapshot reconciles and publishes every known tmux server", () => {
     ...location("%2", "@2"),
     server: { kind: "label", value: "mule" },
   };
-  s.claimAgent({ location: location("%1"), owner_pid: process.pid, meta: META, now: 1 });
+  // %1's owner is dead: a vanished pane with a live owner keeps its row.
+  s.claimAgent({ location: location("%1"), owner_pid: 424_242, meta: META, now: 1 });
   s.claimAgent({ location: privateLocation, owner_pid: process.pid, meta: META, now: 1 });
 
   const built = s.buildLocalSnapshot(IDENTITY, [
