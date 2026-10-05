@@ -6,7 +6,7 @@ so it says what changed for a user rather than listing every commit.
 ## Unreleased
 
 **Host colors.** Each host gets a stable accent color, hashed from its short
-name exactly as the mu-crew dotfiles' tmux hostname pill does. The dash (cards
+name exactly as the mu-crew dotfiles' `@mu_crew_host_color` does. The dash (cards
 and compact rows), the side panel and the picker paint the host in it, the
 local one included; it was green or dim for here and blue or cyan for every
 peer. The notification hook gets it as
