@@ -798,6 +798,13 @@ export function openStore(): Store {
    *
    * A no-op when tmux could not answer: `panes === null` is absence of evidence,
    * not evidence of death, and conflating the two once deleted ten live agents.
+   *
+   * A missing pane whose owner pid is still alive keeps its row. tmux can say
+   * "no panes" and be wrong: a `murmur status` run with a test rig's
+   * `TMUX_TMPDIR` asked about a socket that did not exist, read that as an empty
+   * default server, and deleted every agent on the machine. A live owner is
+   * evidence the agent exists that no tmux answer can outweigh; when its pane
+   * really closed, the owner dies with it and the next reconcile reaps the row.
    */
   const reconcileLocal = database.transaction((world: LocalWorld): ReconcileSummary => {
     const summary: ReconcileSummary = { crashed: [], removed: [], attention_removed: [] };
@@ -819,6 +826,7 @@ export function openStore(): Store {
       if (row.server_kind !== world.server.kind || row.server_value !== worldServerValue) continue;
       const pane = asPaneId(row.pane);
       if (!live.has(pane)) {
+        if (isAlive(row.owner_pid)) continue;
         deleteAgentByPane.run(row.server_kind, row.server_value, row.pane);
         deleteAttentionForPane.run(row.server_kind, row.server_value, row.pane);
         summary.removed.push(pane);

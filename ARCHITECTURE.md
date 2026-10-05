@@ -631,7 +631,8 @@ pane and each owner pid once:
 
 | Pane live? | Owner pid alive? | `activity` | Action |
 | --- | --- | --- | --- |
-| no | — | — | delete the agent row and all attention for the pane |
+| no | yes | — | nothing: tmux's "no panes" can be wrong, a live owner cannot |
+| no | no | — | delete the agent row and all attention for the pane |
 | yes | yes | — | nothing |
 | yes | no | `running` | set `stopped`, upsert `crashed` attention |
 | yes | no | `stopped`, pane already `crashed` | nothing: the row says *which* agent died |
@@ -658,6 +659,14 @@ mid-run, so it is the right thing to key on.
 `requested_at` is never updated by a repeat, so re-reconciling changes nothing —
 crash attention is idempotent for free, and age keeps meaning "how long this has
 gone unmet".
+
+A live owner outranks a missing pane because tmux's answer depends on the
+caller's environment. A `murmur status` run with a test rig's `TMUX_TMPDIR`
+asked about a socket that did not exist, read that as an empty default server,
+and deleted every agent on the machine. A pane that really closed takes its
+owner with it, so the row goes on the next reconcile. The owner's half of the
+same defence: when `setActivity` finds its row missing, the extension claims the
+pane again, so an agent wiped by any path reappears on its next event.
 
 The liveness probe **fails closed**. `pidAlive` reports death only on `ESRCH`,
 so a probe that cannot answer (`EPERM`) reads as alive. An unknown must never

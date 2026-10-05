@@ -488,6 +488,24 @@ test("reconcileLocal distinguishes an empty pane list from a failed read", () =>
   expect(s.localPanes()).toEqual([]);
 });
 
+test("a missing pane with a live owner keeps its row; the dead owner's row goes", () => {
+  // tmux saying "no panes" can be wrong: a `murmur status` with a test rig's
+  // TMUX_TMPDIR read an absent socket as an empty default server and deleted
+  // every agent on the machine. A live owner outweighs that answer.
+  const s = store();
+  s.claimAgent({ location: location("%1"), owner_pid: 100, meta: meta() });
+  s.claimAgent({ location: location("%2"), owner_pid: 200, meta: meta() });
+
+  const summary = s.reconcileLocal({
+    server: { kind: "default" },
+    panes: new Set(),
+    isAlive: alive([100]),
+  });
+
+  expect(summary.removed).toEqual(["%2"]);
+  expect(s.localPanes().map((pane) => pane.pane)).toEqual(["%1"]);
+});
+
 test("a dead running owner becomes stopped plus one crashed row, idempotently", () => {
   const s = store();
   const claim = s.claimAgent({ location: location(), owner_pid: 100, meta: meta(), now: 1 });

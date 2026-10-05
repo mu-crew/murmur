@@ -1054,21 +1054,29 @@ test("a claim the store retained keeps reporting, which is what /reload needs", 
   }
 });
 
-test("a stale owner's write returning false is silence, not an error", async () => {
-  // `setActivity` is keyed on (agent_id, owner_pid), so a process whose pane was
-  // taken over by a replacement owner matches nothing and gets `false`. That is
-  // not a failure to retry: it means this process is no longer the owner of
-  // record, and the correct response is to say nothing and keep the handle.
+/**
+ * A store whose `setActivity` accepts only the agent ids in `accepted`, and
+ * whose claims answer from `claims` in order (the last repeats).
+ */
+async function rejectingRig(
+  claims: ({ outcome: "claimed"; agent_id: string } | { outcome: "refused" })[],
+  accepted: string[],
+) {
+  const writes: string[] = [];
+  let claimCount = 0;
   let closes = 0;
-  let calls = 0;
 
   vi.doMock("@mu-crew/murmur/extension-store", () => ({
     loadIdentity: () => ({ host_id: "H", display_name: "h" }),
     openStore: () => ({
-      claimAgent: () => ({ outcome: "claimed", agent_id: "a1" }),
-      setActivity: () => {
-        calls += 1;
-        return false;
+      claimAgent: () => {
+        const answer = claims[Math.min(claimCount, claims.length - 1)];
+        claimCount += 1;
+        return answer?.outcome === "refused" ? { outcome: "refused", held_by_pid: 61980 } : answer;
+      },
+      setActivity: (update: { agent_id: string }) => {
+        writes.push(update.agent_id);
+        return accepted.includes(update.agent_id);
       },
       releaseAgent: () => false,
       close: () => {
@@ -1104,14 +1112,51 @@ test("a stale owner's write returning false is silence, not an error", async () 
     events: { on: () => {} },
   } as never);
 
-  await handlers.get("agent_start")?.();
-  await until(() => calls === 1, "the first refused write");
-  await handlers.get("agent_start")?.();
-  await until(() => calls === 2, "the second refused write");
+  return { handlers, writes, claims: () => claimCount, closes: () => closes };
+}
 
-  // Still trying, still holding the same handle: a false is not a dropped store.
-  expect(calls).toBe(2);
-  expect(closes).toBe(0);
+test("a write rejected because the row was wiped re-claims and lands", async () => {
+  // A reconcile that misread tmux (an inherited TMUX_TMPDIR made the default
+  // server look empty) deleted every agent row. The owner is alive and nobody
+  // else holds the pane, so its claim succeeds: the agent must reappear on its
+  // next event, not stay invisible until a /reload.
+  const r = await rejectingRig(
+    [
+      { outcome: "claimed", agent_id: "a1" },
+      { outcome: "claimed", agent_id: "a2" },
+    ],
+    ["a2"],
+  );
+
+  await r.handlers.get("agent_start")?.();
+  await until(() => r.writes.length === 2, "the rejected write and its retry");
+
+  expect(r.writes).toEqual(["a1", "a2"]);
+  expect(r.claims()).toBe(2);
+  expect(r.closes()).toBe(0);
+
+  unmockExtension();
+});
+
+test("a write rejected because another live process owns the pane goes silent", async () => {
+  // `setActivity` is keyed on (agent_id, owner_pid), so a process whose pane was
+  // taken over matches nothing. The re-claim is refused by the live owner, and
+  // this process must not write as it, retry, or keep a handle.
+  const r = await rejectingRig(
+    [{ outcome: "claimed", agent_id: "a1" }, { outcome: "refused" }],
+    [],
+  );
+
+  await r.handlers.get("agent_start")?.();
+  await until(() => r.closes() === 1, "the refused re-claim");
+  await r.handlers.get("agent_start")?.();
+  await r.handlers.get("agent_end")?.();
+  // Waits for something that must not arrive.
+  await until(() => r.writes.length > 1 || r.claims() > 2, "nothing more");
+
+  expect(r.writes).toEqual(["a1"]);
+  expect(r.claims()).toBe(2);
+  expect(r.closes()).toBe(1);
 
   unmockExtension();
 });

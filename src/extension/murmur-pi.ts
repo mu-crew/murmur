@@ -246,20 +246,7 @@ export default function murmurPi(pi: ExtensionAPI): void {
         return null;
       }
       const store = openStore();
-      const claim = store.claimAgent({
-        location: here(),
-        owner_pid: process.pid,
-        meta: meta(),
-      });
-      if (claim.outcome === "refused") {
-        store.close();
-        refused = true;
-        state = { kind: "absent" };
-        return null;
-      }
-      // `retained` makes /reload a no-op: pi re-runs this factory in the same
-      // process, and the store recognises our own pid.
-      agentId = claim.agent_id;
+      if (!claim(store)) return null;
       state = { kind: "open", store };
       return store;
     } catch {
@@ -269,10 +256,33 @@ export default function murmurPi(pi: ExtensionAPI): void {
   };
 
   /**
+   * Claim the pane in an open store, and answer whether this process owns it.
+   *
+   * A refusal closes the store and is permanent for the process (see `refused`).
+   */
+  const claim = (store: Store): boolean => {
+    const result = store.claimAgent({ location: here(), owner_pid: process.pid, meta: meta() });
+    if (result.outcome === "refused") {
+      store.close();
+      refused = true;
+      agentId = null;
+      state = { kind: "absent" };
+      return false;
+    }
+    // `retained` makes /reload a no-op: pi re-runs this factory in the same
+    // process, and the store recognises our own pid.
+    agentId = result.agent_id;
+    return true;
+  };
+
+  /**
    * Report activity, and answer whether this process is still the owner.
    *
-   * `setActivity` returning false is not an error and is not retried: it means
-   * this process is no longer the owner of record, and silence is correct.
+   * `setActivity` returning false means our row is gone or someone else's. The
+   * claim tells the two apart: a live other owner refuses it, and this process
+   * goes silent for good; a missing row -- wiped by a reconcile that misread
+   * tmux -- is claimed afresh, so the agent reappears on its next event instead
+   * of staying invisible until a /reload.
    *
    * The badge is gated on that boolean, because the badge is the only part of a
    * report a human sees directly -- painting it before the write is how a
@@ -282,7 +292,10 @@ export default function murmurPi(pi: ExtensionAPI): void {
     try {
       const store = await getStore();
       if (!store || !agentId) return false;
-      return store.setActivity({ agent_id: agentId, owner_pid: process.pid, activity, location });
+      const write = () =>
+        agentId !== null &&
+        store.setActivity({ agent_id: agentId, owner_pid: process.pid, activity, location });
+      return write() || (claim(store) && write());
     } catch {
       dropStore();
       return false;
