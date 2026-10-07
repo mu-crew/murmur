@@ -28,6 +28,11 @@ row cell is instead of re-measuring every row on every keystroke, and it no
 longer re-clips an unchanged preview when the selection moves. Laying out 73
 compact rows dropped from about 20ms to under 1ms per render.
 
+**Faster remote-agent hints on Linux.** When the dash or side panel shows
+remote agents, murmur checks which local panes are attached to them on every
+refresh. On Linux it now reads each pane's command line from `/proc` instead of
+running `ps`, which scanned every process on the machine.
+
 ## 1.2.1
 
 Upgrade with `npm i -g @mu-crew/murmur@1.2.1`, then `/reload` in running pi
