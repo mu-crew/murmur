@@ -3,7 +3,13 @@
 Notable changes per release. Written for someone deciding whether to upgrade,
 so it says what changed for a user rather than listing every commit.
 
-## Unreleased
+## 1.3.0
+
+Upgrade with `npm i -g @mu-crew/murmur@1.3.0`, then `/reload` in running pi
+sessions so the extension publishes tmux state the new way, and restart any
+open dash or side panel. No snapshot change; nodes can upgrade one at a time.
+If you use the focus hooks from `docs/setup.md` rather than the mu-crew
+dotfiles, replace them with the gated version there.
 
 **Faster startup for every command.** `murmur status`, `clear`, `export` and
 `--version` no longer load the text-width library that only the dash, side
