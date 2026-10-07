@@ -11,13 +11,13 @@ panel and picker need. On a loaded host `murmur status --json` dropped from
 about 245ms to 175ms (median of 20 runs), and the status-line poller and tmux
 hooks that run it constantly gain the same saving.
 
-**Compiled code is cached between runs.** On Node 22.1 and later, `murmur`
+**Compiled code is cached between runs.** On Node 22.8 and later, `murmur`
 turns on Node's module compile cache, so each command skips recompiling its
 code. That saves about 5ms per run, which adds up for the status-line poller and
 tmux hooks. The cache lives in `node-compile-cache` under the system temp
 directory, or in `NODE_COMPILE_CACHE` if you set it. Set
-`NODE_DISABLE_COMPILE_CACHE=1` to turn it off. Node 20 has no compile cache, so
-nothing changes there.
+`NODE_DISABLE_COMPILE_CACHE=1` to turn it off. Older Node versions have no
+`module.enableCompileCache`, so nothing changes there.
 
 **Faster state publishing.** Every time an agent changes state, or you focus a
 pane, murmur updates the tmux status options. That update now uses one tmux
