@@ -1,5 +1,5 @@
 import { agentLabel, agentLocation, terminalText } from "./agents.js";
-import { visibleWidth } from "./ansi.js";
+import { visibleWidth } from "./ansi-width.js";
 import { warmSocketCommand } from "./channel.js";
 import { DASH_GLYPH, hostColor } from "./dash-paint.js";
 import { type GlanceRunner, glance } from "./glance.js";

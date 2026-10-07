@@ -3,6 +3,14 @@
 Notable changes per release. Written for someone deciding whether to upgrade,
 so it says what changed for a user rather than listing every commit.
 
+## Unreleased
+
+**Faster startup for every command.** `murmur status`, `clear`, `export` and
+`--version` no longer load the text-width library that only the dash, side
+panel and picker need. On a loaded host `murmur status --json` dropped from
+about 245ms to 175ms (median of 20 runs), and the status-line poller and tmux
+hooks that run it constantly gain the same saving.
+
 ## 1.2.1
 
 Upgrade with `npm i -g @mu-crew/murmur@1.2.1`, then `/reload` in running pi

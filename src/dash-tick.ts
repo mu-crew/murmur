@@ -1,4 +1,4 @@
-import { clipToWidth, visibleWidth } from "./ansi.js";
+import { clipToWidth, visibleWidth } from "./ansi-width.js";
 import type { DashSort } from "./dash-prefs.js";
 import type { Status } from "./status.js";
 import { age, type PaneView } from "./view.js";

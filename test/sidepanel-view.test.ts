@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { visibleWidth } from "../src/ansi.js";
+import { visibleWidth } from "../src/ansi-width.js";
 import { DASH_GLYPH, hostColor } from "../src/dash-paint.js";
 import { type DashPrefs, DEFAULT_DASH_PREFS } from "../src/dash-prefs.js";
 import { asPaneId, asSessionId, asWindowId } from "../src/ids.js";

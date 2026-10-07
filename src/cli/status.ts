@@ -15,9 +15,9 @@ export function registerStatus(program: Command): void {
       if (!identity) return;
       const store = openStore();
       try {
-        // The one surface that passes a floor. tmux re-runs this on every
-        // `status-interval` -- per attached client -- and a repaint is not a
-        // reason to reach a machine.
+        // The one surface that passes a floor. A status-line poller re-runs
+        // this on a timer -- possibly per attached client -- and a repaint is
+        // not a reason to reach a machine.
         const view = await statusWithCollect(store, identity, Date.now(), ssh, {
           floorMs: COLLECT_FLOOR_MS,
         });

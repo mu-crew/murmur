@@ -1,5 +1,4 @@
 import { spawn, spawnSync } from "node:child_process";
-import type { Command } from "commander";
 import { type JumpResult, jumpToAgent } from "../agents.js";
 import { hasWarmSocket } from "../channel.js";
 import { renderJumpCommand } from "../jump-command.js";
@@ -303,19 +302,16 @@ async function runRows(store: Store, options: PickOptions = {}): Promise<void> {
   }
 }
 
-export function registerPick(program: Command): void {
-  program
-    .command("pick")
-    .description("Pick an agent and jump to it")
-    .option("--all", "include orchestrated agents")
-    .option("--rows", "print picker rows only (internal, for the crew toggle's reload)")
-    .action(async (options: PickOptions & { rows?: boolean }) => {
-      const store = openStore();
-      try {
-        if (options.rows) await runRows(store, options);
-        else await runPick(store, options);
-      } finally {
-        store.close();
-      }
-    });
+/**
+ * The `murmur pick` action, reached through the dynamic import in
+ * `pick-register.ts` so that other commands never load the picker's rendering.
+ */
+export async function runPickCommand(options: PickOptions & { rows?: boolean }): Promise<void> {
+  const store = openStore();
+  try {
+    if (options.rows) await runRows(store, options);
+    else await runPick(store, options);
+  } finally {
+    store.close();
+  }
 }

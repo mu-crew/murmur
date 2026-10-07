@@ -1,5 +1,6 @@
 import { expect, test } from "vitest";
-import { plainText, visibleWidth } from "../src/ansi.js";
+import { plainText } from "../src/ansi.js";
+import { visibleWidth } from "../src/ansi-width.js";
 import {
   cardWindow,
   clipGlanceLine,
