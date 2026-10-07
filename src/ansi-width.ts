@@ -32,14 +32,31 @@ const SINGLE_CELL = /^[ -~\u00b7\u2014\u2026\u2192\u25c6]*$/;
  * `murmur pick`, whose rows are almost always plain ASCII. Those characters are
  * one cell each in string-width too (a test pins the agreement), so that case
  * is answered here and the library is required on the first string
- * that holds anything else. Synchronous `require` of an ES module is stable in
- * every Node the dependencies support (commander needs >=22.12).
+ * that holds anything else. That `require` of an ES module needs
+ * `require(esm)` (Node >=20.19 / >=22.12); on older Nodes `ensureStringWidth`
+ * has already loaded the library, so the `require` is never reached.
  */
 function cells(text: string): number {
   if (SINGLE_CELL.test(text)) return text.length;
   loadedStringWidth ??= (createRequire(import.meta.url)("string-width") as { default: StringWidth })
     .default;
   return loadedStringWidth(text);
+}
+
+/**
+ * Preload `string-width` where `cells` could not `require` it.
+ *
+ * `package.json` advertises Node >=20, but synchronous `require` of an ES
+ * module only works where `process.features.require_module` is set; on Node
+ * 20.18 it throws `ERR_REQUIRE_ESM` on the first non-ASCII cell. The dash, side
+ * panel and picker await this before they measure anything, so older Nodes pay
+ * the load up front and modern ones keep the lazy, usually-skipped path.
+ */
+export async function ensureStringWidth(
+  requireModule: boolean | undefined = process.features.require_module,
+): Promise<void> {
+  if (requireModule || loadedStringWidth) return;
+  loadedStringWidth = (await import("string-width")).default;
 }
 
 /**
