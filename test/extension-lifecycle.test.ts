@@ -1,4 +1,5 @@
 import { expect, test, vi } from "vitest";
+import { withPublish } from "./helpers/fake-mux.js";
 
 /**
  * Ownership over the extension's LIFETIME, as opposed to its per-event
@@ -120,7 +121,7 @@ async function rig(claimAnswers: Claim[], options: { setActivity?: boolean } = {
   vi.doMock("node:child_process", () => ({ execFileSync: () => "0" }));
 
   vi.doMock("../src/mux.js", () => ({
-    tmux: {
+    tmux: withPublish({
       currentWindow: () => ({
         session: "$0",
         window: "@1",
@@ -134,7 +135,7 @@ async function rig(claimAnswers: Claim[], options: { setActivity?: boolean } = {
       setPaneLabel: (pane: string, label: string | null) => void labels.push([pane, label]),
       sessionPanes: () => null,
       setStateCounts: () => {},
-    },
+    }),
   }));
 
   vi.resetModules();

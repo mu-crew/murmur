@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { expect, test, vi } from "vitest";
 import { driverFromEnv, settledState, turnError } from "../src/extension/decide.js";
 import { builtArtifact, runBuiltCli } from "./helpers/built.js";
+import { withPublish } from "./helpers/fake-mux.js";
 
 /**
  * Wait until `condition` holds, or fail loudly.
@@ -165,7 +166,7 @@ test("runtime is reported per turn without activating pi's turn_end boundary", a
     }),
   }));
   vi.doMock("../src/mux.js", () => ({
-    tmux: {
+    tmux: withPublish({
       currentWindow: () => ({
         session: "$0",
         window: "@1",
@@ -176,7 +177,7 @@ test("runtime is reported per turn without activating pi's turn_end boundary", a
       panesInWindow: () => ["%1"],
       setWindowState: () => {},
       setPaneState: () => {},
-    },
+    }),
   }));
 
   vi.resetModules();
@@ -269,7 +270,7 @@ test("a failed write closes the store it is dropping", async () => {
   // currentWindow() returns null outside a pane, which exits the extension
   // before it ever touches a store.
   vi.doMock("../src/mux.js", () => ({
-    tmux: {
+    tmux: withPublish({
       currentWindow: () => ({
         session: "$0",
         window: "@1",
@@ -280,7 +281,7 @@ test("a failed write closes the store it is dropping", async () => {
       panesInWindow: () => ["%1"],
       setWindowState: () => {},
       setPaneState: () => {},
-    },
+    }),
   }));
 
   vi.resetModules();
@@ -348,7 +349,7 @@ test("a transient write failure does not silence the agent for the rest of its l
   }));
 
   vi.doMock("../src/mux.js", () => ({
-    tmux: {
+    tmux: withPublish({
       currentWindow: () => ({
         session: "$0",
         window: "@1",
@@ -359,7 +360,7 @@ test("a transient write failure does not silence the agent for the rest of its l
       panesInWindow: () => ["%1"],
       setWindowState: () => {},
       setPaneState: () => {},
-    },
+    }),
   }));
 
   vi.resetModules();
@@ -408,7 +409,7 @@ test("a missing murmur is given up on after one attempt, not retried per event",
   });
 
   vi.doMock("../src/mux.js", () => ({
-    tmux: {
+    tmux: withPublish({
       currentWindow: () => ({
         session: "$0",
         window: "@1",
@@ -419,7 +420,7 @@ test("a missing murmur is given up on after one attempt, not retried per event",
       panesInWindow: () => ["%1"],
       setWindowState: () => {},
       setPaneState: () => {},
-    },
+    }),
   }));
 
   vi.resetModules();
@@ -481,7 +482,7 @@ test("a pane moved to another window keeps its identity and stops badging the ol
   // The pane stays %1 throughout; only the window moves.
   let window = "@1";
   vi.doMock("../src/mux.js", () => ({
-    tmux: {
+    tmux: withPublish({
       currentWindow: () => ({
         session: "$0",
         window,
@@ -493,7 +494,7 @@ test("a pane moved to another window keeps its identity and stops badging the ol
       setWindowState: (target: string, state: string | null) => badges.push([target, state]),
       setPaneState: () => {},
       setPaneLabel: () => {},
-    },
+    }),
   }));
 
   vi.resetModules();
@@ -582,7 +583,7 @@ test("session_shutdown does not permanently silence the extension, because /relo
   }));
 
   vi.doMock("../src/mux.js", () => ({
-    tmux: {
+    tmux: withPublish({
       currentWindow: () => ({
         session: "$0",
         window: "@1",
@@ -593,7 +594,7 @@ test("session_shutdown does not permanently silence the extension, because /relo
       panesInWindow: () => ["%1"],
       setWindowState: () => {},
       setPaneState: () => {},
-    },
+    }),
   }));
 
   vi.resetModules();
@@ -663,7 +664,7 @@ test("session_start re-arms an extension that gave up, so a reload is a real rec
   }));
 
   vi.doMock("../src/mux.js", () => ({
-    tmux: {
+    tmux: withPublish({
       currentWindow: () => ({
         session: "$0",
         window: "@1",
@@ -674,7 +675,7 @@ test("session_start re-arms an extension that gave up, so a reload is a real rec
       panesInWindow: () => ["%1"],
       setWindowState: () => {},
       setPaneState: () => {},
-    },
+    }),
   }));
 
   vi.resetModules();
@@ -765,7 +766,7 @@ async function driveExtension(options: { focused: boolean; muManaged?: boolean }
   }));
 
   vi.doMock("../src/mux.js", () => ({
-    tmux: {
+    tmux: withPublish({
       currentWindow: () => ({
         session: "$0",
         window: "@1",
@@ -777,7 +778,7 @@ async function driveExtension(options: { focused: boolean; muManaged?: boolean }
       setWindowState: (_window: string, badge: string | null) => void badges.push(badge),
       setPaneState: (_pane: string, state: string | null) => void panes.push(state),
       setPaneLabel: () => {},
-    },
+    }),
   }));
 
   vi.resetModules();
@@ -955,7 +956,7 @@ test("a refused claim means no report and no badge, for the life of the process"
   }));
   vi.doMock("node:child_process", () => ({ execFileSync: () => "0" }));
   vi.doMock("../src/mux.js", () => ({
-    tmux: {
+    tmux: withPublish({
       currentWindow: () => ({
         session: "$0",
         window: "@1",
@@ -967,7 +968,7 @@ test("a refused claim means no report and no badge, for the life of the process"
       setWindowState: (_window: string, badge: string | null) => void badges.push(badge),
       setPaneState: () => {},
       setPaneLabel: () => {},
-    },
+    }),
   }));
 
   vi.resetModules();
@@ -1023,7 +1024,7 @@ test("a claim the store retained keeps reporting, which is what /reload needs", 
       }),
     }));
     vi.doMock("../src/mux.js", () => ({
-      tmux: {
+      tmux: withPublish({
         currentWindow: () => ({
           session: "$0",
           window: "@1",
@@ -1034,7 +1035,7 @@ test("a claim the store retained keeps reporting, which is what /reload needs", 
         panesInWindow: () => ["%1"],
         setWindowState: () => {},
         setPaneState: () => {},
-      },
+      }),
     }));
 
     vi.resetModules();
@@ -1085,7 +1086,7 @@ async function rejectingRig(
     }),
   }));
   vi.doMock("../src/mux.js", () => ({
-    tmux: {
+    tmux: withPublish({
       currentWindow: () => ({
         session: "$0",
         window: "@1",
@@ -1096,7 +1097,7 @@ async function rejectingRig(
       panesInWindow: () => ["%1"],
       setWindowState: () => {},
       setPaneState: () => {},
-    },
+    }),
   }));
 
   vi.resetModules();
