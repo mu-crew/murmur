@@ -1,5 +1,6 @@
-import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { ensureDir } from "./dirs.js";
 import { configDir } from "./paths.js";
 import type { RenderState } from "./view.js";
 
@@ -142,7 +143,7 @@ export function loadDashPrefs(dir = configDir()): DashPrefs {
 }
 
 export function saveDashPrefs(prefs: DashPrefs, dir = configDir()): void {
-  mkdirSync(dir, { recursive: true });
+  ensureDir(dir);
   const path = join(dir, "dash.toml");
   const temporaryPath = join(dir, `.dash.toml.${process.pid}.${Date.now()}.tmp`);
   const hiddenStates = prefs.hidden_states

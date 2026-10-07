@@ -1,8 +1,9 @@
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Command } from "commander";
+import { ensureDir } from "../dirs.js";
 import { loadIdentity } from "../identity.js";
 
 /**
@@ -71,7 +72,7 @@ export function registerLink(program: Command): void {
         "extensions",
         "murmur.ts",
       );
-      mkdirSync(dirname(destination), { recursive: true });
+      ensureDir(dirname(destination));
 
       const entry = fileURLToPath(new URL("./extension/murmur-pi.js", import.meta.url));
       const storePath = fileURLToPath(new URL("./extension/store.js", import.meta.url));

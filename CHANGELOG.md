@@ -3,6 +3,18 @@
 Notable changes per release. Written for someone deciding whether to upgrade,
 so it says what changed for a user rather than listing every commit.
 
+## Unreleased
+
+**No more hangs on a bad temp or state directory.** On Node 24, a
+`TMPDIR` or `MURMUR_STATE_DIR` under `/proc` made every `murmur` command,
+the status-bar tick included, spin at 100% CPU forever inside Node's
+recursive mkdir. The compile cache now lives in `compile-cache` under the
+murmur state directory, and murmur creates it one level at a time and skips
+the cache if that fails. Commands that need the state directory now exit
+with `cannot create directory ...` instead of hanging. `NODE_COMPILE_CACHE`
+still picks the cache directory and `NODE_DISABLE_COMPILE_CACHE=1` still
+turns the cache off.
+
 ## 1.3.0
 
 Upgrade with `npm i -g @mu-crew/murmur@1.3.0`, then `/reload` in running pi
