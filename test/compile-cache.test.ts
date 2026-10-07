@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdtempSync, readdirSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import module from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -49,6 +49,13 @@ test("ensureDir creates nested missing parents", () => {
   ensureDir(dir);
   ensureDir(dir);
   expect(existsSync(dir)).toBe(true);
+});
+
+test("ensureDir creates 40 missing components, like recursive mkdir", () => {
+  const root = mkdtempSync(join(tmpdir(), "murmur-dirs-"));
+  const dir = join(root, ...Array.from({ length: 40 }, () => "a"));
+  ensureDir(dir);
+  expect(statSync(dir).isDirectory()).toBe(true);
 });
 
 test("ensureDir throws when a path component is a file", () => {

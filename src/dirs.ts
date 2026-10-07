@@ -4,16 +4,18 @@
 // which uses the same code path -- spins forever at 100% CPU on some paths:
 // anything under /proc, where mkdir keeps returning ENOENT. A TMPDIR or
 // MURMUR_STATE_DIR there hung every command, the status-bar tick included.
-// ensureDir walks up at most `maxDepth` levels, creates the missing ones one
-// non-recursive mkdir at a time, and throws at the first error.
+// ensureDir walks up to the first existing ancestor (no depth cap, so it
+// creates any path the recursive mkdir did), checks it is a writable
+// directory, creates the missing components in order with one non-recursive
+// mkdir each, and throws at the first error.
 //
 // Builtins only: src/cli.ts loads this before the program graph.
 
-import { mkdirSync, statSync } from "node:fs";
+import { accessSync, constants, mkdirSync, statSync } from "node:fs";
 import { dirname } from "node:path";
 
 /** Create `dir` and any missing parents. Throws a clear error; never spins. */
-export function ensureDir(dir: string, maxDepth = 32): void {
+export function ensureDir(dir: string): void {
   const missing: string[] = [];
   let cur = dir;
   for (;;) {
@@ -23,13 +25,21 @@ export function ensureDir(dir: string, maxDepth = 32): void {
     } catch {
       missing.push(cur);
       const parent = dirname(cur);
-      if (parent === cur || missing.length >= maxDepth) {
+      // dirname() reaches a fixed point at the root, which always exists.
+      if (parent === cur) {
         throw new Error(`cannot create directory ${dir}: no existing parent directory`);
       }
       cur = parent;
       continue;
     }
     if (!isDirectory) throw new Error(`cannot create directory ${dir}: ${cur} is not a directory`);
+    if (missing.length > 0) {
+      try {
+        accessSync(cur, constants.W_OK | constants.X_OK);
+      } catch {
+        throw new Error(`cannot create directory ${dir}: ${cur} is not writable`);
+      }
+    }
     break;
   }
   for (const d of missing.reverse()) {
