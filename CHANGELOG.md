@@ -3,7 +3,11 @@
 Notable changes per release. Written for someone deciding whether to upgrade,
 so it says what changed for a user rather than listing every commit.
 
-## Unreleased
+## 1.3.1
+
+Upgrade with `npm i -g @mu-crew/murmur@1.3.1`. No snapshot or extension
+change; nodes can upgrade one at a time.
+
 
 **No more hangs on a bad temp or state directory.** On Node 24, a
 `TMPDIR` or `MURMUR_STATE_DIR` under `/proc` made every `murmur` command,
