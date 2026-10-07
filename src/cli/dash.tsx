@@ -887,24 +887,35 @@ export function App({ dashStore, initial }: DashProps) {
   const glanceVisibleLines = glanceFrame.visible;
   const glanceScrollMax = Math.max(0, glanceLines.length - glanceVisibleLines);
   const glanceOffset = clampGlanceScroll(glanceScroll, glanceLines.length, glanceVisibleLines);
-  const glanceViewLines = glanceLines.slice(glanceOffset, glanceOffset + glanceVisibleLines);
   // Clipped per line, then joined into one string. An empty line becomes a
   // space so the row still occupies height, as it did when each line was its
-  // own element.
-  const glanceBody = glanceViewLines
-    .map((line) => clipGlanceLine(line, glanceTextWidth) || " ")
-    .join("\n");
+  // own element. Memoised because a keystroke renders twice (selection, then
+  // the preview it loads) and re-clipping unchanged text was most of a frame.
+  const glanceBody = useMemo(
+    () =>
+      glance
+        .split("\n")
+        .slice(glanceOffset, glanceOffset + glanceVisibleLines)
+        .map((line) => clipGlanceLine(line, glanceTextWidth) || " ")
+        .join("\n"),
+    [glance, glanceOffset, glanceVisibleLines, glanceTextWidth],
+  );
   const glanceLine = [...glanceLines]
     .reverse()
     .find((line) => line.trim())
     ?.trim();
-  const compactFieldsByPane = new Map(
-    panes.map((pane) => [
-      paneKey(pane),
-      compactFields(pane, pane === selected ? glanceLine : undefined, now),
-    ]),
-  );
-  const compactLayout = compactRowLayout([...compactFieldsByPane.values()], railWidth);
+  const { compactFieldsByPane, compactLayout } = useMemo(() => {
+    const fields = new Map(
+      panes.map((pane) => [
+        paneKey(pane),
+        compactFields(pane, pane === selected ? glanceLine : undefined, now),
+      ]),
+    );
+    return {
+      compactFieldsByPane: fields,
+      compactLayout: compactRowLayout([...fields.values()], railWidth),
+    };
+  }, [panes, selected, glanceLine, now, railWidth]);
   const filterDraft = [...query];
   const filterBefore = filterDraft.slice(0, filter.query.cursor).join("");
   const filterCursor = filterDraft[filter.query.cursor] ?? " ";
