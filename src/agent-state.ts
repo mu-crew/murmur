@@ -44,8 +44,12 @@ function strongest(states: readonly RenderState[]): RenderState | null {
  * writer set before a crash would otherwise outlive the fact it described.
  *
  * Returns false when tmux could not list the window. Unknown membership is not
- * evidence that the panes are empty, so nothing is cleared. A session that
- * cannot be listed leaves its option alone for the same reason.
+ * evidence that the panes are empty, so nothing is cleared. A session tmux does
+ * not name leaves its option alone for the same reason.
+ *
+ * One tmux read and one chained tmux write: this runs synchronously inside pi
+ * and on every focus change, and a dozen separate tmux processes per publish
+ * were most of its cost.
  */
 export function publishAgentStates(
   window: WindowId,
@@ -53,8 +57,8 @@ export function publishAgentStates(
   store: Store,
   server: TmuxServer = { kind: "default" },
 ): boolean {
-  const panes = mux.panesInWindow(window, server);
-  if (panes === null) return false;
+  const targets = mux.publishTargets(window, server);
+  if (targets === null) return false;
 
   const allLocal = store.localPanes();
   const localPanes = allLocal.filter((pane) => sameServer(pane.server, server));
@@ -67,28 +71,28 @@ export function publishAgentStates(
 
   const states: RenderState[] = [];
   let hasAgent = false;
-  for (const pane of panes) {
+  const panes = targets.windowPanes.map((pane) => {
     const local = paneOf(pane);
     const state = local ? paneState(local) : null;
-    mux.setPaneState(pane, state, server);
-    mux.setPaneLabel(
-      pane,
-      local?.agent ? local.agent.agent_name || local.agent.pi_session || local.agent.cli : null,
-      server,
-    );
     if (local?.agent) hasAgent = true;
     if (state) states.push(state);
-  }
-  mux.setWindowState(window, strongest(states), server, hasAgent);
+    const label = local?.agent
+      ? local.agent.agent_name || local.agent.pi_session || local.agent.cli
+      : null;
+    return { pane, state, label };
+  });
 
-  const session = mux.sessionPanes(window, server);
-  if (session) {
-    const sessionStates = session.panes.flatMap((pane) => {
-      const state = stateOf(pane);
-      return state ? [state] : [];
-    });
-    mux.setSessionState(session.session, strongest(sessionStates), server);
-  }
+  const session = targets.session
+    ? {
+        session: targets.session,
+        state: strongest(
+          targets.sessionPanes.flatMap((pane) => {
+            const state = stateOf(pane);
+            return state ? [state] : [];
+          }),
+        ),
+      }
+    : null;
 
   // Every local agent on this server, not only this window's: the pill is a
   // host-wide rollup, and this is the one place every writer passes through.
@@ -98,6 +102,15 @@ export function publishAgentStates(
     const target = (pane.agent?.driver ?? DEFAULT_DRIVER) === "human" ? human : crew;
     target[paneState(pane)] += 1;
   }
-  mux.setStateCounts(statusRollup(human, crew), server);
+  mux.publish(
+    window,
+    {
+      panes,
+      window: { state: strongest(states), hasAgent },
+      session,
+      counts: statusRollup(human, crew),
+    },
+    server,
+  );
   return true;
 }

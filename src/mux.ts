@@ -13,6 +13,19 @@ import {
 import type { Location, TmuxServer } from "./types.js";
 import { RENDER_PRIORITY, type RenderState, type StateCounts } from "./view.js";
 
+export type PublishTargets = {
+  session: SessionId | null;
+  windowPanes: PaneId[];
+  sessionPanes: PaneId[];
+};
+
+export type PublishPlan = {
+  panes: { pane: PaneId; state: RenderState | null; label: string | null }[];
+  window: { state: RenderState | null; hasAgent: boolean };
+  session: { session: SessionId; state: RenderState | null } | null;
+  counts: { totals: StateCounts; crew: number };
+};
+
 export type LocalPaneProcess = {
   pane: PaneId;
   current_command: string;
@@ -35,17 +48,14 @@ export interface Mux {
   setPaneState(pane: PaneId, state: RenderState | null, server?: TmuxServer): void;
   // Sets the owner-reported agent label on that pane, without window inheritance.
   setPaneLabel(pane: PaneId, label: string | null, server?: TmuxServer): void;
-  // The session holding a window, and every pane in that session. Null is an
-  // unknown answer, not an empty session.
-  sessionPanes(
-    window: WindowId,
-    server?: TmuxServer,
-  ): { session: SessionId; panes: PaneId[] } | null;
-  // Sets murmur's aggregate SESSION state. Session pickers read this.
-  setSessionState(session: SessionId, state: RenderState | null, server?: TmuxServer): void;
-  // Sets the server-global `@murmur_count_*` options for a status pill, in one
-  // tmux call, and repaints the status line.
-  setStateCounts(counts: { totals: StateCounts; crew: number }, server?: TmuxServer): void;
+  // One read for a publish: the window's panes, its session, and every pane in
+  // that session. Null is an unknown answer, not an empty window. A null
+  // `session` means tmux named no session, so its option is left alone.
+  publishTargets(window: WindowId, server?: TmuxServer): PublishTargets | null;
+  // Writes a whole publish -- every pane, the window, the session and the
+  // server-global `@murmur_count_*` pill options -- as one chained tmux call
+  // that ends in a single status repaint.
+  publish(window: WindowId, plan: PublishPlan, server?: TmuxServer): void;
   // Takes the PANE, which is the address, so one call resolves session, window
   // and pane together. Reports whether the attach happened: runTmux swallows
   // failures into null, and a silently failed jump looked exactly like "enter
@@ -159,6 +169,117 @@ function runTmux(args: string[], server?: TmuxServer): string | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * tmux reads an argv element that ends in `;` as a command separator and drops
+ * the `;`, so a label of `;` or `worker;` would split the chain. A backslash
+ * before that final `;` keeps it literal (verified on tmux 3.7c).
+ */
+export function chainArg(arg: string): string {
+  return arg.endsWith(";") ? `${arg.slice(0, -1)}\\;` : arg;
+}
+
+// tmux refuses a single command line past ~16KB ("command too long"), so a
+// very large window goes out in several calls rather than not at all.
+const CHAIN_LIMIT = 8000;
+
+/**
+ * Run tmux commands as `;`-joined chains, then ONE `refresh-client -S` last:
+ * with no attached client it fails and aborts whatever follows it. A `-q` set
+ * on a pane that vanished does not abort the chain.
+ */
+export function chainedTmuxCalls(commands: string[][]): string[][] {
+  const calls: string[][] = [];
+  let call: string[] = [];
+  let size = 0;
+  for (const command of [...commands, ["refresh-client", "-S"]]) {
+    const args = command.map(chainArg);
+    const length = args.reduce((total, arg) => total + arg.length + 1, 2);
+    if (call.length > 0 && size + length > CHAIN_LIMIT) {
+      calls.push(call.slice(0, -1));
+      call = [];
+      size = 0;
+    }
+    call.push(...args, ";");
+    size += length;
+  }
+  calls.push(call.slice(0, -1));
+  return calls;
+}
+
+function windowStateCommands(
+  window: WindowId,
+  state: RenderState | null,
+  hasAgent: boolean,
+): string[][] {
+  return [
+    state === null
+      ? ["set-window-option", "-qu", "-t", window, "@murmur_window_state"]
+      : ["set-window-option", "-q", "-t", window, "@murmur_window_state", tmuxAgentState(state)],
+    hasAgent
+      ? ["set-window-option", "-q", "-t", window, "@murmur_window_has_agent", "1"]
+      : ["set-window-option", "-qu", "-t", window, "@murmur_window_has_agent"],
+  ];
+}
+
+function paneStateCommands(pane: PaneId, state: RenderState | null): string[][] {
+  if (state === null) {
+    return [
+      ["set-option", "-pqu", "-t", pane, "@murmur_pane_state"],
+      ["set-option", "-pqu", "-t", pane, "@murmur_pane_since"],
+    ];
+  }
+  const token = tmuxAgentState(state);
+  return [
+    [
+      "if-shell",
+      "-F",
+      "-t",
+      pane,
+      `#{!=:#{@murmur_pane_state},${token}}`,
+      `set-option -pq -t ${pane} @murmur_pane_since ${Date.now()}`,
+      "",
+    ],
+    ["set-option", "-pq", "-t", pane, "@murmur_pane_state", token],
+  ];
+}
+
+function paneLabelCommand(pane: PaneId, label: string | null): string[] {
+  return label === null
+    ? ["set-option", "-pqu", "-t", pane, "@murmur_pane_label"]
+    : ["set-option", "-pq", "-t", pane, "@murmur_pane_label", label];
+}
+
+function sessionStateCommand(session: SessionId, state: RenderState | null): string[] {
+  return state === null
+    ? ["set-option", "-qu", "-t", session, "@murmur_session_state"]
+    : ["set-option", "-q", "-t", session, "@murmur_session_state", tmuxAgentState(state)];
+}
+
+function stateCountCommands({ totals, crew }: PublishPlan["counts"]): string[][] {
+  // Unset at zero, so a format can test presence: `#{?#{@murmur_count_blocked},...}`.
+  const set = (name: string, count: number): string[] =>
+    count > 0
+      ? ["set-option", "-gq", `@murmur_count_${name}`, String(count)]
+      : ["set-option", "-gqu", `@murmur_count_${name}`];
+  return [
+    ...RENDER_PRIORITY.map((state) => set(tmuxAgentState(state), totals[state])),
+    set("crew", crew),
+  ];
+}
+
+/** Every write of one publish, in order, before chaining. */
+export function publishCommands(window: WindowId, plan: PublishPlan): string[][] {
+  return [
+    ...plan.panes.flatMap(({ pane, state, label }) => [
+      ...paneStateCommands(pane, state),
+      paneLabelCommand(pane, label),
+    ]),
+    ...windowStateCommands(window, plan.window.state, plan.window.hasAgent),
+    ...(plan.session ? [sessionStateCommand(plan.session.session, plan.session.state)] : []),
+    ...stateCountCommands(plan.counts),
+  ];
 }
 
 /**
@@ -338,56 +459,21 @@ export const tmux: Mux = {
   },
 
   setWindowState(window, state, server?: TmuxServer, hasAgent = state !== null) {
-    runTmux(
-      state === null
-        ? ["set-window-option", "-qu", "-t", window, "@murmur_window_state"]
-        : ["set-window-option", "-q", "-t", window, "@murmur_window_state", tmuxAgentState(state)],
-      server,
-    );
-    runTmux(
-      hasAgent
-        ? ["set-window-option", "-q", "-t", window, "@murmur_window_has_agent", "1"]
-        : ["set-window-option", "-qu", "-t", window, "@murmur_window_has_agent"],
-      server,
-    );
+    for (const command of windowStateCommands(window, state, hasAgent)) runTmux(command, server);
     runTmux(["refresh-client", "-S"], server);
   },
 
   setPaneState(pane, state, server?: TmuxServer) {
-    if (state === null) {
-      runTmux(["set-option", "-pqu", "-t", pane, "@murmur_pane_state"], server);
-      runTmux(["set-option", "-pqu", "-t", pane, "@murmur_pane_since"], server);
-      return;
-    }
-
-    const token = tmuxAgentState(state);
-    runTmux(
-      [
-        "if-shell",
-        "-F",
-        "-t",
-        pane,
-        `#{!=:#{@murmur_pane_state},${token}}`,
-        `set-option -pq -t ${pane} @murmur_pane_since ${Date.now()}`,
-        "",
-      ],
-      server,
-    );
-    runTmux(["set-option", "-pq", "-t", pane, "@murmur_pane_state", token], server);
+    for (const command of paneStateCommands(pane, state)) runTmux(command, server);
   },
 
   setPaneLabel(pane, label, server?: TmuxServer) {
-    runTmux(
-      label === null
-        ? ["set-option", "-pqu", "-t", pane, "@murmur_pane_label"]
-        : ["set-option", "-pq", "-t", pane, "@murmur_pane_label", label],
-      server,
-    );
+    runTmux(paneLabelCommand(pane, label), server);
   },
 
-  sessionPanes(window, server?: TmuxServer) {
+  publishTargets(window, server?: TmuxServer) {
     const out = runTmux(
-      ["list-panes", "-s", "-t", window, "-F", "#{session_id}\t#{pane_id}"],
+      ["list-panes", "-s", "-t", window, "-F", "#{session_id}\t#{window_id}\t#{pane_id}"],
       server,
     );
     if (out === null) return null;
@@ -396,37 +482,15 @@ export const tmux: Mux = {
       .filter(Boolean)
       .map((line) => line.split("\t"));
     const session = rows[0]?.[0];
-    if (!session) return null;
     return {
-      session: asSessionId(session),
-      panes: rows.flatMap(([, pane]) => (pane ? [asPaneId(pane)] : [])),
+      session: session ? asSessionId(session) : null,
+      windowPanes: rows.flatMap(([, id, pane]) => (pane && id === window ? [asPaneId(pane)] : [])),
+      sessionPanes: rows.flatMap(([, , pane]) => (pane ? [asPaneId(pane)] : [])),
     };
   },
 
-  setSessionState(session, state, server?: TmuxServer) {
-    runTmux(
-      state === null
-        ? ["set-option", "-qu", "-t", session, "@murmur_session_state"]
-        : ["set-option", "-q", "-t", session, "@murmur_session_state", tmuxAgentState(state)],
-      server,
-    );
-  },
-
-  setStateCounts({ totals, crew }, server?: TmuxServer) {
-    // Unset at zero, so a format can test presence: `#{?#{@murmur_count_blocked},...}`.
-    const set = (name: string, count: number): string[] =>
-      count > 0
-        ? ["set-option", "-gq", `@murmur_count_${name}`, String(count), ";"]
-        : ["set-option", "-gqu", `@murmur_count_${name}`, ";"];
-    runTmux(
-      [
-        ...RENDER_PRIORITY.flatMap((state) => set(tmuxAgentState(state), totals[state])),
-        ...set("crew", crew),
-        "refresh-client",
-        "-S",
-      ],
-      server,
-    );
+  publish(window, plan, server?: TmuxServer) {
+    for (const call of chainedTmuxCalls(publishCommands(window, plan))) runTmux(call, server);
   },
 
   attach(pane, server?: TmuxServer) {

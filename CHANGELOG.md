@@ -11,6 +11,12 @@ panel and picker need. On a loaded host `murmur status --json` dropped from
 about 245ms to 175ms (median of 20 runs), and the status-line poller and tmux
 hooks that run it constantly gain the same saving.
 
+**Faster state publishing.** Every time an agent changes state, or you focus a
+pane, murmur updates the tmux status options. That update now uses one tmux
+read and one tmux write, where it used to start about a dozen tmux processes
+per window. Pi no longer stalls on it, and focus changes put less load on the
+tmux server. The option values are unchanged.
+
 ## 1.2.1
 
 Upgrade with `npm i -g @mu-crew/murmur@1.2.1`, then `/reload` in running pi

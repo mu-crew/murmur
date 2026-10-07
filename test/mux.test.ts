@@ -2,6 +2,8 @@ import { expect, test, vi } from "vitest";
 import { DASH_PANE_OPTION } from "../src/goto.js";
 import { asPaneId, asSessionId, asWindowId } from "../src/ids.js";
 import {
+  chainArg,
+  chainedTmuxCalls,
   chosenWindowName,
   conventionalTmuxDirectory,
   deriveTmuxServer,
@@ -168,37 +170,67 @@ test("state reads and writes select the location's private server", () => {
   ]);
 });
 
-test("session state is session-scoped and uses the tmux working token", () => {
+const COUNTS = {
+  totals: { crashed: 0, error: 1, blocked: 2, done: 0, running: 1, waiting: 0, idle: 3 },
+  crew: 4,
+};
+
+test("publishTargets reads the window's panes and its whole session in one call", () => {
   tmuxCalls.length = 0;
+  tmuxReplies.length = 0;
+  tmuxReplies.push("$2\t@7\t%1\n$2\t@8\t%5\n$2\t@7\t%6\n");
 
-  tmux.setSessionState(asSessionId("$3"), "running");
-  tmux.setSessionState(asSessionId("$4"), null);
-
+  expect(tmux.publishTargets(asWindowId("@7"), { kind: "label", value: "mule" })).toEqual({
+    session: "$2",
+    windowPanes: ["%1", "%6"],
+    sessionPanes: ["%1", "%5", "%6"],
+  });
   expect(tmuxCalls).toEqual([
-    ["set-option", "-q", "-t", "$3", "@murmur_session_state", "working"],
-    ["set-option", "-qu", "-t", "$4", "@murmur_session_state"],
+    [
+      ...["-L", "mule", "list-panes", "-s", "-t", "@7"],
+      ...["-F", "#{session_id}\t#{window_id}\t#{pane_id}"],
+    ],
   ]);
 });
 
-test("sessionPanes names the window's session and every pane in it", () => {
-  tmuxCalls.length = 0;
+test("publishTargets is unknown, not empty, when tmux cannot list the window", () => {
   tmuxReplies.length = 0;
-  tmuxReplies.push("$2\t%1\n$2\t%5\n");
+  tmuxReplies.push("THROW:can't find window: @7");
 
-  expect(tmux.sessionPanes(asWindowId("@7"))).toEqual({ session: "$2", panes: ["%1", "%5"] });
-  expect(tmuxCalls).toEqual([["list-panes", "-s", "-t", "@7", "-F", "#{session_id}\t#{pane_id}"]]);
+  expect(tmux.publishTargets(asWindowId("@7"))).toBeNull();
 });
 
-test("state counts go out in one tmux call, unset at zero", () => {
+test("a whole publish is one chained tmux write ending in one repaint", () => {
+  const dateNow = vi.spyOn(Date, "now").mockReturnValue(1790000000000);
   tmuxCalls.length = 0;
 
-  tmux.setStateCounts({
-    totals: { crashed: 0, error: 1, blocked: 2, done: 0, running: 1, waiting: 0, idle: 3 },
-    crew: 4,
-  });
+  tmux.publish(
+    asWindowId("@7"),
+    {
+      panes: [
+        { pane: asPaneId("%7"), state: "running", label: "worker-1" },
+        { pane: asPaneId("%8"), state: null, label: null },
+      ],
+      window: { state: "blocked", hasAgent: true },
+      session: { session: asSessionId("$3"), state: "running" },
+      counts: COUNTS,
+    },
+    { kind: "label", value: "mule" },
+  );
 
   expect(tmuxCalls).toEqual([
     [
+      ...["-L", "mule"],
+      ...["if-shell", "-F", "-t", "%7", "#{!=:#{@murmur_pane_state},working}"],
+      ...["set-option -pq -t %7 @murmur_pane_since 1790000000000", "", ";"],
+      ...["set-option", "-pq", "-t", "%7", "@murmur_pane_state", "working", ";"],
+      ...["set-option", "-pq", "-t", "%7", "@murmur_pane_label", "worker-1", ";"],
+      ...["set-option", "-pqu", "-t", "%8", "@murmur_pane_state", ";"],
+      ...["set-option", "-pqu", "-t", "%8", "@murmur_pane_since", ";"],
+      ...["set-option", "-pqu", "-t", "%8", "@murmur_pane_label", ";"],
+      ...["set-window-option", "-q", "-t", "@7", "@murmur_window_state", "blocked", ";"],
+      ...["set-window-option", "-q", "-t", "@7", "@murmur_window_has_agent", "1", ";"],
+      ...["set-option", "-q", "-t", "$3", "@murmur_session_state", "working", ";"],
       ...["set-option", "-gqu", "@murmur_count_crashed", ";"],
       ...["set-option", "-gq", "@murmur_count_error", "1", ";"],
       ...["set-option", "-gq", "@murmur_count_blocked", "2", ";"],
@@ -210,6 +242,75 @@ test("state counts go out in one tmux call, unset at zero", () => {
       ...["refresh-client", "-S"],
     ],
   ]);
+  dateNow.mockRestore();
+});
+
+test("a publish without a session leaves the session option alone", () => {
+  tmuxCalls.length = 0;
+
+  tmux.publish(asWindowId("@7"), {
+    panes: [],
+    window: { state: null, hasAgent: false },
+    session: null,
+    counts: COUNTS,
+  });
+
+  expect(tmuxCalls).toHaveLength(1);
+  expect(tmuxCalls[0]?.join(" ")).not.toContain("@murmur_session_state");
+  expect(tmuxCalls[0]?.slice(0, 12)).toEqual([
+    ...["set-window-option", "-qu", "-t", "@7", "@murmur_window_state", ";"],
+    ...["set-window-option", "-qu", "-t", "@7", "@murmur_window_has_agent", ";"],
+  ]);
+});
+
+// tmux reads an argv element ending in `;` as a separator: a label of `;`
+// aborted the rest of the chain, and `worker;` lost its `;`.
+test.each([
+  [";", "\\;"],
+  ["worker;", "worker\\;"],
+  ["a ; b", "a ; b"],
+])("a pane label %j cannot split the chain", (label, sent) => {
+  tmuxCalls.length = 0;
+
+  tmux.publish(asWindowId("@7"), {
+    panes: [{ pane: asPaneId("%7"), state: null, label }],
+    window: { state: null, hasAgent: true },
+    session: null,
+    counts: COUNTS,
+  });
+
+  const [call] = tmuxCalls;
+  expect(call).toContain(sent);
+  expect(call?.filter((arg) => arg === ";")).toHaveLength(13);
+});
+
+test("chainArg escapes only a trailing semicolon", () => {
+  expect(chainArg(";")).toBe("\\;");
+  expect(chainArg("worker;")).toBe("worker\\;");
+  expect(chainArg("a;b")).toBe("a;b");
+  expect(chainArg("")).toBe("");
+});
+
+test("a chain too long for one tmux command splits, with the repaint last", () => {
+  const commands = Array.from({ length: 400 }, (_, index) => [
+    "set-option",
+    "-pq",
+    "-t",
+    `%${index}`,
+    "@murmur_pane_label",
+    "x".repeat(40),
+  ]);
+
+  const calls = chainedTmuxCalls(commands);
+
+  expect(calls.length).toBeGreaterThan(1);
+  for (const call of calls) {
+    expect(call.join(" ").length).toBeLessThan(16_000);
+    expect(call.at(-1)).not.toBe(";");
+  }
+  expect(calls.flat().filter((arg) => arg === "@murmur_pane_label")).toHaveLength(400);
+  expect(calls.at(-1)?.slice(-2)).toEqual(["refresh-client", "-S"]);
+  expect(calls.flat().filter((arg) => arg === "refresh-client")).toHaveLength(1);
 });
 
 // The picker's `agent` column showed `Python`, `node` and `zsh` for three real
@@ -293,4 +394,49 @@ test("a capture asks tmux for escape sequences", () => {
   expect(tmux.capture(asPaneId("%7"), 40)).toBe("out");
 
   expect(tmuxCalls).toEqual([["capture-pane", "-p", "-e", "-t", "%7", "-S", "-40"]]);
+});
+
+test("publishAgentStates is one tmux read and one tmux write", async () => {
+  const { mkdtempSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { publishAgentStates } = await import("../src/agent-state.js");
+  const { openStore } = await import("../src/store.js");
+  process.env.MURMUR_STATE_DIR = mkdtempSync(join(tmpdir(), "murmur-mux-publish-"));
+  const store = openStore();
+  const location = {
+    server: { kind: "default" as const },
+    session: asSessionId("$1"),
+    window: asWindowId("@1"),
+    pane: asPaneId("%1"),
+    session_name: null,
+    window_name: null,
+  };
+  store.claimAgent({
+    location,
+    owner_pid: process.pid,
+    meta: {
+      agent_name: "worker-1",
+      pi_session: null,
+      workstream: null,
+      role: null,
+      cli: "pi",
+      driver: "orchestrated",
+    },
+  });
+  tmuxCalls.length = 0;
+  tmuxReplies.length = 0;
+  tmuxReplies.push("$1\t@1\t%1\n$1\t@1\t%2\n$1\t@2\t%3\n");
+
+  try {
+    expect(publishAgentStates(asWindowId("@1"), tmux, store)).toBe(true);
+  } finally {
+    store.close();
+  }
+
+  expect(tmuxCalls).toHaveLength(2);
+  expect(tmuxCalls[0]?.slice(0, 3)).toEqual(["-L", "default", "list-panes"]);
+  expect(tmuxCalls[1]?.slice(-2)).toEqual(["refresh-client", "-S"]);
+  expect(tmuxCalls[1]?.join(" ")).toContain("-t %2 @murmur_pane_label");
+  expect(tmuxCalls[1]?.join(" ")).not.toContain("%3");
 });

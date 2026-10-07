@@ -1,5 +1,22 @@
-import type { PaneId } from "../../src/ids.js";
-import type { Mux } from "../../src/mux.js";
+import type { PaneId, SessionId, WindowId } from "../../src/ids.js";
+import type { Mux, PublishPlan } from "../../src/mux.js";
+import type { TmuxServer } from "../../src/types.js";
+import type { RenderState } from "../../src/view.js";
+
+/**
+ * The per-step hooks a publish used to call one tmux process at a time. The
+ * real Mux now reads once (`publishTargets`) and writes once (`publish`); the
+ * fake's defaults for those two replay through these hooks, so a test asserts
+ * the option values a publish writes rather than the argv that carries them.
+ */
+export type PublishHooks = {
+  sessionPanes?: (
+    window: WindowId,
+    server?: TmuxServer,
+  ) => { session: SessionId; panes: PaneId[] } | null;
+  setSessionState?: (session: SessionId, state: RenderState | null, server?: TmuxServer) => void;
+  setStateCounts?: (counts: PublishPlan["counts"], server?: TmuxServer) => void;
+};
 
 /**
  * A Mux that answers every method with a harmless default.
@@ -25,17 +42,55 @@ import type { Mux } from "../../src/mux.js";
  * IF YOUR TEST RESOLVES A WINDOW, STUB THIS TOO. A passing badge assertion
  * against the default is not evidence.
  */
-export function fakeMux(over: Partial<Mux> = {}): Mux {
+/**
+ * Adds `publishTargets` and `publish` to a plain `vi.doMock` tmux object,
+ * replaying through whichever old per-step methods it defines -- the same
+ * replay `fakeMux` does, for mocks that deliberately stub only a few methods.
+ */
+export function withPublish<T extends object>(
+  mock: T,
+): T & Pick<Mux, "publishTargets" | "publish"> {
+  // The mocks spell ids as plain strings; the replay only passes them through.
+  const typed = mock as Partial<Mux> & PublishHooks;
+  const replay = fakeMux(typed);
   return {
+    ...mock,
+    publishTargets: (window, server) =>
+      typed.panesInWindow ? replay.publishTargets(window, server) : null,
+    publish: (window, plan, server) => replay.publish(window, plan, server),
+  };
+}
+
+export function fakeMux(over: Partial<Mux> & PublishHooks = {}): Mux {
+  const { sessionPanes, setSessionState, setStateCounts, ...rest } = over;
+  const mux: Mux = {
     currentWindow: () => null,
     livePanes: () => new Set<PaneId>(),
     localPaneProcesses: () => [],
     setWindowState: () => {},
     setPaneState: () => {},
     setPaneLabel: () => {},
-    sessionPanes: () => null,
-    setSessionState: () => {},
-    setStateCounts: () => {},
+    // Read at call time through `mux`, so a test that reassigns a method
+    // after construction still sees its override.
+    publishTargets: (window, server) => {
+      const panes = mux.panesInWindow(window, server);
+      if (panes === null) return null;
+      const session = sessionPanes?.(window, server) ?? null;
+      return {
+        session: session?.session ?? null,
+        windowPanes: panes,
+        sessionPanes: session?.panes ?? [],
+      };
+    },
+    publish: (window, plan, server) => {
+      for (const { pane, state, label } of plan.panes) {
+        mux.setPaneState(pane, state, server);
+        mux.setPaneLabel(pane, label, server);
+      }
+      mux.setWindowState(window, plan.window.state, server, plan.window.hasAgent);
+      if (plan.session) setSessionState?.(plan.session.session, plan.session.state, server);
+      setStateCounts?.(plan.counts, server);
+    },
     attach: () => true,
     capture: () => null,
     windowForPane: () => null,
@@ -59,6 +114,7 @@ export function fakeMux(over: Partial<Mux> = {}): Mux {
     setOption: () => {},
     showTarget: () => true,
     openDash: () => null,
-    ...over,
+    ...rest,
   };
+  return mux;
 }
