@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { realpathSync } from "node:fs";
+import { readFileSync, realpathSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { DASH_PANE_OPTION, JUMP_CLIENT_OPTION, JUMP_HOOK_INDEX } from "./goto.js";
 import {
@@ -333,6 +333,26 @@ export function exactPaneTarget(session: string): string {
   return `=${session}:`;
 }
 
+/**
+ * One process's argv from `<procRoot>/<pid>/cmdline`, joined with single
+ * spaces, or null when the pid is gone, unreadable, or has an empty cmdline (a
+ * zombie or kernel thread). The caller has already checked `pid` is all digits.
+ *
+ * argv ONLY: never read `/proc/<pid>/environ`. The environment carries every
+ * API key in the pane, and the matcher needs none of it -- see the `ps ww`
+ * note in `localPaneProcesses`.
+ */
+export function procArgv(pid: string, procRoot = "/proc"): string | null {
+  let raw: string;
+  try {
+    raw = readFileSync(join(procRoot, pid, "cmdline"), "utf8");
+  } catch {
+    return null;
+  }
+  const argv = raw.replace(/\0+$/, "").split("\0").join(" ");
+  return argv || null;
+}
+
 export function tmuxAgentState(state: RenderState): string {
   // tmux formats spell active work "working"; murmur's model spells it
   // "running".
@@ -413,12 +433,26 @@ export const tmux: Mux = {
     if (!out) return [];
     const rows = out.split("\n").flatMap((line) => {
       const [pane, currentCommand, pid] = line.split("\t");
-      // A pid is all digits, and it is interpolated into a `ps` argument list --
-      // so this is the argv boundary, checked rather than trusted.
+      // A pid is all digits, and it is interpolated into a `ps` argument list
+      // or a `/proc/<pid>` path -- so this is the argv boundary and the guard
+      // against path traversal, checked rather than trusted.
       if (!pane || !currentCommand || !pid || !/^\d+$/.test(pid)) return [];
       return [{ pane: asPaneId(pane), current_command: currentCommand, pid }];
     });
     if (rows.length === 0) return [];
+
+    // On Linux, read argv straight from /proc. procps `ps` scans ALL of /proc
+    // whatever pids it is given: measured at 79ms for 81 pids on a host with
+    // 780 processes, against 0.92ms reading the 81 cmdline files. A pid that is
+    // gone or has no argv just loses its row.
+    if (process.platform === "linux") {
+      return rows.flatMap((row) => {
+        const arguments_ = procArgv(row.pid);
+        return arguments_
+          ? [{ pane: row.pane, current_command: row.current_command, arguments: arguments_ }]
+          : [];
+      });
+    }
 
     // ONE `ps` for every pane, not one per pane. This runs on every status tick,
     // so a fork per pane was a dozen forks a second on a busy machine to find a
@@ -439,9 +473,10 @@ export const tmux: Mux = {
         stdio: ["ignore", "pipe", "ignore"],
       });
     } catch {
-      // ps refuses the whole call if ANY pid is gone, which is ordinary: a pane
-      // can die between the tmux read and this one. No attachment hint is the
-      // harmless answer, same as every other failure on this path.
+      // BSD/macOS ps can refuse the whole call when a pid is gone, which is
+      // ordinary: a pane can die between the tmux read and this one. No
+      // attachment hint is the harmless answer, same as every other failure on
+      // this path.
       return [];
     }
 

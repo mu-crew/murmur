@@ -1,3 +1,6 @@
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { expect, test, vi } from "vitest";
 import { DASH_PANE_OPTION } from "../src/goto.js";
 import { asPaneId, asSessionId, asWindowId } from "../src/ids.js";
@@ -8,6 +11,7 @@ import {
   conventionalTmuxDirectory,
   deriveTmuxServer,
   pidAlive,
+  procArgv,
   tmux,
   tmuxAgentState,
   tmuxArgs,
@@ -440,3 +444,49 @@ test("publishAgentStates is one tmux read and one tmux write", async () => {
   expect(tmuxCalls[1]?.join(" ")).toContain("-t %2 @murmur_pane_label");
   expect(tmuxCalls[1]?.join(" ")).not.toContain("%3");
 });
+
+function fakeProc(entries: Record<string, string>): string {
+  const root = mkdtempSync(join(tmpdir(), "murmur-proc-"));
+  for (const [pid, cmdline] of Object.entries(entries)) {
+    mkdirSync(join(root, pid));
+    writeFileSync(join(root, pid, "cmdline"), cmdline);
+  }
+  return root;
+}
+
+test("procArgv joins NUL-separated argv with single spaces", () => {
+  const root = fakeProc({ "42": "ssh\0-t\0host\0mu attach\0", "43": "pi\0\0\0" });
+  expect(procArgv("42", root)).toBe("ssh -t host mu attach");
+  expect(procArgv("43", root)).toBe("pi");
+});
+
+test("procArgv skips a gone pid and an empty cmdline", () => {
+  const root = fakeProc({ "7": "" });
+  expect(procArgv("7", root)).toBeNull();
+  expect(procArgv("999", root)).toBeNull();
+});
+
+// Uses the real /proc with this test's own pid, so it runs only where /proc exists.
+test.skipIf(!existsSync(`/proc/${process.pid}/cmdline`))(
+  "localPaneProcesses reads argv from /proc on Linux, without ps",
+  () => {
+    const platform = Object.getOwnPropertyDescriptor(process, "platform");
+    Object.defineProperty(process, "platform", { value: "linux" });
+    tmuxCalls.length = 0;
+    tmuxReplies.length = 0;
+    tmuxReplies.push(`%1\tnode\t${process.pid}\n%2\tzsh\t999999999\n`);
+    try {
+      expect(tmux.localPaneProcesses()).toEqual([
+        {
+          pane: asPaneId("%1"),
+          current_command: "node",
+          arguments: procArgv(String(process.pid)),
+        },
+      ]);
+      // The tmux read only: no `ps` call.
+      expect(tmuxCalls).toHaveLength(1);
+    } finally {
+      if (platform) Object.defineProperty(process, "platform", platform);
+    }
+  },
+);
