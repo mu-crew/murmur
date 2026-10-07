@@ -14,6 +14,7 @@ import { type ReactElement, useCallback, useEffect, useMemo, useRef, useState } 
 import { type JumpResult, jumpToAgent } from "../agents.js";
 import { ssh } from "../channel.js";
 import { COLLECT_FLOOR_MS } from "../collector.js";
+import { foldNavigation, NAVIGATION_KEYS, splitNavigationChunk } from "../dash-keys.js";
 import {
   type ClickMemory,
   classifyClick,
@@ -421,6 +422,16 @@ export function App({
   useInput((input, key) => {
     // Mouse packets reach Ink too; the stdin listener above owns them.
     if (isMouseInput(input)) return;
+    // ink merges queued letters into one input when the loop is busy.
+    const chunk = helpOpen ? null : splitNavigationChunk(input, NAVIGATION_KEYS);
+    if (chunk) {
+      select(
+        foldNavigation(chunk, selectedIndex, (index, ch) =>
+          moveSidepanelSelection(index, ch as "j" | "k" | "g" | "G", rows.length),
+        ),
+      );
+      return;
+    }
     const action = routeSidepanelInput(helpOpen, input, key, selected !== undefined);
     if (action.type === "help-open") {
       setHelpOpen(true);
