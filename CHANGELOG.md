@@ -19,6 +19,17 @@ directory, or in `NODE_COMPILE_CACHE` if you set it. Set
 `NODE_DISABLE_COMPILE_CACHE=1` to turn it off. Older Node versions have no
 `module.enableCompileCache`, so nothing changes there.
 
+**Faster picker.** `murmur pick` (prefix+a) now loads the text-width library
+only when a row holds something other than plain ASCII, which is rare. The
+time until the list appears dropped from about 91ms to 71ms median, and from
+96ms to 76ms at p90 (30 interleaved runs, lightly loaded host).
+
+**No more stalls while another murmur process writes.** Opening the store used
+to wait for any other process holding a write lock, or for a reader pinning
+the write-ahead log, even when there was nothing to upgrade. The picker, the
+status line and every hook paid that wait: the picker took about 320ms to
+appear behind a held lock. It now takes about 72ms either way.
+
 **Faster state publishing.** Every time an agent changes state, or you focus a
 pane, murmur updates the tmux status options. That update now uses one tmux
 read and one tmux write, where it used to start about a dozen tmux processes

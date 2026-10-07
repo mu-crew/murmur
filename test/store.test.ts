@@ -755,6 +755,50 @@ test("addPeer corrects a target without discarding the cache", () => {
   expect(s.removePeer("dev")).toBe(false);
 });
 
+// --- opening a current store waits on nobody ----------------------------
+
+test("opening a current store does not wait for another connection's write lock", () => {
+  // The schema transaction is `.immediate`, so taking it on every open queued
+  // each read path -- the picker, the status bar -- behind whichever writer held
+  // the lock, for up to busy_timeout. Before the fix this blocked the full 5s
+  // and then threw SQLITE_BUSY.
+  store().close();
+  const writer = new Database(dbPath());
+  try {
+    writer.exec("BEGIN IMMEDIATE");
+    const started = Date.now();
+    const opened = store();
+    expect(Date.now() - started).toBeLessThan(1_000);
+    expect(opened.peers()).toEqual([]);
+  } finally {
+    writer.exec("ROLLBACK");
+    writer.close();
+  }
+});
+
+test("opening a current store does not wait for a reader pinning the WAL", () => {
+  // `wal_checkpoint(TRUNCATE)` waits for every reader to leave the WAL. A
+  // reader mid-transaction, with frames written after its snapshot, made every
+  // open stall for the full busy_timeout.
+  store().addPeer("dev", "dev.example");
+  const writer = new Database(dbPath());
+  const reader = new Database(dbPath());
+  try {
+    writer.pragma("wal_autocheckpoint = 0");
+    reader.exec("BEGIN");
+    reader.prepare("SELECT COUNT(*) FROM peers").get();
+    writer.prepare("UPDATE peers SET target = 'dev2.example'").run();
+    const started = Date.now();
+    const opened = store();
+    expect(Date.now() - started).toBeLessThan(1_000);
+    expect(opened.peers().map((peer) => peer.target)).toEqual(["dev2.example"]);
+  } finally {
+    reader.exec("COMMIT");
+    reader.close();
+    writer.close();
+  }
+});
+
 // --- constraints, asserted where SQLite itself is the enforcer -----------
 
 test("SQLite refuses a second agent row for one pane", () => {

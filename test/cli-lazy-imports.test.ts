@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { expect, test } from "vitest";
 import { builtArtifact } from "./helpers/built.js";
@@ -27,14 +27,27 @@ function staticClosure(entry: string): Map<string, string> {
   return seen;
 }
 
-test("no module every command loads imports string-width", () => {
-  const closure = staticClosure(builtArtifact("cli.js"));
+function stringWidthImporters(entry: string): string[] {
+  const closure = staticClosure(entry);
   // Sanity: the walk really does follow chunk edges, or the assertion is vacuous.
   expect(closure.size).toBeGreaterThan(1);
-  const offenders = [...closure]
+  return [...closure]
     .filter(([, source]) =>
       /from\s+["']string-width["']|import\s+["']string-width["']/.test(source),
     )
     .map(([file]) => file);
-  expect(offenders).toEqual([]);
+}
+
+test("no module every command loads imports string-width", () => {
+  expect(stringWidthImporters(builtArtifact("cli.js"))).toEqual([]);
+});
+
+test("the picker does not load string-width for ASCII rows", () => {
+  // Loading it was the largest single cost of opening `murmur pick` (~50ms of
+  // regex and segmenter construction on a loaded host), for rows that are
+  // almost always plain ASCII. `ansi-width.ts` requires it on first non-ASCII
+  // text instead, which this static walk deliberately does not follow.
+  const chunk = readdirSync(builtArtifact()).find((file) => /^pick-[\w-]+\.js$/.test(file));
+  expect(chunk).toBeDefined();
+  expect(stringWidthImporters(builtArtifact(chunk as string))).toEqual([]);
 });
