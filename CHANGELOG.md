@@ -23,6 +23,11 @@ library delivered them as one chunk, which matched no binding. They now move
 the selection (or scroll the preview) exactly as if pressed one at a time. Text
 in the filter, the prompt and the help overlay is unchanged.
 
+**Snappier dash keys with many panes.** The dash now remembers how wide each
+row cell is instead of re-measuring every row on every keystroke, and it no
+longer re-clips an unchanged preview when the selection moves. Laying out 73
+compact rows dropped from about 20ms to under 1ms per render.
+
 ## 1.2.1
 
 Upgrade with `npm i -g @mu-crew/murmur@1.2.1`, then `/reload` in running pi

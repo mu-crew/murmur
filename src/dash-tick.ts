@@ -1,7 +1,8 @@
-import { clipToWidth, visibleWidth } from "./ansi-width.js";
+import { clipToWidth } from "./ansi-width.js";
 import type { DashSort } from "./dash-prefs.js";
 import type { Status } from "./status.js";
 import { age, type PaneView } from "./view.js";
+import { cachedWidth } from "./width-cache.js";
 
 export function paneFingerprint(pane: PaneView): string {
   return JSON.stringify([
@@ -380,7 +381,7 @@ const COMPACT_SUMMARY_MIN = 8;
 const COMPACT_SEPARATOR = "  ";
 
 function compactCell(value: string, width: number): string {
-  const visible = visibleWidth(value);
+  const visible = cachedWidth(value);
   if (visible <= width) return value + " ".repeat(width - visible);
   // `clipToWidth` deliberately ignores a width of zero -- a blank glance is
   // worse than an overflowing one -- but a zero-width COLUMN means the layout
@@ -396,7 +397,7 @@ export function compactRowLayout(
   width: number,
 ): CompactRowLayout {
   const measured = (key: keyof CompactRowFields, cap = Number.POSITIVE_INFINITY) =>
-    Math.min(cap, Math.max(0, ...rows.map((row) => visibleWidth(row[key]))));
+    Math.min(cap, Math.max(0, ...rows.map((row) => cachedWidth(row[key]))));
   const widths = {
     state: Math.max(1, measured("state")),
     agent: Math.max(1, measured("agent", COMPACT_CAPS.agent)),
@@ -441,7 +442,7 @@ export function compactRowLayout(
     for (const row of rows) {
       const parts = row.summary.split(SUMMARY_SEPARATOR).slice(0, -1);
       parts.forEach((part, index) => {
-        const size = Math.min(COMPACT_CAPS.segment, visibleWidth(part));
+        const size = Math.min(COMPACT_CAPS.segment, cachedWidth(part));
         segments[index] = Math.max(segments[index] ?? 0, size);
       });
     }
@@ -485,7 +486,7 @@ export function compactRowParts(
   ];
   let line = `${marker}${cells.join(COMPACT_SEPARATOR)}`;
   if (layout.summary) {
-    const remaining = layout.width - visibleWidth(line) - COMPACT_SEPARATOR.length;
+    const remaining = layout.width - cachedWidth(line) - COMPACT_SEPARATOR.length;
     const summary = alignedSummary(row.summary, layout.segments);
     line += `${COMPACT_SEPARATOR}${compactCell(summary, Math.max(0, remaining))}`;
   }
