@@ -26,10 +26,17 @@ without `murmur init` the extension loads and records nothing. Agents must run
 Looking at a finished agent clears its badge. On every node, in `.tmux.conf`:
 
 ```tmux
-set-hook -g after-select-pane      "run-shell -b 'murmur clear --pane #{pane_id}'"
-set-hook -g after-select-window    "run-shell -b 'murmur clear --pane #{pane_id}'"
-set-hook -g client-session-changed "run-shell -b 'murmur clear --pane #{pane_id}'"
+# Run murmur only when the pane, its window or its session shows a badge.
+%hidden MURMUR_ATTN="#{||:#{m/r:^(done|blocked|error|crashed)$,#{@murmur_pane_state}},#{||:#{m/r:^(done|blocked|error|crashed)$,#{@murmur_window_state}},#{m/r:^(done|blocked|error|crashed)$,#{@murmur_session_state}}}}"
+%hidden MURMUR_CLEAR="run-shell -b 'murmur clear --pane #{pane_id}'"
+set-hook -g after-select-pane      "if -F '$MURMUR_ATTN' \"$MURMUR_CLEAR\""
+set-hook -g after-select-window    "if -F '$MURMUR_ATTN' \"$MURMUR_CLEAR\""
+set-hook -g client-session-changed "if -F '$MURMUR_ATTN' \"$MURMUR_CLEAR\""
 ```
+
+The gate skips a Node start on switches with nothing to acknowledge. Window and
+session states count too, so orphan badges (from a pane that is gone) still
+clear.
 
 These are per node and not optional. `murmur clear` is what acknowledges an
 attention request. A node's own snapshot is what every peer reads — without
