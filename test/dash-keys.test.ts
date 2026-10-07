@@ -1,7 +1,7 @@
 import { expect, test } from "vitest";
 import { foldNavigation, previewStep, splitNavigationChunk } from "../src/dash-keys.js";
 import { clampGlanceScroll } from "../src/dash-mouse.js";
-import { moveIndex } from "../src/dash-tick.js";
+import { dashNavigation, moveIndex } from "../src/dash-tick.js";
 
 const NAV = "jkgG";
 
@@ -33,15 +33,34 @@ test("folding equals pressing the keys one at a time", () => {
   expect(foldNavigation(["j", "j", "j"], 8, step)).toBe(9);
 });
 
-test("preview: folded Gk equals G then k through the single-key rules", () => {
-  const lines = 13;
-  const visible = 1;
-  // G pins to the end with the unclamped sentinel, as the single-key path does.
-  expect(previewStep(4, "G", lines, visible)).toBe(Number.MAX_SAFE_INTEGER);
-  // k then clamps from the sentinel.
-  const separate = clampGlanceScroll(Number.MAX_SAFE_INTEGER - 1, lines, visible);
-  const step = (o: number, ch: string) => previewStep(o, ch, lines, visible);
-  expect(foldNavigation(["G", "k"], 4, step)).toBe(separate);
-  expect(foldNavigation(["g", "j", "j"], 7, step)).toBe(2);
-  expect(foldNavigation(["k"], 0, step)).toBe(0);
-});
+// The single-key path in dash.tsx: dashNavigation, then clamp or pin to an edge.
+// Kept independent of previewStep so the table checks previewStep against it.
+function singleKeyPreview(offset: number, ch: string, lines: number, visible: number): number {
+  const navKey = ch === "j" ? "down" : ch === "k" ? "up" : ch === "g" ? "home" : "end";
+  const navigation = dashNavigation("preview", navKey, 1, visible);
+  if (navigation.type === "preview-edge") {
+    return navigation.edge === "top" ? 0 : Number.MAX_SAFE_INTEGER;
+  }
+  if (navigation.type !== "preview") throw new Error(`unexpected ${navigation.type}`);
+  return clampGlanceScroll(offset + navigation.offset, lines, visible);
+}
+
+test.each(["Gk", "gj", "jG", "gjj", "kG"])(
+  "preview: folded %s equals the single-key rules one at a time",
+  (keys) => {
+    const lines = 13;
+    const visible = 1;
+    const chunk = splitNavigationChunk(keys, NAV);
+    expect(chunk).toEqual([...keys]);
+    for (const start of [0, 4, 7, 12]) {
+      const folded = foldNavigation(chunk ?? [], start, (o, ch) =>
+        previewStep(o, ch, lines, visible),
+      );
+      const separate = [...keys].reduce((o, ch) => singleKeyPreview(o, ch, lines, visible), start);
+      expect(folded).toBe(separate);
+      expect(clampGlanceScroll(folded, lines, visible)).toBe(
+        clampGlanceScroll(separate, lines, visible),
+      );
+    }
+  },
+);
