@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
-import { closeSync, mkdirSync, openSync, rmSync } from "node:fs";
+import { closeSync, openSync, rmSync } from "node:fs";
 import { dirname } from "node:path";
 import Database from "better-sqlite3";
+import { ensureDir } from "./dirs.js";
 import type { NodeIdentity } from "./identity.js";
 import { asPaneId, asSessionId, asWindowId } from "./ids.js";
 import { currentJumpCommand, defaultJumpCommand } from "./jump-command.js";
@@ -540,7 +541,7 @@ function attentionOrder(left: SnapshotAttention, right: SnapshotAttention): numb
  */
 export function openStore(): Store {
   const path = dbPath();
-  mkdirSync(dirname(path), { recursive: true });
+  ensureDir(dirname(path));
 
   // Salvage, decide and delete under ONE lock, because deleting the database
   // FILE is the operation SQLite cannot serialise for us: there is no handle to

@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { join } from "node:path";
+import { ensureDir } from "./dirs.js";
 import { stateDir } from "./paths.js";
 
 export type NodeIdentity = {
@@ -42,7 +43,7 @@ export function loadIdentity(): NodeIdentity | null {
 }
 
 function write(identity: NodeIdentity): NodeIdentity {
-  mkdirSync(stateDir(), { recursive: true });
+  ensureDir(stateDir());
   writeFileSync(identityPath(), `${JSON.stringify(identity, null, 2)}\n`);
   cache = { path: identityPath(), identity };
   return identity;
