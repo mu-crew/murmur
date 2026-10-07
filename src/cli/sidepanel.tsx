@@ -12,6 +12,7 @@ import {
 } from "ink";
 import { type ReactElement, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { type JumpResult, jumpToAgent } from "../agents.js";
+import { ensureStringWidth } from "../ansi-width.js";
 import { ssh } from "../channel.js";
 import { COLLECT_FLOOR_MS } from "../collector.js";
 import { foldNavigation, NAVIGATION_KEYS, splitNavigationChunk } from "../dash-keys.js";
@@ -563,6 +564,7 @@ export async function runSidepanelRenderer(): Promise<void> {
   }
   const identity = requireIdentity();
   if (!identity) return;
+  await ensureStringWidth();
   const dashStore = openDashStore();
   const refreshTracker = new SidepanelRefreshTracker();
   try {

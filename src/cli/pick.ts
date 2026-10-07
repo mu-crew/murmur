@@ -1,5 +1,6 @@
 import { spawn, spawnSync } from "node:child_process";
 import { type JumpResult, jumpToAgent } from "../agents.js";
+import { ensureStringWidth } from "../ansi-width.js";
 import { hasWarmSocket } from "../channel.js";
 import { renderJumpCommand } from "../jump-command.js";
 import { type Mux, tmux } from "../mux.js";
@@ -307,6 +308,7 @@ async function runRows(store: Store, options: PickOptions = {}): Promise<void> {
  * `pick-register.ts` so that other commands never load the picker's rendering.
  */
 export async function runPickCommand(options: PickOptions & { rows?: boolean }): Promise<void> {
+  await ensureStringWidth();
   const store = openStore();
   try {
     if (options.rows) await runRows(store, options);

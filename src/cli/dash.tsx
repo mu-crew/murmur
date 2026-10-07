@@ -10,6 +10,7 @@ import {
 } from "ink";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { agentLabel, jumpToAgent, terminalText } from "../agents.js";
+import { ensureStringWidth } from "../ansi-width.js";
 import { ssh } from "../channel.js";
 import { COLLECT_FLOOR_MS } from "../collector.js";
 import {
@@ -1200,6 +1201,7 @@ export async function runDash(options: { goto?: boolean }): Promise<void> {
   if (!requireDashTmux()) return;
   const identity = requireIdentity();
   if (!identity) return;
+  await ensureStringWidth();
   const dashStore = openDashStore();
   const previousTitle = process.title;
   process.title = "murmur";
