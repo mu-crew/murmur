@@ -10,7 +10,7 @@ import { registerJumpCommand } from "./cli/jump-command.js";
 import { registerLink } from "./cli/link.js";
 import { registerNotify } from "./cli/notify.js";
 import { registerPeer } from "./cli/peer.js";
-import { registerPick } from "./cli/pick.js";
+import { registerPick } from "./cli/pick-register.js";
 import { registerSidepanel } from "./cli/sidepanel-register.js";
 import { registerStatus } from "./cli/status.js";
 import { VERSION } from "./index.js";

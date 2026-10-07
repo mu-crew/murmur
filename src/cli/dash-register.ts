@@ -6,7 +6,7 @@ import type { Command } from "commander";
  * `dash.tsx` imports ink (and react through it) at top level. Node resolves
  * static imports eagerly, so `import { registerDash } from "./dash.js"` in
  * `cli.ts` pulled the whole TUI stack into EVERY invocation -- including
- * `murmur status`, which the tmux status bar runs on a loop.
+ * `murmur status`, which a status-line poller runs on a loop.
  *
  * Measured: importing ink alone costs ~0.22s against ~0.03s for a bare node
  * start, and `murmur --version` (which does no work at all) took 0.23s. With

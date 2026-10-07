@@ -1,5 +1,5 @@
 import { agentLabel } from "./agents.js";
-import { visibleWidth } from "./ansi.js";
+import { visibleWidth } from "./ansi-width.js";
 import { DASH_GLYPH, hostColor } from "./dash-paint.js";
 import type { DashPrefs } from "./dash-prefs.js";
 import { type CompactRowLayout, compactRowLayout, compactRowParts } from "./dash-tick.js";

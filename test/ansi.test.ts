@@ -1,5 +1,6 @@
 import { expect, test } from "vitest";
-import { clipToWidth, endLinesWithReset, plainText, sgrOnly, visibleWidth } from "../src/ansi.js";
+import { endLinesWithReset, plainText, sgrOnly } from "../src/ansi.js";
+import { clipToWidth, visibleWidth } from "../src/ansi-width.js";
 
 const ESC = "\u001b";
 

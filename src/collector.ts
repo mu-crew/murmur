@@ -28,7 +28,7 @@ const COLLECT_DEADLINE_MS = 4_000;
  * How recently a peer may have been attempted before an ambient collect skips
  * it.
  *
- * Without it, fetch rate is tied to REDRAW rate: the status bar re-runs
+ * Without it, fetch rate is tied to REDRAW rate: a status-line poller re-runs
  * `murmur status` per tick per attached client, and a mesh is quadratic --
  * N nodes fetching N-1 peers is N*(N-1) ssh processes per tick. The payload was
  * never the problem (~400 bytes per pane); the forked ssh process is.
