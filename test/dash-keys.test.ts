@@ -1,5 +1,6 @@
 import { expect, test } from "vitest";
-import { foldNavigation, splitNavigationChunk } from "../src/dash-keys.js";
+import { foldNavigation, previewStep, splitNavigationChunk } from "../src/dash-keys.js";
+import { clampGlanceScroll } from "../src/dash-mouse.js";
 import { moveIndex } from "../src/dash-tick.js";
 
 const NAV = "jkgG";
@@ -30,4 +31,17 @@ test("folding equals pressing the keys one at a time", () => {
   expect(foldNavigation(["k", "j"], 0, step)).toBe(1);
   expect(foldNavigation(["G", "k"], 3, step)).toBe(8);
   expect(foldNavigation(["j", "j", "j"], 8, step)).toBe(9);
+});
+
+test("preview: folded Gk equals G then k through the single-key rules", () => {
+  const lines = 13;
+  const visible = 1;
+  // G pins to the end with the unclamped sentinel, as the single-key path does.
+  expect(previewStep(4, "G", lines, visible)).toBe(Number.MAX_SAFE_INTEGER);
+  // k then clamps from the sentinel.
+  const separate = clampGlanceScroll(Number.MAX_SAFE_INTEGER - 1, lines, visible);
+  const step = (o: number, ch: string) => previewStep(o, ch, lines, visible);
+  expect(foldNavigation(["G", "k"], 4, step)).toBe(separate);
+  expect(foldNavigation(["g", "j", "j"], 7, step)).toBe(2);
+  expect(foldNavigation(["k"], 0, step)).toBe(0);
 });

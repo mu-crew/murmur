@@ -23,7 +23,12 @@ import {
   sendEscape,
   sendPrompt,
 } from "../dash-input.js";
-import { foldNavigation, NAVIGATION_KEYS, splitNavigationChunk } from "../dash-keys.js";
+import {
+  foldNavigation,
+  NAVIGATION_KEYS,
+  previewStep,
+  splitNavigationChunk,
+} from "../dash-keys.js";
 import {
   clampGlanceScroll,
   classifyClick,
@@ -776,13 +781,7 @@ export function App({ dashStore, initial }: DashProps) {
       } else {
         setGlanceScroll((start) =>
           foldNavigation(chunk, start, (offset, ch) =>
-            ch === "g"
-              ? 0
-              : clampGlanceScroll(
-                  ch === "G" ? Number.MAX_SAFE_INTEGER : offset + (ch === "j" ? 1 : -1),
-                  glanceLines.length,
-                  glanceVisibleLines,
-                ),
+            previewStep(offset, ch, glanceLines.length, glanceVisibleLines),
           ),
         );
       }

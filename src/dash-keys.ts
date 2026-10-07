@@ -1,3 +1,5 @@
+import { clampGlanceScroll } from "./dash-mouse.js";
+
 /**
  * Navigation keys ink delivers merged.
  *
@@ -33,4 +35,20 @@ export function foldNavigation(
   step: (index: number, ch: string) => number,
 ): number {
   return chars.reduce(step, start);
+}
+
+/**
+ * One preview-scroll key, mirroring the single-key path exactly: `g` is the
+ * top, `G` is `Number.MAX_SAFE_INTEGER` UNCLAMPED (the pin-to-end sentinel),
+ * and `j`/`k` clamp `offset ± 1` into the scrollable range.
+ */
+export function previewStep(
+  offset: number,
+  ch: string,
+  lineCount: number,
+  visible: number,
+): number {
+  if (ch === "g") return 0;
+  if (ch === "G") return Number.MAX_SAFE_INTEGER;
+  return clampGlanceScroll(offset + (ch === "j" ? 1 : -1), lineCount, visible);
 }
