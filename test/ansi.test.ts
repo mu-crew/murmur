@@ -1,3 +1,4 @@
+import stringWidth from "string-width";
 import { expect, test } from "vitest";
 import { endLinesWithReset, plainText, sgrOnly } from "../src/ansi.js";
 import { clipToWidth, visibleWidth } from "../src/ansi-width.js";
@@ -92,6 +93,30 @@ test("visible width counts cells, not bytes, and ignores styling", () => {
   expect(visibleWidth(`${ESC}[31mred${ESC}[0m`)).toBe(3);
   expect(visibleWidth("plain")).toBe(5);
   expect(visibleWidth("")).toBe(0);
+});
+
+test("visible width agrees with string-width on both sides of the ASCII shortcut", () => {
+  // Printable ASCII is answered without loading string-width, so the two must
+  // agree on every such character or the picker and dash grids shear.
+  for (let code = 0x20; code <= 0x7e; code += 1) {
+    const character = String.fromCharCode(code);
+    expect(visibleWidth(character)).toBe(stringWidth(character));
+  }
+  for (const character of ["\u00b7", "\u2014", "\u2026", "\u2192", "\u25c6"]) {
+    expect(visibleWidth(character)).toBe(stringWidth(character));
+  }
+  // Anything else still goes to string-width: wide, emoji, controls, mixed.
+  for (const text of [
+    "\u6f22\u5b57",
+    "\u{1f600}",
+    "a\tb",
+    "\u00e9t\u00e9",
+    "\u25c6 here",
+    "x\u0007",
+  ]) {
+    expect(visibleWidth(text)).toBe(stringWidth(text));
+  }
+  expect(clipToWidth("\u6f22\u5b57\u6f22", 3)).toBe("\u6f22");
 });
 
 test("clipping counts visible columns and never splits an escape sequence", () => {

@@ -9,8 +9,38 @@
  * status-line pollers run constantly.
  */
 
-import stringWidth from "string-width";
+import { createRequire } from "node:module";
 import { isReset, plainText, SGR_RESET, scan } from "./ansi.js";
+
+type StringWidth = typeof import("string-width").default;
+
+let loadedStringWidth: StringWidth | undefined;
+
+/**
+ * Text that is one cell per code point without asking: printable ASCII, plus
+ * the narrow symbols murmur's own rows carry (`◆` current pane, `→` remote host,
+ * `…` truncation, `·` and `—` separators). Without those, any fleet with a peer
+ * would load the library on its first remote row.
+ */
+const SINGLE_CELL = /^[ -~\u00b7\u2014\u2026\u2192\u25c6]*$/;
+
+/**
+ * Cell width of plain text, loading `string-width` only for text that needs it.
+ *
+ * `string-width` builds `\p{RGI_Emoji}` and an `Intl.Segmenter` when it loads,
+ * which measured ~50ms on a loaded host -- the largest single cost of opening
+ * `murmur pick`, whose rows are almost always plain ASCII. Those characters are
+ * one cell each in string-width too (a test pins the agreement), so that case
+ * is answered here and the library is required on the first string
+ * that holds anything else. Synchronous `require` of an ES module is stable in
+ * every Node the dependencies support (commander needs >=22.12).
+ */
+function cells(text: string): number {
+  if (SINGLE_CELL.test(text)) return text.length;
+  loadedStringWidth ??= (createRequire(import.meta.url)("string-width") as { default: StringWidth })
+    .default;
+  return loadedStringWidth(text);
+}
 
 /**
  * Visible columns, which is the only width any layout here cares about.
@@ -31,7 +61,7 @@ export function visibleWidth(value: string): number {
   // `countAnsiEscapeCodes: false` is the default, and the input here is already
   // stripped to text -- but stripping first is what makes the count right for a
   // styled line, since string-width would otherwise measure the SGR bytes.
-  return stringWidth(plainText(value));
+  return cells(plainText(value));
 }
 
 /**
@@ -62,14 +92,14 @@ export function clipToWidth(value: string, width: number): string {
       continue;
     }
     for (const character of token.value) {
-      const cells = stringWidth(character);
+      const size = cells(character);
       // A wide character that would straddle the edge is dropped rather than
       // half-printed: a terminal cannot render half a cell, so emitting it
       // would put one more column on the row than the layout reserved -- the
       // original overflow, reintroduced one character at a time.
-      if (used + cells > width) break;
+      if (used + size > width) break;
       out += character;
-      used += cells;
+      used += size;
     }
     if (used >= width) break;
   }
