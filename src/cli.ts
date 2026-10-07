@@ -1,36 +1,8 @@
 #!/usr/bin/env node
-import { Command } from "commander";
-import { registerClear } from "./cli/clear.js";
-import { registerCollect } from "./cli/collect.js";
-import { registerDash } from "./cli/dash-register.js";
-import { registerDoctor } from "./cli/doctor.js";
-import { registerExport } from "./cli/export.js";
-import { registerInit } from "./cli/init.js";
-import { registerJumpCommand } from "./cli/jump-command.js";
-import { registerLink } from "./cli/link.js";
-import { registerNotify } from "./cli/notify.js";
-import { registerPeer } from "./cli/peer.js";
-import { registerPick } from "./cli/pick-register.js";
-import { registerSidepanel } from "./cli/sidepanel-register.js";
-import { registerStatus } from "./cli/status.js";
-import { VERSION } from "./index.js";
+// Static imports load before any statement runs, so the program lives in
+// cli-main and is imported only after the compile cache is on. The optional
+// call: Node 20 has no module.enableCompileCache.
+import module from "node:module";
 
-const program = new Command();
-program
-  .name("murmur")
-  .description("Agent state across every machine, in one view.")
-  .version(VERSION);
-registerInit(program);
-registerLink(program);
-registerJumpCommand(program);
-registerExport(program);
-registerCollect(program);
-registerClear(program);
-registerNotify(program);
-registerPeer(program);
-registerDoctor(program);
-registerStatus(program);
-registerDash(program);
-registerSidepanel(program);
-registerPick(program);
-program.parse();
+module.enableCompileCache?.();
+await import("./cli-main.js");
