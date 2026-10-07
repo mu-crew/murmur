@@ -305,3 +305,44 @@ test("click selects a row and double-click jumps to it", async () => {
   await vi.waitFor(() => expect(jumped).toEqual(["reviewer-1"]));
   await instance.unmount();
 });
+
+test("a merged chunk of navigation keys moves once per key", async () => {
+  const input = new PassThrough() as unknown as NodeJS.ReadStream;
+  const output = new PassThrough() as unknown as NodeJS.WriteStream;
+  const writes: Buffer[] = [];
+  Object.assign(input, {
+    isTTY: true,
+    setRawMode: () => input,
+    ref: () => undefined,
+    unref: () => undefined,
+  });
+  Object.assign(output, { isTTY: true, columns: 40, rows: 12 });
+  output.on("data", (chunk: Buffer) => writes.push(chunk));
+  const panes = [1, 2, 3, 4, 5].map((n) =>
+    pane({ pane: asPaneId(`%${n}`), agent_id: `agent-${n}`, agent_name: `worker-${n}` }),
+  );
+  const instance = renderInk(
+    createElement(App, {
+      dashStore,
+      initial: view(panes),
+      origin,
+      initialPrefs: { ...DEFAULT_DASH_PREFS, compact: true },
+      dimensions: { columns: 40, rows: 12 },
+      deps: { refresh: async () => view(panes) },
+    }),
+    { stdin: input, stdout: output, patchConsole: false, interactive: true },
+  );
+  const selectedName = (frame: string) => /▸[^\n]*?(worker-\d)/.exec(frame)?.[1];
+
+  await vi.waitFor(() => expect(Buffer.concat(writes).toString()).toContain("worker-5"));
+  const first = Buffer.concat(writes).toString();
+  const order = [...first.matchAll(/worker-\d/g)].map((match) => match[0]);
+  expect(selectedName(first)).toBe(order[0]);
+  const before = writes.length;
+  // One chunk, as ink delivers queued letters when the event loop is busy.
+  input.write("jjj");
+  await vi.waitFor(() =>
+    expect(selectedName(Buffer.concat(writes.slice(before)).toString())).toBe(order[3]),
+  );
+  await instance.unmount();
+});

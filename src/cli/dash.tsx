@@ -23,6 +23,7 @@ import {
   sendEscape,
   sendPrompt,
 } from "../dash-input.js";
+import { foldNavigation, NAVIGATION_KEYS, splitNavigationChunk } from "../dash-keys.js";
 import {
   clampGlanceScroll,
   classifyClick,
@@ -754,6 +755,37 @@ export function App({ dashStore, initial }: DashProps) {
         setFilter((state) =>
           dashFilter(state, { type: "edit", edit: { type: "insert", text: input } }),
         );
+      return;
+    }
+
+    // ink merges queued letters into one input when the loop is busy. Fold
+    // them in order, so the result equals pressing the keys one at a time.
+    const chunk = splitNavigationChunk(input, NAVIGATION_KEYS);
+    if (chunk) {
+      if (focus === "cards") {
+        if (panes.length === 0) return;
+        jumpTo(
+          foldNavigation(chunk, selectedIndex, (index, ch) =>
+            ch === "g"
+              ? 0
+              : ch === "G"
+                ? panes.length - 1
+                : moveIndex(index, ch === "j" ? 1 : -1, panes.length, "clamp"),
+          ),
+        );
+      } else {
+        setGlanceScroll((start) =>
+          foldNavigation(chunk, start, (offset, ch) =>
+            ch === "g"
+              ? 0
+              : clampGlanceScroll(
+                  ch === "G" ? Number.MAX_SAFE_INTEGER : offset + (ch === "j" ? 1 : -1),
+                  glanceLines.length,
+                  glanceVisibleLines,
+                ),
+          ),
+        );
+      }
       return;
     }
 

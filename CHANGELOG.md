@@ -17,6 +17,12 @@ read and one tmux write, where it used to start about a dozen tmux processes
 per window. Pi no longer stalls on it, and focus changes put less load on the
 tmux server. The option values are unchanged.
 
+- **No lost keys under load.** When the machine is busy, fast `j`, `k`, `g`
+  and `G` presses in the dash and the side panel used to be dropped: the
+  terminal library delivered them as one chunk, which matched no binding. They
+  now move the selection (or scroll the preview) exactly as if pressed one at a
+  time. Text in the filter, the prompt and the help overlay is unchanged.
+
 ## 1.2.1
 
 Upgrade with `npm i -g @mu-crew/murmur@1.2.1`, then `/reload` in running pi
