@@ -110,7 +110,11 @@ const sshRunnerAsync: GlanceRunnerAsync = (target, argv) =>
     const child = execFile(
       "ssh",
       [...SSH_OPTIONS, target, ...argv],
-      { encoding: "utf8", timeout: 3000 },
+      // execFile always pipes stderr (its `stdio` option is ignored), where the
+      // sync runner discards it. Piped stderr counts against maxBuffer, so a chatty
+      // remote shell startup would reject a capture whose stdout is fine; a large
+      // cap makes that unreachable inside the 3 s timeout.
+      { encoding: "utf8", timeout: 3000, maxBuffer: 256 * 1024 * 1024 },
       (error, stdout) => (error ? reject(error) : resolve(stdout)),
     );
     // execFile cannot ignore stdin like the sync runner; close it so ssh sees EOF.
