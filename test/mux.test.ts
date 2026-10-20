@@ -106,6 +106,27 @@ test("currentView answers location, targets and focus from one list-panes", () =
   }
 });
 
+test("currentView prefers the active link of a window linked twice in one session", () => {
+  const socket = `${conventionalTmuxDirectory()}/mule`;
+  tmuxCalls.length = 0;
+  tmuxReplies.length = 0;
+  const row = (pane: string, window: string, active: string) =>
+    [pane, "$1", window, "work", "reviewer", "0", socket, active].join("\t");
+  // The same pane listed once per link; the second link is the active one.
+  tmuxReplies.push([row("%0", "@1", "0"), row("%0", "@1", "1")].join("\n"));
+  process.env.TMUX_PANE = "%0";
+  try {
+    const view = tmux.currentView();
+    expect(view?.focused).toBe(true);
+    expect(view?.targets.sessionPanes).toEqual(["%0"]);
+    // Rows that put the pane in different windows are ambiguous: no answer.
+    tmuxReplies.push([row("%0", "@1", "0"), row("%0", "@2", "1")].join("\n"));
+    expect(tmux.currentView()).toBeNull();
+  } finally {
+    delete process.env.TMUX_PANE;
+  }
+});
+
 test("currentView is null outside a pane, when tmux fails, and when our pane is not listed", () => {
   tmuxCalls.length = 0;
   tmuxReplies.length = 0;

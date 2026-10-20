@@ -20,7 +20,8 @@ and a slow host never gets a second capture queued behind the first.
 per event instead of two or three: where the pane is, which panes share its
 window and session, and whether you are looking at it come back in a single
 `list-panes`. Each agent start and end saves one tmux call (about 10-15 ms
-of time pi is blocked), and a settle saves two. If that call fails the
+of time pi is blocked), and a normal managed settle saves one (two
+`display-message` reads become one `list-panes`). If that call fails the
 extension falls back to the separate reads it made before.
 
 ## 1.3.1
