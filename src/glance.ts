@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { peerForHost, shellQuote } from "./agents.js";
 import { endLinesWithReset, scan, sgrOnly } from "./ansi.js";
 import { SSH_OPTIONS } from "./channel.js";
@@ -102,17 +102,32 @@ const sshRunner: GlanceRunner = (target, argv) =>
     stdio: ["ignore", "pipe", "ignore"],
   });
 
-export function glance(
+/** The async twin of `GlanceRunner`, for callers that must not block on the ssh. */
+export type GlanceRunnerAsync = (target: string, argv: string[]) => Promise<string>;
+
+const sshRunnerAsync: GlanceRunnerAsync = (target, argv) =>
+  new Promise((resolve, reject) => {
+    const child = execFile(
+      "ssh",
+      [...SSH_OPTIONS, target, ...argv],
+      { encoding: "utf8", timeout: 3000 },
+      (error, stdout) => (error ? reject(error) : resolve(stdout)),
+    );
+    // execFile cannot ignore stdin like the sync runner; close it so ssh sees EOF.
+    child.stdin?.end();
+  });
+
+/**
+ * The ssh a remote glance would run, or null when it must not run at all.
+ *
+ * Shared by `glance` and `glanceAsync` so the skip rules and the quoting exist
+ * once; only the way the ssh is waited on differs.
+ */
+function remoteGlance(
   store: Store,
   agent: PaneView,
-  lines = GLANCE_LINES,
-  run: GlanceRunner = sshRunner,
-): string | null {
-  if (agent.local) {
-    const local = tmux.capture(agent.pane, lines, agent.server);
-    return local === null ? null : previewSafe(local);
-  }
-
+  lines: number,
+): { target: string; argv: string[] } | null {
   const resolved = peerForHost(store, agent.host_id);
   if (!resolved) return null;
   const { peer, target } = resolved;
@@ -134,19 +149,55 @@ export function glance(
   // and a peer whose fetch failed keeps its last-known snapshot, which is
   // exactly why the row is on screen at all.
   if (peer.last_error !== null) return null;
+  // ssh's remote side is a login shell. Build the tmux argv first, including
+  // the snapshot's server selector, then quote every word into its one remote
+  // command so hostile server values and pane ids remain data. `-e` keeps the
+  // same styling local and remote; previewSafe accepts SGR and strips the rest.
+  const argv = [
+    "tmux",
+    ...tmuxArgs(agent.server, ["capture-pane", "-p", "-e", "-t", agent.pane, "-S", `-${lines}`]),
+  ];
+  return { target, argv: [argv.map(shellQuote).join(" ")] };
+}
+
+export function glance(
+  store: Store,
+  agent: PaneView,
+  lines = GLANCE_LINES,
+  run: GlanceRunner = sshRunner,
+): string | null {
+  if (agent.local) {
+    const local = tmux.capture(agent.pane, lines, agent.server);
+    return local === null ? null : previewSafe(local);
+  }
+  const remote = remoteGlance(store, agent, lines);
+  if (!remote) return null;
   try {
-    // ssh's remote side is a login shell. Build the tmux argv first, including
-    // the snapshot's server selector, then quote every word into its one remote
-    // command so hostile server values and pane ids remain data. `-e` keeps the
-    // same styling local and remote; previewSafe accepts SGR and strips the rest.
-    const argv = [
-      "tmux",
-      ...tmuxArgs(agent.server, ["capture-pane", "-p", "-e", "-t", agent.pane, "-S", `-${lines}`]),
-    ];
-    return previewSafe(run(target, [argv.map(shellQuote).join(" ")]));
+    return previewSafe(run(remote.target, remote.argv));
   } catch {
     // Cold socket, dead tmux, gone pane. The preview says so rather than the
     // picker failing.
+    return null;
+  }
+}
+
+/**
+ * `glance` without blocking the event loop on the ssh: the dash repaints and
+ * reads keys while a remote capture is in flight. A local pane is still the
+ * synchronous capture, which is a few milliseconds and not worth a hop.
+ */
+export async function glanceAsync(
+  store: Store,
+  agent: PaneView,
+  lines = GLANCE_LINES,
+  run: GlanceRunnerAsync = sshRunnerAsync,
+): Promise<string | null> {
+  if (agent.local) return glance(store, agent, lines);
+  const remote = remoteGlance(store, agent, lines);
+  if (!remote) return null;
+  try {
+    return previewSafe(await run(remote.target, remote.argv));
+  } catch {
     return null;
   }
 }

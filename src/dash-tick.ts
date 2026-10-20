@@ -21,6 +21,39 @@ export function glanceNeedsRefresh(previous: string | null, next: string | null)
 }
 
 /**
+ * Bookkeeping for async remote previews: an in-flight guard and a stale-result
+ * guard, kept out of the component so both are testable.
+ *
+ * `begin` starts a request and returns its token, or null when `skipIfBusy` and
+ * one is outstanding (the input-mode timer must not stack ssh calls behind a slow
+ * host). `accept` says whether a reply may still be painted: only the newest
+ * request, and only while that pane is still the one being previewed. `supersede`
+ * invalidates replies in flight without starting one (a synchronous local
+ * preview, or no selection). `end` must run when the request settles.
+ */
+export function createGlanceGate() {
+  let latest = 0;
+  let outstanding = 0;
+  return {
+    begin(skipIfBusy: boolean): number | null {
+      if (skipIfBusy && outstanding > 0) return null;
+      outstanding += 1;
+      latest += 1;
+      return latest;
+    },
+    supersede(): void {
+      latest += 1;
+    },
+    accept(token: number, requestKey: string, currentKey: string | null): boolean {
+      return token === latest && currentKey === requestKey;
+    },
+    end(): void {
+      outstanding -= 1;
+    },
+  };
+}
+
+/**
  * A header age, verb-free so both the fetch and the refresh can borrow it.
  *
  * Unlike `age()`, this speaks in seconds — the header ticks every second and
