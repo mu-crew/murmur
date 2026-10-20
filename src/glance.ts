@@ -116,11 +116,18 @@ const sshRunnerAsync: GlanceRunnerAsync = (target, argv) =>
     // runner; stdout keeps the same 1 MiB cap and 3 s timeout, both rejecting.
     const child = spawn("ssh", [...SSH_OPTIONS, target, ...argv], {
       stdio: ["ignore", "pipe", "ignore"],
-      timeout: 3000,
     });
     const chunks: Buffer[] = [];
     let size = 0;
     let failed = false;
+    // Our own timer, not spawn's `timeout`: a child that traps SIGTERM and
+    // exits 0 must still count as a failure, as execFileSync's timeout does.
+    const timer = setTimeout(() => {
+      if (failed) return;
+      failed = true;
+      child.kill();
+      reject(new Error("ssh timed out"));
+    }, 3000);
     child.stdout.on("data", (chunk: Buffer) => {
       size += chunk.length;
       if (size > STDOUT_MAX_BYTES) {
@@ -134,10 +141,13 @@ const sshRunnerAsync: GlanceRunnerAsync = (target, argv) =>
       chunks.push(chunk);
     });
     child.on("error", (error) => {
+      clearTimeout(timer);
+      if (failed) return;
       failed = true;
       reject(error);
     });
     child.on("close", (code, signal) => {
+      clearTimeout(timer);
       if (failed) return;
       if (code !== 0) reject(new Error(`ssh exited ${code ?? signal}`));
       else resolve(Buffer.concat(chunks).toString("utf8"));

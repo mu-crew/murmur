@@ -355,6 +355,32 @@ test("the real async ssh runner still fails a capture whose stdout exceeds 1 MiB
   }
 });
 
+test("the real async ssh runner fails a timed-out capture even if ssh exits 0 on SIGTERM", async () => {
+  // Same as the sync runner: execFileSync's 3 s timeout fails the capture even
+  // when the child traps SIGTERM and exits cleanly.
+  const bin = mkdtempSync(join(tmpdir(), "murmur-fake-ssh-"));
+  const fake = join(bin, "ssh");
+  writeFileSync(fake, "#!/bin/sh\ntrap 'printf CAPTURE_OK; exit 0' TERM\nsleep 10 & wait\n");
+  chmodSync(fake, 0o755);
+  vi.stubEnv("PATH", `${bin}:${process.env.PATH ?? ""}`);
+  try {
+    store.addPeer("bubba", "bubba.example");
+    store.replacePeerSnapshot("bubba", {
+      ok: true,
+      at: Date.now(),
+      snapshot: remoteSnapshot([remotePane("%1")]),
+    });
+    const identity = loadIdentity();
+    if (!identity) throw new Error("no identity");
+    const agent = status(store, identity).panes.find((candidate) => candidate.pane === "%1");
+    if (!agent) throw new Error("no remote pane");
+    expect(glance(store, agent, 40)).toBeNull();
+    expect(await glanceAsync(store, agent, 40)).toBeNull();
+  } finally {
+    rmSync(bin, { recursive: true, force: true });
+  }
+}, 15000);
+
 test("an async glance failure or skipped peer yields no preview", async () => {
   store.addPeer("bubba", "bubba.example");
   store.replacePeerSnapshot("bubba", {
