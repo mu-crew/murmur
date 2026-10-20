@@ -11,6 +11,12 @@ panes whose foreground command is one a peer's jump command names, which is
 usually none. This cuts about 60-90 ms from each status call, and so from the
 poller, picker and the dash and side panel redraws.
 
+**Faster `murmur notify` and `murmur clear`.** The hooks that codex, cursor
+and opencode run at the end of a turn, and the clear on focusing a pane with
+a badge, now read the pane's location and its window's panes in one tmux call
+instead of two. About 20-25 ms less per call (measured 120 -> 95 ms notify,
+117 -> 95 ms clear). Badges, priorities and exit codes are unchanged.
+
 **The dash no longer freezes on a remote preview.** A remote pane's preview
 now runs its `ssh ... capture-pane` off the event loop. While you type into a
 remote agent the dash used to block about 60-100 ms every 500 ms, and up to 3 s
