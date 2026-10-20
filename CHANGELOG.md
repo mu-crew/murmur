@@ -11,6 +11,12 @@ panes whose foreground command is one a peer's jump command names, which is
 usually none. This cuts about 60-90 ms from each status call, and so from the
 poller, picker and the dash and side panel redraws.
 
+**The dash no longer freezes on a remote preview.** A remote pane's preview
+now runs its `ssh ... capture-pane` off the event loop. While you type into a
+remote agent the dash used to block about 60-100 ms every 500 ms, and up to 3 s
+when the host was slow. Late replies for a pane you have moved off are dropped,
+and a slow host never gets a second capture queued behind the first.
+
 ## 1.3.1
 
 Upgrade with `npm i -g @mu-crew/murmur@1.3.1`. No snapshot or extension

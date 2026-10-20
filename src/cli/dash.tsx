@@ -55,6 +55,7 @@ import {
   compactRowLayout,
   compactRowParts,
   compactSelectionMarker,
+  createGlanceGate,
   type DashFooterMode,
   type DashInputFocus,
   type DashViewState,
@@ -82,6 +83,7 @@ import {
   glanceShare,
   PREVIEW_PANE_TAIL_LINES,
   previewText,
+  previewTextAsync,
   sessionNotice,
 } from "../paint.js";
 import { type Status, status, statusWithCollect } from "../status.js";
@@ -453,6 +455,45 @@ export function App({ dashStore, initial }: DashProps) {
   const railNodeRef = useRef<DOMElement | null>(null);
   const glanceNodeRef = useRef<DOMElement | null>(null);
   glanceRequestRef.current = { selected: previewPane, peers: view.peers };
+  const glanceGateRef = useRef(createGlanceGate());
+  const glanceShownKeyRef = useRef<string | null>(null);
+
+  // Local panes preview synchronously (a few ms). A remote pane is an ssh that
+  // can take 60 ms to 3 s, so it is awaited off the event loop, behind the
+  // in-flight and stale-result guards of `createGlanceGate`.
+  const loadGlance = useCallback(
+    (current: PaneView, peers: Status["peers"], skipIfBusy: boolean) => {
+      const gate = glanceGateRef.current;
+      const options = { paneTailLines: PREVIEW_PANE_TAIL_LINES };
+      const key = paneKey(current);
+      if (current.local) {
+        gate.supersede();
+        glanceShownKeyRef.current = key;
+        setGlance(previewText(store, current, peers, undefined, options));
+        setGlanceScroll(Number.MAX_SAFE_INTEGER);
+        return;
+      }
+      const token = gate.begin(skipIfBusy);
+      if (token === null) return;
+      // Another pane's capture must not sit under this pane's selection while
+      // the ssh runs; the same pane keeps its last text until the fresh one lands.
+      if (glanceShownKeyRef.current !== key) {
+        glanceShownKeyRef.current = key;
+        setGlance("Loading pane\u2026");
+        setGlanceScroll(0);
+      }
+      void previewTextAsync(store, current, peers, undefined, options)
+        .then((text) => {
+          const latest = glanceRequestRef.current.selected;
+          if (!gate.accept(token, key, latest ? paneKey(latest) : null)) return;
+          setGlance(text);
+          setGlanceScroll(Number.MAX_SAFE_INTEGER);
+        })
+        .catch(() => {})
+        .finally(() => gate.end());
+    },
+    [store],
+  );
 
   const updatePrefs = useCallback((patch: Partial<DashPrefs>) => {
     setPrefs((current) => {
@@ -513,6 +554,8 @@ export function App({ dashStore, initial }: DashProps) {
 
     const { selected: current, peers } = glanceRequestRef.current;
     if (!current) {
+      glanceGateRef.current.supersede();
+      glanceShownKeyRef.current = null;
       setGlance("No agents");
       setGlanceScroll(0);
       return;
@@ -520,13 +563,10 @@ export function App({ dashStore, initial }: DashProps) {
     // Local store changes can refresh each tick. Remote previews wait for a
     // selection or collect so their SSH capture cannot fire every second.
     if (selectionChanged || collectionChanged || (current.local && fingerprintChanged)) {
-      // Pin to the end so the capture-pane fills the viewport; scroll up for facts.
-      setGlance(
-        previewText(store, current, peers, undefined, { paneTailLines: PREVIEW_PANE_TAIL_LINES }),
-      );
-      setGlanceScroll(Number.MAX_SAFE_INTEGER);
+      // Pinned to the end so the capture-pane fills the viewport; scroll up for facts.
+      loadGlance(current, peers, false);
     }
-  }, [selectedKey, collectRevision, selectedFingerprint, store]);
+  }, [selectedKey, collectRevision, selectedFingerprint, loadGlance]);
 
   useEffect(() => {
     if (!inputMode && selected && selectedKey !== paneKey(selected))
@@ -537,15 +577,10 @@ export function App({ dashStore, initial }: DashProps) {
     if (!inputMode) return;
     const timer = setInterval(() => {
       const { selected: current, peers } = glanceRequestRef.current;
-      if (current) {
-        setGlance(
-          previewText(store, current, peers, undefined, { paneTailLines: PREVIEW_PANE_TAIL_LINES }),
-        );
-        setGlanceScroll(Number.MAX_SAFE_INTEGER);
-      }
+      if (current) loadGlance(current, peers, true);
     }, INPUT_PREVIEW_MS);
     return () => clearInterval(timer);
-  }, [inputMode, store]);
+  }, [inputMode, loadGlance]);
 
   const notice = sessionNotice(view.peers, now);
   const placement = glancePlacement(columns);

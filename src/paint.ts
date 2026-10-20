@@ -2,7 +2,7 @@ import { agentLabel, agentLocation, terminalText } from "./agents.js";
 import { visibleWidth } from "./ansi-width.js";
 import { warmSocketCommand } from "./channel.js";
 import { DASH_GLYPH, hostColor } from "./dash-paint.js";
-import { type GlanceRunner, glance } from "./glance.js";
+import { type GlanceRunner, type GlanceRunnerAsync, glance, glanceAsync } from "./glance.js";
 import type { Status } from "./status.js";
 import type { Store } from "./store.js";
 import { age, NEEDS_HUMAN, type PaneView, renderState, wants } from "./view.js";
@@ -358,6 +358,26 @@ export function previewText(
   run?: GlanceRunner,
   options: PreviewOptions = {},
 ): string {
+  return previewBody(agent, peers, glance(store, agent, undefined, run), options);
+}
+
+/** `previewText` with the remote capture awaited instead of blocking on. */
+export async function previewTextAsync(
+  store: Store,
+  agent: PaneView,
+  peers: Status["peers"],
+  run?: GlanceRunnerAsync,
+  options: PreviewOptions = {},
+): Promise<string> {
+  return previewBody(agent, peers, await glanceAsync(store, agent, undefined, run), options);
+}
+
+function previewBody(
+  agent: PaneView,
+  peers: Status["peers"],
+  pane: string | null,
+  options: PreviewOptions,
+): string {
   const state = renderState(agent);
   const colour = COLOUR[state] ?? "";
   const head = [
@@ -395,7 +415,6 @@ export function previewText(
   // The glance is the point of the preview: what the agent is actually doing.
   // No history section, because there is no history -- the store holds current
   // state only, the accepted price of one writer owning each fact.
-  const pane = glance(store, agent, undefined, run);
   // Named, not guessed. The generic message is honest when murmur does not know
   // why a capture failed; when it does know, saying so is the difference between
   // a dead end and an action. Matched on `host`, which `paneViews` sets from

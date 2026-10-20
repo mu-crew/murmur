@@ -8,6 +8,7 @@ import {
   compactRowLayout,
   compactRowParts,
   compactSelectionMarker,
+  createGlanceGate,
   dashFooterHints,
   dashHelpSections,
   dashInputFocus,
@@ -701,4 +702,28 @@ test("a compact row fits its rail exactly, wide and styled text included", () =>
     const line = compactRow(row, layout, "▸ ");
     expect(visibleWidth(line)).toBeLessThanOrEqual(width);
   }
+});
+
+test("the glance gate refuses a timer request while one is in flight", () => {
+  const gate = createGlanceGate();
+  const first = gate.begin(true);
+  expect(first).not.toBeNull();
+  expect(gate.begin(true)).toBeNull();
+  // A selection change is never skipped, only a timer tick.
+  expect(gate.begin(false)).not.toBeNull();
+  gate.end();
+  gate.end();
+  expect(gate.begin(true)).not.toBeNull();
+});
+
+test("the glance gate drops a reply for an older request or another pane", () => {
+  const gate = createGlanceGate();
+  const older = gate.begin(false) as number;
+  const newer = gate.begin(false) as number;
+  expect(gate.accept(older, "a", "a")).toBe(false);
+  expect(gate.accept(newer, "a", "b")).toBe(false);
+  expect(gate.accept(newer, "a", null)).toBe(false);
+  expect(gate.accept(newer, "a", "a")).toBe(true);
+  gate.supersede();
+  expect(gate.accept(newer, "a", "a")).toBe(false);
 });

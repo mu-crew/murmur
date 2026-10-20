@@ -4,11 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { warmSocketCommand } from "../src/channel.js";
-import { glance } from "../src/glance.js";
+import { glance, glanceAsync } from "../src/glance.js";
 import { createIdentity, loadIdentity } from "../src/identity.js";
 import { asPaneId, asSessionId, asWindowId } from "../src/ids.js";
 import { tmux } from "../src/mux.js";
-import { previewText } from "../src/paint.js";
+import { previewText, previewTextAsync } from "../src/paint.js";
 import { status } from "../src/status.js";
 import { openStore, type Store } from "../src/store.js";
 import type { Location, Snapshot, SnapshotPane, TmuxServer } from "../src/types.js";
@@ -275,6 +275,62 @@ test("a hostile pane id is inert in the remote command", () => {
       "'tmux' '-L' 'default' 'capture-pane' '-p' '-e' '-t' '%1'\\'';touch /tmp/murmur-pwned;'\\''' '-S' '-40'",
     ],
   ]);
+});
+
+test("the async glance runs the same quoted ssh and matches the sync preview", async () => {
+  const hostile = "%1';touch /tmp/murmur-pwned;'";
+  store.addPeer("bubba", "bubba.example");
+  store.replacePeerSnapshot("bubba", {
+    ok: true,
+    at: Date.now(),
+    snapshot: remoteSnapshot([remotePane(hostile)]),
+  });
+  const identity = loadIdentity();
+  if (!identity) throw new Error("no identity");
+  const agent = status(store, identity).panes.find((candidate) => candidate.pane === hostile);
+  if (!agent) throw new Error("no remote pane");
+
+  const calls: string[][] = [];
+  const syncArgv: string[][] = [];
+  const sync = previewText(store, agent, [], (_target, argv) => {
+    syncArgv.push(argv);
+    return "\u001b[31mREMOTE\u001b[0m\u001b[2J";
+  });
+  const asynchronous = await previewTextAsync(store, agent, [], async (_target, argv) => {
+    calls.push(argv);
+    return "\u001b[31mREMOTE\u001b[0m\u001b[2J";
+  });
+  expect(calls).toEqual(syncArgv);
+  expect(asynchronous).toBe(sync);
+  expect(asynchronous).not.toContain("\u001b[2J");
+});
+
+test("an async glance failure or skipped peer yields no preview", async () => {
+  store.addPeer("bubba", "bubba.example");
+  store.replacePeerSnapshot("bubba", {
+    ok: true,
+    at: Date.now(),
+    snapshot: remoteSnapshot([remotePane("%1")]),
+  });
+  const identity = loadIdentity();
+  if (!identity) throw new Error("no identity");
+  const agent = status(store, identity).panes.find((candidate) => candidate.pane === "%1");
+  if (!agent) throw new Error("no remote pane");
+
+  await expect(
+    glanceAsync(store, agent, 40, async () => {
+      throw new Error("capture failed");
+    }),
+  ).resolves.toBeNull();
+  store.replacePeerSnapshot("bubba", { ok: false, at: Date.now(), error: "denied" });
+  let dialled = false;
+  await expect(
+    glanceAsync(store, agent, 40, async () => {
+      dialled = true;
+      return "x";
+    }),
+  ).resolves.toBeNull();
+  expect(dialled).toBe(false);
 });
 
 test("a glance failure returns no preview without deleting cached state", () => {
