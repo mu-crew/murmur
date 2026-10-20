@@ -5,6 +5,12 @@ so it says what changed for a user rather than listing every commit.
 
 ## Unreleased
 
+## 1.3.2
+
+Upgrade with `npm i -g @mu-crew/murmur@1.3.2`, then `/reload` in running pi
+sessions to pick up the extension. No snapshot or store change; nodes can
+upgrade one at a time.
+
 **Faster `murmur status`.** The status tick no longer runs `ps` over every
 tmux pane to look for ssh attachments. It reads process arguments only for
 panes whose foreground command is one a peer's jump command names, which is
@@ -22,6 +28,7 @@ now runs its `ssh ... capture-pane` off the event loop. While you type into a
 remote agent the dash used to block about 60-100 ms every 500 ms, and up to 3 s
 when the host was slow. Late replies for a pane you have moved off are dropped,
 and a slow host never gets a second capture queued behind the first.
+
 **Less tmux work per pi event.** The pi extension now asks tmux one question
 per event instead of two or three: where the pane is, which panes share its
 window and session, and whether you are looking at it come back in a single
