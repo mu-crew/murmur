@@ -312,3 +312,76 @@ test("a window whose only agent is idle clears to null, not to idle", () => {
 
   expect(badges.writes).toEqual([["@1", null]]);
 });
+
+test("clear on its own pane is one tmux read: the view supplies location and targets", () => {
+  seed((store) => {
+    store.requestAttention({
+      kind: "done",
+      location: location("%1"),
+      message: "",
+      source: "pi",
+    });
+  });
+  const badges = badgeRecorder();
+  const reads: string[] = [];
+
+  clearPane(
+    "%1",
+    fakeMux({
+      currentWindow: () => {
+        reads.push("currentWindow");
+        return null;
+      },
+      currentView: () => {
+        reads.push("currentView");
+        return {
+          location: location("%1"),
+          targets: {
+            session: asSessionId("$1"),
+            windowPanes: [asPaneId("%1")],
+            sessionPanes: [asPaneId("%1")],
+          },
+          focused: true,
+        };
+      },
+      windowForPane: () => {
+        reads.push("windowForPane");
+        return null;
+      },
+      panesInWindow: () => {
+        reads.push("panesInWindow");
+        return [];
+      },
+      setWindowState: badges.set,
+    }),
+  );
+
+  expect(reads).toEqual(["currentView"]);
+  expect(read((store) => store.localPanes())).toEqual([]);
+  expect(badges.writes).toEqual([["@1", null]]);
+});
+
+test("clear for another pane re-reads targets when that pane is in another window", () => {
+  const badges = badgeRecorder();
+  const reads: string[] = [];
+
+  clearPane(
+    "%9",
+    fakeMux({
+      currentView: () => ({
+        location: location("%1", "@1"),
+        targets: { session: null, windowPanes: [asPaneId("%1")], sessionPanes: [asPaneId("%1")] },
+        focused: false,
+      }),
+      windowForPane: () => asWindowId("@2"),
+      panesInWindow: (window) => {
+        reads.push(window);
+        return [asPaneId("%9")];
+      },
+      setWindowState: badges.set,
+    }),
+  );
+
+  expect(reads).toEqual(["@2"]);
+  expect(badges.writes).toEqual([["@2", null]]);
+});

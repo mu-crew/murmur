@@ -443,3 +443,51 @@ test("a notification leaves the pane's live agent untouched and joins onto it", 
   expect(view.panes).toHaveLength(1);
   expect(view.counts.blocked).toBe(1);
 });
+
+test("one currentView read answers the location and the publish targets", () => {
+  // The caller's own window needs no second tmux read: the view's targets go
+  // straight to publishAgentStates.
+  const reads: string[] = [];
+  const badges: [WindowId, RenderState | null][] = [];
+  const mux = fakeMux({
+    currentWindow: () => {
+      reads.push("currentWindow");
+      return null;
+    },
+    currentView: () => {
+      reads.push("currentView");
+      return {
+        location: {
+          server: { kind: "default" },
+          session: asSessionId("$0"),
+          window: asWindowId("@1"),
+          pane: asPaneId("%1"),
+          session_name: "dev",
+          window_name: "codex",
+        },
+        targets: {
+          session: asSessionId("$0"),
+          windowPanes: [asPaneId("%1"), asPaneId("%2")],
+          sessionPanes: [asPaneId("%1"), asPaneId("%2")],
+        },
+        focused: false,
+      };
+    },
+    panesInWindow: () => {
+      reads.push("panesInWindow");
+      return [];
+    },
+    setWindowState: (window, state) => void badges.push([window, state]),
+  });
+
+  expect(runNotify(store, { source: "codex" }, {}, mux)).toBe(true);
+  // --pane naming a sibling is verified against the same view, not a new read.
+  expect(runNotify(store, { source: "codex", pane: "%2" }, {}, mux)).toBe(true);
+  expect(runNotify(store, { source: "codex", pane: "%99" }, {}, mux)).toBe(false);
+
+  expect(reads).toEqual(["currentView", "currentView", "currentView"]);
+  expect(badges).toEqual([
+    ["@1", "blocked"],
+    ["@1", "blocked"],
+  ]);
+});
