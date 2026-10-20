@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
@@ -303,6 +303,32 @@ test("the async glance runs the same quoted ssh and matches the sync preview", a
   expect(calls).toEqual(syncArgv);
   expect(asynchronous).toBe(sync);
   expect(asynchronous).not.toContain("\u001b[2J");
+});
+
+test("the real async ssh runner ignores stderr like the sync one", async () => {
+  // A fake `ssh` on PATH: noisy stderr beyond execFile's 1 MiB default buffer,
+  // valid stdout. Neither runner may let the stderr sink a good capture.
+  const bin = mkdtempSync(join(tmpdir(), "murmur-fake-ssh-"));
+  const fake = join(bin, "ssh");
+  writeFileSync(fake, "#!/bin/sh\nhead -c 1200000 /dev/zero | tr '\\0' x >&2\nprintf CAPTURE_OK\n");
+  chmodSync(fake, 0o755);
+  vi.stubEnv("PATH", `${bin}:${process.env.PATH ?? ""}`);
+  try {
+    store.addPeer("bubba", "bubba.example");
+    store.replacePeerSnapshot("bubba", {
+      ok: true,
+      at: Date.now(),
+      snapshot: remoteSnapshot([remotePane("%1")]),
+    });
+    const identity = loadIdentity();
+    if (!identity) throw new Error("no identity");
+    const agent = status(store, identity).panes.find((candidate) => candidate.pane === "%1");
+    if (!agent) throw new Error("no remote pane");
+    expect(glance(store, agent, 40)).toContain("CAPTURE_OK");
+    expect(await glanceAsync(store, agent, 40)).toContain("CAPTURE_OK");
+  } finally {
+    rmSync(bin, { recursive: true, force: true });
+  }
 });
 
 test("an async glance failure or skipped peer yields no preview", async () => {
