@@ -89,7 +89,7 @@ too — the jump uses
 
 Add focus hooks so looking at a finished agent clears its badge — see
 [docs/setup.md](docs/setup.md#tmux-focus-hooks). Wire Codex / Cursor /
-opencode notify hooks in the same file.
+opencode notifications in the same file.
 
 `PREFIX G` toggles the dash from anywhere. It switches to the running dash, or
 opens one in a `murmur-dash` session. Pressed in the dash, it takes you back to
