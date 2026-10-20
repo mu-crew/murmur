@@ -26,6 +26,9 @@ export type PublishPlan = {
   counts: { totals: StateCounts; crew: number };
 };
 
+// Up to this many candidate panes, `localPaneProcesses` runs `ps` once per pid.
+const PER_PID_PS_MAX = 4;
+
 export type LocalPaneProcess = {
   pane: PaneId;
   current_command: string;
@@ -35,7 +38,12 @@ export type LocalPaneProcess = {
 export interface Mux {
   currentWindow(): Location | null;
   livePanes(server?: TmuxServer): Set<PaneId> | null;
-  localPaneProcesses(): LocalPaneProcess[];
+  /**
+   * Local panes with their argv. `commands`, when given, keeps only panes whose
+   * foreground command is in the set, so no process is read for a pane that
+   * cannot match; an empty set reads nothing.
+   */
+  localPaneProcesses(commands?: ReadonlySet<string>): LocalPaneProcess[];
   // Sets murmur's aggregate WINDOW state. Status bars and pickers read this.
   setWindowState(
     window: WindowId,
@@ -423,7 +431,7 @@ export const tmux: Mux = {
 
   // A separate best-effort read for presentation. Unlike livePanes(), failure
   // and no panes have the same harmless result here: no attachment hint.
-  localPaneProcesses() {
+  localPaneProcesses(commands?: ReadonlySet<string>) {
     const out = runTmux([
       "list-panes",
       "-a",
@@ -437,6 +445,9 @@ export const tmux: Mux = {
       // or a `/proc/<pid>` path -- so this is the argv boundary and the guard
       // against path traversal, checked rather than trusted.
       if (!pane || !currentCommand || !pid || !/^\d+$/.test(pid)) return [];
+      // Filtered before any process read: the common case is no pane running
+      // an ssh-like command at all, and then nothing below runs.
+      if (commands && !commands.has(currentCommand)) return [];
       return [{ pane: asPaneId(pane), current_command: currentCommand, pid }];
     });
     if (rows.length === 0) return [];
@@ -454,9 +465,10 @@ export const tmux: Mux = {
       });
     }
 
-    // ONE `ps` for every pane, not one per pane. This runs on every status tick,
-    // so a fork per pane was a dozen forks a second on a busy machine to find a
-    // substring.
+    // A handful of candidates: one `ps` per pid. macOS `ps` costs ~5ms for one
+    // pid but ~75ms for two or more, so a call per pid wins until the count is
+    // large. Many candidates: ONE `ps` for all of them, since this runs on every
+    // status tick and a fork per pane would not scale.
     //
     // `ww` and NOT `eww`. The `e` flag appends the process ENVIRONMENT, which
     // murmur has no business reading: measured at 3452 bytes for one pane,
@@ -465,19 +477,25 @@ export const tmux: Mux = {
     // does not, which was the finding of the commit that added it -- so it
     // leaked every secret in every pane's environment into a string for no
     // consumer at all. argv is what the matcher reads and all it needs.
-    let listing: string;
-    try {
-      listing = execFileSync("ps", ["ww", "-o", "pid=,command=", ...rows.map((row) => row.pid)], {
-        encoding: "utf8",
-        timeout: 3000,
-        stdio: ["ignore", "pipe", "ignore"],
-      });
-    } catch {
-      // BSD/macOS ps can refuse the whole call when a pid is gone, which is
-      // ordinary: a pane can die between the tmux read and this one. No
-      // attachment hint is the harmless answer, same as every other failure on
-      // this path.
-      return [];
+    const groups =
+      rows.length <= PER_PID_PS_MAX ? rows.map((row) => [row.pid]) : [rows.map((row) => row.pid)];
+    const deadline = Date.now() + 3000;
+    let listing = "";
+    for (const pids of groups) {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) break;
+      try {
+        listing += `${execFileSync("ps", ["ww", "-o", "pid=,command=", ...pids], {
+          encoding: "utf8",
+          timeout: remaining,
+          stdio: ["ignore", "pipe", "ignore"],
+        })}\n`;
+      } catch {
+        // BSD/macOS ps can refuse the whole call when a pid is gone, which is
+        // ordinary: a pane can die between the tmux read and this one. That
+        // call's panes lose their hint; no attachment hint is the harmless
+        // answer, same as every other failure on this path.
+      }
     }
 
     const argvByPid = new Map<string, string>();

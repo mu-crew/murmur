@@ -490,3 +490,49 @@ test.skipIf(!existsSync(`/proc/${process.pid}/cmdline`))(
     }
   },
 );
+
+function asDarwin<T>(body: () => T): T {
+  const platform = Object.getOwnPropertyDescriptor(process, "platform");
+  Object.defineProperty(process, "platform", { value: "darwin" });
+  try {
+    return body();
+  } finally {
+    if (platform) Object.defineProperty(process, "platform", platform);
+  }
+}
+
+test("localPaneProcesses runs no ps when no pane's command is a candidate", () => {
+  tmuxCalls.length = 0;
+  tmuxReplies.length = 0;
+  tmuxReplies.push("%1\tzsh\t11\n%2\tpython\t12\n");
+  expect(asDarwin(() => tmux.localPaneProcesses(new Set(["ssh"])))).toEqual([]);
+  expect(tmuxCalls).toHaveLength(1);
+});
+
+test("localPaneProcesses runs ps once per candidate pid, only for candidates", () => {
+  tmuxCalls.length = 0;
+  tmuxReplies.length = 0;
+  tmuxReplies.push(
+    "%1\tssh\t11\n%2\tzsh\t12\n%3\tssh\t13\n",
+    "11 ssh dev -t a\n",
+    "13 ssh dev -t b\n",
+  );
+  expect(asDarwin(() => tmux.localPaneProcesses(new Set(["ssh"])))).toEqual([
+    { pane: asPaneId("%1"), current_command: "ssh", arguments: "ssh dev -t a" },
+    { pane: asPaneId("%3"), current_command: "ssh", arguments: "ssh dev -t b" },
+  ]);
+  expect(tmuxCalls.slice(1)).toEqual([
+    ["ww", "-o", "pid=,command=", "11"],
+    ["ww", "-o", "pid=,command=", "13"],
+  ]);
+});
+
+test("localPaneProcesses batches one ps for many candidates, and unfiltered keeps every pane", () => {
+  tmuxCalls.length = 0;
+  tmuxReplies.length = 0;
+  const rows = [1, 2, 3, 4, 5].map((n) => `%${n}\tssh\t${n}0`).join("\n");
+  tmuxReplies.push(rows, "10 a\n20 b\n30 c\n40 d\n50 e\n");
+  expect(asDarwin(() => tmux.localPaneProcesses())).toHaveLength(5);
+  expect(tmuxCalls).toHaveLength(2);
+  expect(tmuxCalls[1]).toEqual(["ww", "-o", "pid=,command=", "10", "20", "30", "40", "50"]);
+});
