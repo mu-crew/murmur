@@ -1,5 +1,5 @@
 import type { WindowId } from "./ids.js";
-import type { Mux } from "./mux.js";
+import type { Mux, PublishTargets } from "./mux.js";
 import type { Store } from "./store.js";
 import { DEFAULT_DRIVER, type LocalPane, type TmuxServer } from "./types.js";
 import {
@@ -47,6 +47,9 @@ function strongest(states: readonly RenderState[]): RenderState | null {
  * evidence that the panes are empty, so nothing is cleared. A session tmux does
  * not name leaves its option alone for the same reason.
  *
+ * `prefetched` is a targets read the caller already has from this same event, so
+ * the read is skipped.
+ *
  * One tmux read and one chained tmux write: this runs synchronously inside pi
  * and on every focus change, and a dozen separate tmux processes per publish
  * were most of its cost.
@@ -56,8 +59,9 @@ export function publishAgentStates(
   mux: Mux,
   store: Store,
   server: TmuxServer = { kind: "default" },
+  prefetched?: PublishTargets,
 ): boolean {
-  const targets = mux.publishTargets(window, server);
+  const targets = prefetched ?? mux.publishTargets(window, server);
   if (targets === null) return false;
 
   const allLocal = store.localPanes();

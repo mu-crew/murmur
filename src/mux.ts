@@ -13,6 +13,16 @@ import {
 import type { Location, TmuxServer } from "./types.js";
 import { RENDER_PRIORITY, type RenderState, type StateCounts } from "./view.js";
 
+/**
+ * Everything one pi event needs from tmux, read in one call: where this pane is
+ * now, the publish targets around it, and whether the human is looking at it.
+ */
+export type CurrentView = {
+  location: Location;
+  targets: PublishTargets;
+  focused: boolean;
+};
+
 export type PublishTargets = {
   session: SessionId | null;
   windowPanes: PaneId[];
@@ -37,6 +47,10 @@ export type LocalPaneProcess = {
 
 export interface Mux {
   currentWindow(): Location | null;
+  // `currentWindow` plus `publishTargets` plus the focus question in ONE tmux
+  // call, for the pane in $TMUX_PANE. Null when not in a pane or when tmux
+  // cannot answer; the caller then asks the three questions separately.
+  currentView(): CurrentView | null;
   livePanes(server?: TmuxServer): Set<PaneId> | null;
   /**
    * Local panes with their argv. `commands`, when given, keeps only panes whose
@@ -400,6 +414,47 @@ export const tmux: Mux = {
       pane,
       session_name: sessionName || null,
       window_name: chosenWindowName(windowName, autoRename),
+    };
+  },
+
+  currentView() {
+    const raw = process.env.TMUX_PANE;
+    if (!raw) return null;
+    const pane = asPaneId(raw);
+    // `list-panes -s` on the pane lists its whole session, one row per pane, and
+    // each row carries its window's and session's fields. The row for our own
+    // pane supplies the location and the focus answer; the rest are the targets.
+    const out = runTmux([
+      "list-panes",
+      "-s",
+      "-t",
+      pane,
+      "-F",
+      "#{pane_id}\t#{session_id}\t#{window_id}\t#{session_name}\t#{window_name}\t#{?automatic-rename,1,0}\t#{socket_path}\t#{&&:#{pane_active},#{&&:#{window_active},#{session_attached}}}",
+    ]);
+    if (out === null) return null;
+    const rows = out
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => line.split("\t"));
+    const mine = rows.find((row) => row[0] === pane);
+    const [, session, window, sessionName, windowName, autoRename, socketPath, active] = mine ?? [];
+    if (!session || !window || !socketPath) return null;
+    return {
+      location: {
+        server: deriveTmuxServer(socketPath),
+        session: asSessionId(session),
+        window: asWindowId(window),
+        pane,
+        session_name: sessionName || null,
+        window_name: chosenWindowName(windowName, autoRename),
+      },
+      targets: {
+        session: asSessionId(session),
+        windowPanes: rows.flatMap((row) => (row[0] && row[2] === window ? [asPaneId(row[0])] : [])),
+        sessionPanes: rows.flatMap((row) => (row[0] ? [asPaneId(row[0])] : [])),
+      },
+      focused: active === "1",
     };
   },
 

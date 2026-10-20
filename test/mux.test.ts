@@ -78,6 +78,51 @@ test("currentWindow records the socket-derived server", () => {
   }
 });
 
+test("currentView answers location, targets and focus from one list-panes", () => {
+  const socket = `${conventionalTmuxDirectory()}/mule`;
+  tmuxCalls.length = 0;
+  tmuxReplies.length = 0;
+  const row = (pane: string, window: string, active: string) =>
+    [pane, "$1", window, "work", "reviewer", "0", socket, active].join("\t");
+  tmuxReplies.push([row("%3", "@2", "0"), row("%34", "@2", "1"), row("%9", "@5", "0")].join("\n"));
+  process.env.TMUX_PANE = "%34";
+  try {
+    expect(tmux.currentView()).toEqual({
+      location: {
+        server: { kind: "label", value: "mule" },
+        session: "$1",
+        window: "@2",
+        pane: "%34",
+        session_name: "work",
+        window_name: "reviewer",
+      },
+      targets: { session: "$1", windowPanes: ["%3", "%34"], sessionPanes: ["%3", "%34", "%9"] },
+      focused: true,
+    });
+    expect(tmuxCalls).toHaveLength(1);
+    expect(tmuxCalls[0]?.slice(0, 5)).toEqual(["list-panes", "-s", "-t", "%34", "-F"]);
+  } finally {
+    delete process.env.TMUX_PANE;
+  }
+});
+
+test("currentView is null outside a pane, when tmux fails, and when our pane is not listed", () => {
+  tmuxCalls.length = 0;
+  tmuxReplies.length = 0;
+  expect(tmux.currentView()).toBeNull();
+  expect(tmuxCalls).toEqual([]);
+
+  process.env.TMUX_PANE = "%34";
+  try {
+    tmuxReplies.push("THROW:can't find pane: %34");
+    expect(tmux.currentView()).toBeNull();
+    tmuxReplies.push(`%9\t$1\t@5\twork\tw\t0\t${conventionalTmuxDirectory()}/mule\t0`);
+    expect(tmux.currentView()).toBeNull();
+  } finally {
+    delete process.env.TMUX_PANE;
+  }
+});
+
 test("a missing tmux server means no panes, other failures mean unknown", () => {
   expect(tmuxServerAbsent("no server running on /tmp/tmux-1000/default\n")).toBe(true);
   expect(

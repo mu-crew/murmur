@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { publishAgentStates } from "../agent-state.js";
-import { tmux } from "../mux.js";
+import { type PublishTargets, tmux } from "../mux.js";
 import type { Store } from "../store.js";
 import type { Activity, AgentMeta, AgentRuntime, Location } from "../types.js";
 import {
@@ -125,8 +125,21 @@ export default function murmurPi(pi: ExtensionAPI): void {
    * transient failure does not rewrite an agent's address to nothing.
    */
   let lastLocation = startLocation;
-  const here = (): Location => {
-    const observed = tmux.currentWindow();
+  /**
+   * Where this agent is now, plus what the SAME tmux call also answered: the
+   * publish targets and whether the human is looking at the pane. Both are null
+   * when the combined read failed, and the consumer then asks tmux itself --
+   * which is also what keeps "tmux could not list the window" an unknown answer
+   * rather than an empty one.
+   *
+   * One read per event, reused for the claim, the focus question and the
+   * publish, instead of a display-message, a list-panes and a second
+   * display-message.
+   */
+  type Seen = { location: Location; targets: PublishTargets | null; focused: boolean | null };
+  const look = (): Seen => {
+    const view = tmux.currentView();
+    const observed = view ? view.location : tmux.currentWindow();
     const location: Location = observed
       ? { ...observed, server: observed.server ?? startLocation.server }
       : startLocation;
@@ -147,8 +160,9 @@ export default function murmurPi(pi: ExtensionAPI): void {
       }
       lastLocation = location;
     }
-    return location;
+    return { location, targets: view?.targets ?? null, focused: view?.focused ?? null };
   };
+  const here = (): Location => look().location;
 
   const meta = (): AgentMeta => ({
     // mu names its agents; pi names its sessions. Both beat a window name when
@@ -230,7 +244,7 @@ export default function murmurPi(pi: ExtensionAPI): void {
    * the database rather than an environment marker an oddly-launched process
    * could drop.
    */
-  const getStore = async (): Promise<Store | null> => {
+  const getStore = async (location?: Location): Promise<Store | null> => {
     // Permanent: no murmur, no identity, or nested. None becomes false later in
     // the same process, so retrying would pay a failed dynamic import per turn
     // forever. `session_start` re-arms it, since the first two are fixable from
@@ -246,7 +260,7 @@ export default function murmurPi(pi: ExtensionAPI): void {
         return null;
       }
       const store = openStore();
-      if (!claim(store)) return null;
+      if (!claim(store, location)) return null;
       state = { kind: "open", store };
       return store;
     } catch {
@@ -260,8 +274,8 @@ export default function murmurPi(pi: ExtensionAPI): void {
    *
    * A refusal closes the store and is permanent for the process (see `refused`).
    */
-  const claim = (store: Store): boolean => {
-    const result = store.claimAgent({ location: here(), owner_pid: process.pid, meta: meta() });
+  const claim = (store: Store, location: Location = here()): boolean => {
+    const result = store.claimAgent({ location, owner_pid: process.pid, meta: meta() });
     if (result.outcome === "refused") {
       store.close();
       refused = true;
@@ -290,12 +304,12 @@ export default function murmurPi(pi: ExtensionAPI): void {
    */
   const report = async (activity: Activity, location: Location): Promise<boolean> => {
     try {
-      const store = await getStore();
+      const store = await getStore(location);
       if (!store || !agentId) return false;
       const write = () =>
         agentId !== null &&
         store.setActivity({ agent_id: agentId, owner_pid: process.pid, activity, location });
-      return write() || (claim(store) && write());
+      return write() || (claim(store, location) && write());
     } catch {
       dropStore();
       return false;
@@ -345,14 +359,15 @@ export default function murmurPi(pi: ExtensionAPI): void {
    * no label or window marker for as long as it waits.
    */
   const claimAndPublish = async (): Promise<void> => {
-    if (await getStore()) publish(here());
+    const seen = look();
+    if (await getStore(seen.location)) publish(seen);
   };
 
   /** Publish stored state only if we own the pane. A nested agent is invisible. */
-  const publish = (location: Location): void => {
+  const publish = ({ location, targets }: Seen): void => {
     if (refused || state.kind !== "open") return;
     try {
-      publishAgentStates(location.window, tmux, state.store, location.server);
+      publishAgentStates(location.window, tmux, state.store, location.server, targets ?? undefined);
     } catch {
       // Presentation is best effort; a tmux or store failure must never reach pi.
     }
@@ -374,11 +389,11 @@ export default function murmurPi(pi: ExtensionAPI): void {
 
   pi.on("agent_start", (_event, ctx) => {
     void enqueue(async () => {
-      const location = here();
+      const seen = look();
       // Ownership first, glyph second. A process whose pane was taken over while
       // its handle was dropped learns that from the claim inside `report`, and a
       // badge painted before it would announce an agent that has moved on.
-      if (await report("running", location)) publish(location);
+      if (await report("running", seen.location)) publish(seen);
       // Then what it is running with. Here as well as on the change events,
       // because a RESUMED session may never emit a model_select or end a turn --
       // it would sit on the dash reporting no model for its whole life.
@@ -439,12 +454,12 @@ export default function murmurPi(pi: ExtensionAPI): void {
     const patch = takeTurn(ctx);
     void enqueue(async () => {
       await reportRuntime(patch);
-      const location = here();
+      const seen = look();
       // Clearing is safe whatever the answer -- it retracts this process's own
       // glyph and can only ever say less -- but it is still ordered after the
       // write so that both halves read the same ownership answer.
-      if (await report("stopped", location)) publish(location);
-      else retract(location);
+      if (await report("stopped", seen.location)) publish(seen);
+      else retract(seen.location);
     });
   });
 
@@ -460,11 +475,16 @@ export default function murmurPi(pi: ExtensionAPI): void {
     const error = lastError;
     lastError = null;
     void enqueue(async () => {
-      const location = here();
-      const settled = settledState(focused(location.pane), muManaged, pending, error !== null);
+      const { location, targets, focused: seenFocused } = look();
+      const settled = settledState(
+        seenFocused ?? focused(location.pane),
+        muManaged,
+        pending,
+        error !== null,
+      );
       if (settled === null) return;
       try {
-        const store = await getStore();
+        const store = await getStore(location);
         if (!store || refused) return;
         // Attention is pane-addressed, and this call structurally cannot name an
         // agent, pid or activity. `blocked` is never authored by an owner.
@@ -474,7 +494,7 @@ export default function murmurPi(pi: ExtensionAPI): void {
           message: settled === "error" ? (error ?? "") : "",
           source: "pi",
         });
-        publishAgentStates(location.window, tmux, store, location.server);
+        publishAgentStates(location.window, tmux, store, location.server, targets ?? undefined);
       } catch {
         dropStore();
       }
@@ -491,7 +511,7 @@ export default function murmurPi(pi: ExtensionAPI): void {
     pendingTotal = total;
     void enqueue(async () => {
       await reportRuntime({ pending: total });
-      publish(here());
+      publish(look());
     });
   });
 
@@ -505,11 +525,12 @@ export default function murmurPi(pi: ExtensionAPI): void {
   // the moment the agent exits.
   pi.on("session_shutdown", async () => {
     await enqueue(async () => {
-      const location = here();
+      const seen = look();
+      const { location } = seen;
       try {
         if (state.kind === "open" && agentId) {
           state.store.releaseAgent({ agent_id: agentId, owner_pid: process.pid, location });
-          publish(location);
+          publish(seen);
         } else {
           retract(location);
         }
@@ -534,8 +555,6 @@ export default function murmurPi(pi: ExtensionAPI): void {
   pi.on("session_start", () => {
     void enqueue(async () => {
       if (state.kind === "absent") state = { kind: "untried" };
-      const location = here();
-      lastLocation = location;
       // Re-claim NOW, not on the next agent event. `session_shutdown` released
       // the row, so until this runs the pane has no owner and `claimAgent` would
       // refuse nobody. Waiting for an agent event -- minutes away, or never,
