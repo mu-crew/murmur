@@ -23,9 +23,16 @@ export function clearPane(raw: string, mux: Mux = tmux): void {
     // The badge is a tmux option, not murmur state, so resolving it needs no
     // murmur knowledge -- and a pane murmur has never seen can still carry an
     // orphan badge nothing else will clear.
-    const current = mux.currentWindow();
+    //
+    // `currentView` is one tmux call for the caller's location AND the publish
+    // targets, so the common case (the hook's own pane) needs no second read;
+    // `currentWindow` is the same answer when the view is unavailable.
+    const view = mux.currentView();
+    const current = view ? view.location : mux.currentWindow();
     const server = current?.server ?? ({ kind: "default" } as const);
     const window = current?.pane === pane ? current.window : mux.windowForPane(pane, server);
+    // The prefetched targets describe the caller's window: valid only for that one.
+    const targets = view && window === view.location.window ? view.targets : undefined;
     const location = current?.pane === pane ? current : window ? { server, pane } : null;
 
     try {
@@ -54,7 +61,7 @@ export function clearPane(raw: string, mux: Mux = tmux): void {
     // after the delete: blindly clearing them made a live running agent display
     // as idle though its agent row was untouched.
     try {
-      publishAgentStates(window, mux, store, server);
+      publishAgentStates(window, mux, store, server, targets);
     } catch {
       // Unreadable projection: leave the badge. Stale is recoverable, erasing a
       // real signal is not.

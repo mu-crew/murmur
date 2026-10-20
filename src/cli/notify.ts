@@ -1,7 +1,7 @@
 import type { Command } from "commander";
 import { publishAgentStates } from "../agent-state.js";
 import { asPaneId } from "../ids.js";
-import { type Mux, tmux } from "../mux.js";
+import { type Mux, type PublishTargets, tmux } from "../mux.js";
 import { openStore, type Store } from "../store.js";
 import type { Location, RequestableKind } from "../types.js";
 
@@ -258,11 +258,12 @@ export function runNotify(
   payload: NotifyPayload = {},
   mux: Mux = tmux,
 ): boolean {
-  const location = resolveLocation(input.pane, mux);
+  const resolved = resolveLocation(input.pane, mux);
   // No tmux and no pane. Silent and successful, because this runs from another
   // program's notification hook: a harness used outside tmux must not have its
   // own exit code broken by murmur having nothing to record.
-  if (!location) return false;
+  if (!resolved) return false;
+  const { location, targets } = resolved;
 
   const { source, message } = notifyFields(input, payload);
   const kind = notifyKind(input, payload);
@@ -281,7 +282,7 @@ export function runNotify(
   // from stored state rather than painting this request: RENDER_PRIORITY puts
   // `crashed` above `blocked` above `done`, and the window aggregate must not
   // let this pane erase a stronger sibling state.
-  publishAgentStates(location.window, mux, store, location.server);
+  publishAgentStates(location.window, mux, store, location.server, targets);
   return true;
 }
 
@@ -307,14 +308,22 @@ export function runNotify(
  *
  * The third case is when Mux should grow a lookup -- not before.
  */
-function resolveLocation(pane: string | undefined, mux: Mux): Location | null {
-  const here = mux.currentWindow();
-  if (!pane) return here;
+function resolveLocation(
+  pane: string | undefined,
+  mux: Mux,
+): { location: Location; targets?: PublishTargets } | null {
+  // One tmux call answers the location and the publish targets together; the
+  // targets go to publishAgentStates so it does not list the window again. When
+  // the view is unavailable the separate reads below give the same answers.
+  const view = mux.currentView();
+  const here = view ? view.location : mux.currentWindow();
+  const targets = view?.targets;
+  if (!pane) return here ? { location: here, targets } : null;
   const target = asPaneId(pane);
-  if (here && here.pane === target) return here;
-  if (here && mux.panesInWindow(here.window, here.server)?.includes(target)) {
-    return { ...here, pane: target };
-  }
+  if (here && here.pane === target) return { location: here, targets };
+  if (!here) return null;
+  const siblings = targets ? targets.windowPanes : mux.panesInWindow(here.window, here.server);
+  if (siblings?.includes(target)) return { location: { ...here, pane: target }, targets };
   return null;
 }
 
