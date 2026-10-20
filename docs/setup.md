@@ -103,12 +103,31 @@ notify = ["/bin/sh", "-lc", "exec murmur notify --source codex \"$@\"", "codex-n
 ```
 
 Codex fires `agent-turn-complete` (turn ended, waiting for you) — murmur records
-`done`. opencode's `session.idle` means the same thing. Drop `--title Codex` if
-you have it; the message falls back to the payload's `last-assistant-message`.
+`done`. Drop `--title Codex` if you have it; the message falls back to the
+payload's `last-assistant-message`.
 
 The same fields may arrive as JSON on stdin (opencode's plugin form). argv wins
 when both are present; flags still beat the payload, so `--event-type` can pin
 an event murmur does not know.
+
+### opencode
+
+OpenCode 2 has no notify hook, so a plugin pipes JSON to `murmur notify`. The
+[mu-crew dotfiles](https://github.com/mu-crew/dotfiles) ship one at
+`opencode/plugins/murmur/tui.ts`. Install it as
+`~/.config/opencode/plugins/murmur/tui.ts`. opencode loads only a directory
+with a `tui` entry, and skips a bare file in `plugins/`.
+
+It must be a TUI plugin. A server plugin runs in opencode's shared background
+service, which keeps the environment of the pane that first started it. Every
+notification from every opencode window would then land on that one pane. A
+TUI plugin runs in the terminal, so `murmur notify` gets the right
+`$TMUX_PANE`. Every TUI sees every session's events, so the plugin only
+reports sessions it has shown, either as the open session or as a tab.
+
+A finished turn arrives as `session.execution.succeeded`. The plugin sends it
+as `session.idle`, which murmur records as `done`. `permission.asked` is not in
+murmur's table, so it becomes `blocked`.
 
 ### Cursor CLI
 
