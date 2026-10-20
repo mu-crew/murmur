@@ -160,7 +160,12 @@ export function status(
       !pane.local && pane.agent_name !== null && pane.agent_name !== "",
   );
   if (attachable.length > 0) {
-    for (const process of (options.mux ?? tmux).localPaneProcesses()) {
+    // Only panes running a command some peer's jump command names can match, so
+    // the process read is limited to those (usually none).
+    const candidates = new Set(
+      attachable.flatMap((pane) => [...(commandsByPeer.get(pane.host_id) ?? [])]),
+    );
+    for (const process of (options.mux ?? tmux).localPaneProcesses(candidates)) {
       const remote = attachable.find(
         (pane) =>
           commandsByPeer.get(pane.host_id)?.has(process.current_command) &&

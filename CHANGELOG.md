@@ -3,6 +3,14 @@
 Notable changes per release. Written for someone deciding whether to upgrade,
 so it says what changed for a user rather than listing every commit.
 
+## Unreleased
+
+**Faster `murmur status`.** The status tick no longer runs `ps` over every
+tmux pane to look for ssh attachments. It reads process arguments only for
+panes whose foreground command is one a peer's jump command names, which is
+usually none. This cuts about 60-90 ms from each status call, and so from the
+poller, picker and the dash and side panel redraws.
+
 ## 1.3.1
 
 Upgrade with `npm i -g @mu-crew/murmur@1.3.1`. No snapshot or extension
