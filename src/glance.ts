@@ -1,4 +1,4 @@
-import { execFile, execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { peerForHost, shellQuote } from "./agents.js";
 import { endLinesWithReset, scan, sgrOnly } from "./ansi.js";
 import { SSH_OPTIONS } from "./channel.js";
@@ -95,6 +95,9 @@ function previewSafe(captured: string): string {
  */
 export type GlanceRunner = (target: string, argv: string[]) => string;
 
+/** execFile's default maxBuffer, which the sync runner inherits. */
+const STDOUT_MAX_BYTES = 1024 * 1024;
+
 const sshRunner: GlanceRunner = (target, argv) =>
   execFileSync("ssh", [...SSH_OPTIONS, target, ...argv], {
     encoding: "utf8",
@@ -107,18 +110,38 @@ export type GlanceRunnerAsync = (target: string, argv: string[]) => Promise<stri
 
 const sshRunnerAsync: GlanceRunnerAsync = (target, argv) =>
   new Promise((resolve, reject) => {
-    const child = execFile(
-      "ssh",
-      [...SSH_OPTIONS, target, ...argv],
-      // execFile always pipes stderr (its `stdio` option is ignored), where the
-      // sync runner discards it. Piped stderr counts against maxBuffer, so a chatty
-      // remote shell startup would reject a capture whose stdout is fine; a large
-      // cap makes that unreachable inside the 3 s timeout.
-      { encoding: "utf8", timeout: 3000, maxBuffer: 256 * 1024 * 1024 },
-      (error, stdout) => (error ? reject(error) : resolve(stdout)),
-    );
-    // execFile cannot ignore stdin like the sync runner; close it so ssh sees EOF.
-    child.stdin?.end();
+    // spawn, not execFile: execFile always pipes stderr (its `stdio` option is
+    // ignored), so remote shell diagnostics would count against maxBuffer and
+    // fail a good capture. Ignoring stdin and stderr here matches the sync
+    // runner; stdout keeps the same 1 MiB cap and 3 s timeout, both rejecting.
+    const child = spawn("ssh", [...SSH_OPTIONS, target, ...argv], {
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 3000,
+    });
+    const chunks: Buffer[] = [];
+    let size = 0;
+    let failed = false;
+    child.stdout.on("data", (chunk: Buffer) => {
+      size += chunk.length;
+      if (size > STDOUT_MAX_BYTES) {
+        if (!failed) {
+          failed = true;
+          child.kill();
+          reject(new Error("ssh stdout exceeded maxBuffer"));
+        }
+        return;
+      }
+      chunks.push(chunk);
+    });
+    child.on("error", (error) => {
+      failed = true;
+      reject(error);
+    });
+    child.on("close", (code, signal) => {
+      if (failed) return;
+      if (code !== 0) reject(new Error(`ssh exited ${code ?? signal}`));
+      else resolve(Buffer.concat(chunks).toString("utf8"));
+    });
   });
 
 /**
