@@ -49,12 +49,13 @@ export type PublishHooks = {
  */
 export function withPublish<T extends object>(
   mock: T,
-): T & Pick<Mux, "publishTargets" | "publish"> {
+): T & Pick<Mux, "currentView" | "publishTargets" | "publish"> {
   // The mocks spell ids as plain strings; the replay only passes them through.
   const typed = mock as Partial<Mux> & PublishHooks;
   const replay = fakeMux(typed);
   return {
     ...mock,
+    currentView: () => typed.currentView?.() ?? null,
     publishTargets: (window, server) =>
       typed.panesInWindow ? replay.publishTargets(window, server) : null,
     publish: (window, plan, server) => replay.publish(window, plan, server),
@@ -65,6 +66,7 @@ export function fakeMux(over: Partial<Mux> & PublishHooks = {}): Mux {
   const { sessionPanes, setSessionState, setStateCounts, ...rest } = over;
   const mux: Mux = {
     currentWindow: () => null,
+    currentView: () => null,
     livePanes: () => new Set<PaneId>(),
     localPaneProcesses: () => [],
     setWindowState: () => {},

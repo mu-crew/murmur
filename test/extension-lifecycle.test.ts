@@ -41,6 +41,8 @@ type Rig = {
   attention: string[];
   messages: string[];
   runtime: Record<string, unknown>[];
+  /** Every tmux read the extension made, in order. */
+  tmuxReads: string[];
   /** Deliver a payload on pi's in-process event bus, as another extension would. */
   emit: (channel: string, data: unknown) => void;
 };
@@ -52,7 +54,15 @@ type Rig = {
  * a takeover is expressed: this process claimed successfully once and is
  * refused the next time it asks.
  */
-async function rig(claimAnswers: Claim[], options: { setActivity?: boolean } = {}): Promise<Rig> {
+async function rig(
+  claimAnswers: Claim[],
+  options: {
+    setActivity?: boolean;
+    /** Answer for the one-call read; omitted means an older mux with none. */
+    view?: () => unknown;
+  } = {},
+): Promise<Rig> {
+  const tmuxReads: string[] = [];
   const claims: Rig["claims"] = [];
   const writes: Rig["writes"] = [];
   const releases: Rig["releases"] = [];
@@ -122,14 +132,24 @@ async function rig(claimAnswers: Claim[], options: { setActivity?: boolean } = {
 
   vi.doMock("../src/mux.js", () => ({
     tmux: withPublish({
-      currentWindow: () => ({
-        session: "$0",
-        window: "@1",
-        pane: "%1",
-        session_name: null,
-        window_name: null,
-      }),
-      panesInWindow: () => ["%1"],
+      currentWindow: () => {
+        tmuxReads.push("currentWindow");
+        return {
+          session: "$0",
+          window: "@1",
+          pane: "%1",
+          session_name: null,
+          window_name: null,
+        };
+      },
+      currentView: () => {
+        tmuxReads.push("currentView");
+        return options.view?.() ?? null;
+      },
+      panesInWindow: () => {
+        tmuxReads.push("panesInWindow");
+        return ["%1"];
+      },
       setWindowState: (target: string, badge: string | null) => void badges.push([target, badge]),
       setPaneState: () => {},
       setPaneLabel: (pane: string, label: string | null) => void labels.push([pane, label]),
@@ -161,6 +181,7 @@ async function rig(claimAnswers: Claim[], options: { setActivity?: boolean } = {
     messages,
     runtime,
     emit: (channel, data) => bus.get(channel)?.(data),
+    tmuxReads,
     handlers,
     claims,
     writes,
@@ -448,6 +469,70 @@ test("a later successful turn clears the error, and an abort is not one", async 
   await r.handlers.get("agent_settled")?.();
   await until(() => r.attention.length > 1);
   expect(r.attention).toEqual(["done", "done"]);
+
+  unmock();
+});
+
+const VIEW_LOCATION = {
+  server: { kind: "default" },
+  session: "$0",
+  window: "@1",
+  pane: "%1",
+  session_name: null,
+  window_name: null,
+};
+
+/** The combined read as tmux answers it for a pane that is `focused` or not. */
+const view = (focused: boolean) => () => ({
+  location: VIEW_LOCATION,
+  targets: { session: "$0", windowPanes: ["%1"], sessionPanes: ["%1"] },
+  focused,
+});
+
+test("one pi event is one tmux read: the claim, the publish and the focus answer share it", async () => {
+  const r = await rig([{ outcome: "claimed", agent_id: "a1" }], { view: view(false) });
+  await until(() => r.labels.length > 0);
+  // Startup asks currentWindow once to learn whether this is a pane at all; the
+  // claim-and-publish after it is one combined read and nothing else.
+  expect(r.tmuxReads).toEqual(["currentWindow", "currentView"]);
+
+  r.tmuxReads.length = 0;
+  await r.handlers.get("agent_start")?.();
+  await until(() => r.writes.length === 1);
+  expect(r.tmuxReads).toEqual(["currentView"]);
+
+  r.tmuxReads.length = 0;
+  await r.handlers.get("agent_settled")?.();
+  await until(() => r.attention.length > 0);
+  expect(r.attention).toEqual(["done"]);
+  expect(r.tmuxReads).toEqual(["currentView"]);
+
+  unmock();
+});
+
+test("a focused pane settles without raising done, from the combined read's answer", async () => {
+  const r = await rig([{ outcome: "claimed", agent_id: "a1" }], { view: view(true) });
+  await until(() => r.claims.length === 1);
+
+  await r.handlers.get("agent_settled")?.();
+  await until(() => r.attention.length > 0);
+
+  expect(r.attention).toEqual([]);
+
+  unmock();
+});
+
+test("when the combined read fails, the event falls back to the separate reads", async () => {
+  const r = await rig([{ outcome: "claimed", agent_id: "a1" }]);
+  await until(() => r.labels.length > 0);
+  expect(r.labels).toContainEqual(["%1", "worker-1"]);
+
+  r.tmuxReads.length = 0;
+  await r.handlers.get("agent_start")?.();
+  await until(() => r.writes.length === 1);
+  await until(() => r.tmuxReads.includes("panesInWindow"));
+
+  expect(r.tmuxReads).toEqual(["currentView", "currentWindow", "panesInWindow"]);
 
   unmock();
 });
