@@ -418,6 +418,7 @@ export const tmux: Mux = {
   },
 
   currentView() {
+    const unique = <T>(items: T[]): T[] => [...new Set(items)];
     const raw = process.env.TMUX_PANE;
     if (!raw) return null;
     const pane = asPaneId(raw);
@@ -437,7 +438,13 @@ export const tmux: Mux = {
       .split("\n")
       .filter(Boolean)
       .map((line) => line.split("\t"));
-    const mine = rows.find((row) => row[0] === pane);
+    // A window linked twice into one session lists our pane twice, once per link,
+    // and only the active link says focused. display-message resolves the active
+    // link, so prefer that row; rows that disagree on where the pane lives are
+    // ambiguous, and null sends the caller back to the separate reads.
+    const ours = rows.filter((row) => row[0] === pane);
+    if (ours.some((row) => row[1] !== ours[0]?.[1] || row[2] !== ours[0]?.[2])) return null;
+    const mine = ours.find((row) => row[7] === "1") ?? ours[0];
     const [, session, window, sessionName, windowName, autoRename, socketPath, active] = mine ?? [];
     if (!session || !window || !socketPath) return null;
     return {
@@ -451,8 +458,10 @@ export const tmux: Mux = {
       },
       targets: {
         session: asSessionId(session),
-        windowPanes: rows.flatMap((row) => (row[0] && row[2] === window ? [asPaneId(row[0])] : [])),
-        sessionPanes: rows.flatMap((row) => (row[0] ? [asPaneId(row[0])] : [])),
+        windowPanes: unique(
+          rows.flatMap((row) => (row[0] && row[2] === window ? [asPaneId(row[0])] : [])),
+        ),
+        sessionPanes: unique(rows.flatMap((row) => (row[0] ? [asPaneId(row[0])] : []))),
       },
       focused: active === "1",
     };
