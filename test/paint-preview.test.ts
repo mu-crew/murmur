@@ -331,6 +331,30 @@ test("the real async ssh runner ignores stderr like the sync one", async () => {
   }
 });
 
+test("the real async ssh runner still fails a capture whose stdout exceeds 1 MiB", async () => {
+  const bin = mkdtempSync(join(tmpdir(), "murmur-fake-ssh-"));
+  const fake = join(bin, "ssh");
+  writeFileSync(fake, "#!/bin/sh\nhead -c 1200000 /dev/zero | tr '\\0' x\n");
+  chmodSync(fake, 0o755);
+  vi.stubEnv("PATH", `${bin}:${process.env.PATH ?? ""}`);
+  try {
+    store.addPeer("bubba", "bubba.example");
+    store.replacePeerSnapshot("bubba", {
+      ok: true,
+      at: Date.now(),
+      snapshot: remoteSnapshot([remotePane("%1")]),
+    });
+    const identity = loadIdentity();
+    if (!identity) throw new Error("no identity");
+    const agent = status(store, identity).panes.find((candidate) => candidate.pane === "%1");
+    if (!agent) throw new Error("no remote pane");
+    expect(glance(store, agent, 40)).toBeNull();
+    expect(await glanceAsync(store, agent, 40)).toBeNull();
+  } finally {
+    rmSync(bin, { recursive: true, force: true });
+  }
+});
+
 test("an async glance failure or skipped peer yields no preview", async () => {
   store.addPeer("bubba", "bubba.example");
   store.replacePeerSnapshot("bubba", {
