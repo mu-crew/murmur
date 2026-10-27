@@ -2,9 +2,14 @@ import { execFileSync } from "node:child_process";
 import { publishAgentStates } from "../agent-state.js";
 import { type PublishTargets, tmux } from "../mux.js";
 import type { Store } from "../store.js";
-import type { Activity, AgentMeta, AgentRuntime, Location } from "../types.js";
 import {
+  type Activity,
+  type AgentMeta,
+  type AgentRuntime,
   driverFromEnv,
+  type Location,
+} from "../types.js";
+import {
   foldPending,
   isReportableTurn,
   PENDING_CHANNEL,
@@ -493,6 +498,7 @@ export default function murmurPi(pi: ExtensionAPI): void {
           location,
           message: settled === "error" ? (error ?? "") : "",
           source: "pi",
+          driver,
         });
         publishAgentStates(location.window, tmux, store, location.server, targets ?? undefined);
       } catch {

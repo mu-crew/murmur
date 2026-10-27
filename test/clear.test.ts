@@ -69,7 +69,13 @@ test("focus acknowledges every kind of attention on the pane", () => {
   // crashed row must not survive a focus that acknowledged the done next to it.
   seed((store) => {
     for (const kind of ["blocked", "done"] as const) {
-      store.requestAttention({ kind, location: location("%1"), message: kind, source: "pi" });
+      store.requestAttention({
+        kind,
+        location: location("%1"),
+        message: kind,
+        source: "pi",
+        driver: "human",
+      });
     }
     // Through the crash path, because that is the only writer of `crashed`.
     store.recordCrash(location("%1"));
@@ -152,6 +158,7 @@ test("a sibling pane that still wants attention keeps the badge lit", () => {
       location: location("%agent"),
       message: "",
       source: "pi",
+      driver: "human",
     });
     const claim = store.claimAgent({
       location: location("%busy"),
@@ -209,7 +216,13 @@ test("clear is silent and total when nothing can answer", () => {
 // ever repaints it.
 test("clear republishes the focused pane's own state", () => {
   seed((store) => {
-    store.requestAttention({ kind: "done", location: location("%1"), message: "", source: "pi" });
+    store.requestAttention({
+      kind: "done",
+      location: location("%1"),
+      message: "",
+      source: "pi",
+      driver: "human",
+    });
     const claim = store.claimAgent({
       location: location("%1"),
       owner_pid: process.pid,
@@ -273,6 +286,7 @@ test("another window's attention cannot light this window's badge", () => {
       location: location("%elsewhere", "@9"),
       message: "",
       source: "pi",
+      driver: "human",
     });
   });
   const badges = badgeRecorder();
@@ -320,6 +334,7 @@ test("clear on its own pane is one tmux read: the view supplies location and tar
       location: location("%1"),
       message: "",
       source: "pi",
+      driver: "human",
     });
   });
   const badges = badgeRecorder();

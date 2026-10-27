@@ -85,13 +85,20 @@ function localAgent(
   }
   for (const kind of options.attention ?? []) {
     if (kind === "crashed") store.recordCrash(location(pane));
-    else store.requestAttention({ kind, location: location(pane), message: "", source: "pi" });
+    else
+      store.requestAttention({
+        kind,
+        location: location(pane),
+        message: "",
+        source: "pi",
+        driver: "human",
+      });
   }
 }
 
 function remoteSnapshot(panes: SnapshotPane[], generatedAt = 1_000): Snapshot {
   return {
-    murmur_snapshot: 5,
+    murmur_snapshot: 6,
     host_id: "REMOTE",
     display_name: "container-id-nobody-can-type",
     murmur_version: "0.2.0",
@@ -402,6 +409,7 @@ test("an attention-only pane is a listable row with no agent", () => {
     location: location("%7"),
     message: "needs input",
     source: "codex",
+    driver: "human",
   });
 
   const result = status(store, IDENTITY);
@@ -438,6 +446,7 @@ test("an attention-only pane is aged by its NEWEST request", () => {
     location: location("%7"),
     message: "",
     source: "codex",
+    driver: "human",
     now: 1_000,
   });
   store.requestAttention({
@@ -445,6 +454,7 @@ test("an attention-only pane is aged by its NEWEST request", () => {
     location: location("%7"),
     message: "",
     source: "codex",
+    driver: "human",
     now: 5_000,
   });
 
@@ -483,6 +493,7 @@ test("tmux status emits urgent counts and never agent-supplied text", () => {
     location: location("%6"),
     message: injection,
     source: injection,
+    driver: "human",
   });
   store.addPeer(injection, injection);
 
@@ -655,6 +666,7 @@ test("a pane's age comes from its newest fact, agent row or attention request", 
     location: location("%stale"),
     message: "",
     source: "codex",
+    driver: "human",
     now: 2_000,
   });
 
@@ -676,6 +688,7 @@ test("a pane's age comes from its newest fact, agent row or attention request", 
     location: location("%fresh"),
     message: "",
     source: "codex",
+    driver: "human",
     now: 9_000,
   });
 

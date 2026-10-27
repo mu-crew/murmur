@@ -30,7 +30,7 @@ import type {
   SnapshotAttention,
   TmuxServer,
 } from "./types.js";
-import { ATTENTION_PRIORITY, EFFORTS, SNAPSHOT_VERSION } from "./types.js";
+import { ATTENTION_PRIORITY, DEFAULT_DRIVER, EFFORTS, SNAPSHOT_VERSION } from "./types.js";
 import { MURMUR_VERSION } from "./version.js";
 
 /**
@@ -40,7 +40,7 @@ import { MURMUR_VERSION } from "./version.js";
  * typed, deletes the file, and recreates the schema. No ALTER TABLE anywhere, so
  * there is no additive path to forget to use.
  */
-const SCHEMA_USER_VERSION = 8;
+const SCHEMA_USER_VERSION = 9;
 
 /**
  * The effort vocabulary as a SQL value list, generated from the one tuple.
@@ -134,6 +134,7 @@ const SCHEMA = `
     kind         TEXT    NOT NULL CHECK (kind IN ('done', 'blocked', 'error', 'crashed')),
     message      TEXT    NOT NULL,
     source       TEXT    NOT NULL,
+    driver       TEXT    NOT NULL CHECK (driver IN ('human', 'orchestrated')),
     session      TEXT    NOT NULL,
     window       TEXT    NOT NULL,
     session_name TEXT,
@@ -195,12 +196,14 @@ export interface Store {
   // --- attention: pane-addressed, no agent authority ----------------------
   requestAttention(request: AttentionRequest): void;
   /**
-   * Record a crash for a pane, as reconciliation would.
+   * Record a crash for a pane, as reconciliation would, with `driver = human`.
    *
    * `crashed` is not in `AttentionRequest` because it is reconciliation's word:
    * it asserts an owning process died without saying so, which only the node
    * that probed that pid may conclude. This is the same statement reconciliation
-   * uses, named so that a caller reaching for it has to mean it -- tests seeding
+   * uses (which writes the dead agent's own driver; this seam has no agent to
+   * read, and an agent row on the pane decides the pane's driver anyway), named
+   * so that a caller reaching for it has to mean it -- tests seeding
    * a crashed row are the honest use, and anything else in production would be
    * manufacturing a fact it cannot observe.
    */
@@ -277,6 +280,7 @@ type AttentionDbRow = {
   kind: string;
   message: string;
   source: string;
+  driver: string;
   session: string;
   window: string;
   session_name: string | null;
@@ -458,6 +462,7 @@ function toAttention(row: AttentionDbRow): SnapshotAttention {
     kind: row.kind as AttentionKind,
     message: row.message,
     source: row.source,
+    driver: row.driver as SnapshotAttention["driver"],
     requested_at: row.requested_at,
   };
 }
@@ -703,13 +708,18 @@ export function openStore(): Store {
       WHERE agent_id = ? AND owner_pid = ? AND server_kind = ? AND server_value = ? AND pane = ?`,
   );
   const upsertAttention = database.prepare(`
-    INSERT INTO attention (server_kind, server_value, pane, kind, message, source,
+    INSERT INTO attention (server_kind, server_value, pane, kind, message, source, driver,
                            session, window, session_name, window_name, requested_at)
-    VALUES (@server_kind, @server_value, @pane, @kind, @message, @source,
+    VALUES (@server_kind, @server_value, @pane, @kind, @message, @source, @driver,
             @session, @window, @session_name, @window_name, @requested_at)
     ON CONFLICT (server_kind, server_value, pane, kind) DO UPDATE SET
       message = excluded.message,
       source = excluded.source,
+      -- Human wins per ROW, as paneDriver makes it win per pane. requested_at
+      -- is kept on a repeat, so letting a crew repeat (a sibling's
+      -- notify --pane) overwrite the driver would hide a human request that
+      -- is still unmet, keeping its age.
+      driver = CASE WHEN attention.driver = 'human' THEN 'human' ELSE excluded.driver END,
       session = excluded.session,
       window = excluded.window,
       session_name = excluded.session_name,
@@ -864,6 +874,9 @@ export function openStore(): Store {
           kind: "crashed",
           message: "",
           source: "murmur",
+          // The dead agent's own driver: a crew worker that crashed is still
+          // crew, and NEEDS_HUMAN is what surfaces it anyway.
+          driver: row.driver,
           session: row.session,
           window: row.window,
           session_name: row.session_name,
@@ -1056,6 +1069,7 @@ export function openStore(): Store {
         kind: "crashed",
         message: "",
         source: "murmur",
+        driver: DEFAULT_DRIVER,
         session: location.session,
         window: location.window,
         session_name: location.session_name,
@@ -1076,6 +1090,7 @@ export function openStore(): Store {
         kind: request.kind,
         message: request.message,
         source: request.source,
+        driver: request.driver,
         session: request.location.session,
         window: request.location.window,
         session_name: request.location.session_name,

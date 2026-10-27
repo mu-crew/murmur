@@ -95,7 +95,7 @@ function pane(id: string, over: Partial<SnapshotPane> = {}): SnapshotPane {
 
 function document(panes: SnapshotPane[], over: Partial<Snapshot> = {}): Snapshot {
   return {
-    murmur_snapshot: 5,
+    murmur_snapshot: 6,
     host_id: "REMOTE",
     display_name: "dev",
     murmur_version: "0.2.0",

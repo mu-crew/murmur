@@ -3,7 +3,7 @@ import { publishAgentStates } from "../agent-state.js";
 import { asPaneId } from "../ids.js";
 import { type Mux, type PublishTargets, tmux } from "../mux.js";
 import { openStore, type Store } from "../store.js";
-import type { Location, RequestableKind } from "../types.js";
+import { driverFromEnv, type Location, type RequestableKind } from "../types.js";
 
 /**
  * The fields a harness may send, as flags or as a JSON object on stdin.
@@ -257,6 +257,7 @@ export function runNotify(
   input: NotifyInput & { pane?: string },
   payload: NotifyPayload = {},
   mux: Mux = tmux,
+  env: NodeJS.ProcessEnv = process.env,
 ): boolean {
   const resolved = resolveLocation(input.pane, mux);
   // No tmux and no pane. Silent and successful, because this runs from another
@@ -276,6 +277,10 @@ export function runNotify(
     // `source` answers "who asked" and is free text, so a new harness needs no
     // schema change.
     source,
+    // Read from the hook's own environment, which it inherits from the agent:
+    // mu marks the processes it places, exactly as the pi extension reads it.
+    // Without this a mu-placed codex worker's `done` counted as yours.
+    driver: driverFromEnv(env),
   });
 
   // Publish now, so tmux reflects it without waiting for a collect. Recompute

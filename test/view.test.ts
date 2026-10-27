@@ -7,6 +7,7 @@ import {
   NEEDS_HUMAN,
   type PaneAttention,
   type PaneView,
+  paneDriver,
   pendingSummary,
   RENDER_PRIORITY,
   renderState,
@@ -488,6 +489,24 @@ test("attention priority is an order-consistent subset of render priority", () =
   // Exhaustive over the type, which is what lets the rank lookup have no
   // meaningful fallback.
   expect(new Set(ATTENTION_PRIORITY).size).toBe(4);
+});
+
+test("paneDriver: the agent row decides, else the attention rows, and a human request wins", () => {
+  const entry = (driver: "human" | "orchestrated") => ({
+    kind: "done" as const,
+    message: "",
+    source: "codex",
+    driver,
+    requested_at: 1,
+  });
+  expect(paneDriver({ agent: null, attention: [entry("orchestrated")] })).toBe("orchestrated");
+  expect(paneDriver({ agent: null, attention: [entry("human")] })).toBe("human");
+  expect(
+    paneDriver({
+      agent: null,
+      attention: [entry("orchestrated"), { ...entry("human"), kind: "blocked" }],
+    }),
+  ).toBe("human");
 });
 
 test("a stopped agent with delegates out is waiting, not idle; attention still wins", () => {

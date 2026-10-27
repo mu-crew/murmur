@@ -98,6 +98,7 @@ test("a built snapshot validates as one, and survives serialisation unchanged", 
     location: location("%2", "@2"),
     message: "needs input",
     source: "codex",
+    driver: "human",
     now: 7,
   });
 
@@ -121,7 +122,15 @@ test("a built snapshot validates as one, and survives serialisation unchanged", 
     agent: null,
     session: "$0",
     window: "@2",
-    attention: [{ kind: "blocked", message: "needs input", source: "codex", requested_at: 7 }],
+    attention: [
+      {
+        kind: "blocked",
+        message: "needs input",
+        source: "codex",
+        driver: "human",
+        requested_at: 7,
+      },
+    ],
   });
 });
 
@@ -166,7 +175,13 @@ test("panes are emitted sorted by pane id, and order carries no meaning", () => 
   // writer never promised.
   const s = store();
   for (const pane of ["%30", "%4", "%100"]) {
-    s.requestAttention({ kind: "done", location: location(pane), message: "", source: "pi" });
+    s.requestAttention({
+      kind: "done",
+      location: location(pane),
+      message: "",
+      source: "pi",
+      driver: "human",
+    });
   }
 
   const built = s.buildLocalSnapshot(IDENTITY, {
@@ -220,6 +235,7 @@ test("absence from a snapshot is absence: a build reconciles before it publishes
     location: location("%gone"),
     message: "stale",
     source: "codex",
+    driver: "human",
   });
 
   const built = s.buildLocalSnapshot(IDENTITY, {
@@ -264,7 +280,13 @@ test("a pane with nothing to say is a pane nobody mentions, locally or on the wi
   const s = store();
   s.claimAgent({ location: location("%1"), owner_pid: process.pid, meta: META, now: 1 });
   const agentId = s.localPanes()[0]?.agent?.agent_id as string;
-  s.requestAttention({ kind: "done", location: location("%2"), message: "", source: "pi" });
+  s.requestAttention({
+    kind: "done",
+    location: location("%2"),
+    message: "",
+    source: "pi",
+    driver: "human",
+  });
 
   // %1 loses its agent and never had attention; %2 keeps a `done` its agent
   // never owned. Releasing deliberately does not clear attention, so this is
@@ -285,14 +307,14 @@ test("a pane with nothing to say is a pane nobody mentions, locally or on the wi
   expect(parseSnapshot(JSON.stringify(built)).panes).toHaveLength(1);
 });
 
-test("a snapshot states its own version and speaks snapshot 5", () => {
+test("a snapshot states its own version and speaks snapshot 6", () => {
   const built = store().buildLocalSnapshot(IDENTITY, {
     server: { kind: "default" },
     panes: live(),
     now: 1,
   });
 
-  expect(built.murmur_snapshot).toBe(5);
+  expect(built.murmur_snapshot).toBe(6);
   expect(built.murmur_version).toMatch(/^\d+\.\d+\.\d+/);
   // An empty node is a valid, complete document: it says "nothing here", which
   // is a fact, not an absence of one.
@@ -313,7 +335,7 @@ test.each<[TmuxServer, TmuxServer]>([
   ],
 ])("server tag %j round-trips exactly", (server, expected) => {
   const document = {
-    murmur_snapshot: 5,
+    murmur_snapshot: 6,
     host_id: "H",
     display_name: "d",
     murmur_version: "0.5.0",
@@ -327,7 +349,7 @@ test.each<[TmuxServer, TmuxServer]>([
         session_name: null,
         window_name: null,
         agent: null,
-        attention: [{ kind: "done", message: "", source: "pi", requested_at: 1 }],
+        attention: [{ kind: "done", message: "", source: "pi", driver: "human", requested_at: 1 }],
       },
     ],
   };
@@ -365,7 +387,7 @@ test.each([
   ],
 ])("rejects %s with its exact server field path", (_why, server, path, detail) => {
   const document = {
-    murmur_snapshot: 5,
+    murmur_snapshot: 6,
     host_id: "H",
     display_name: "d",
     murmur_version: "0.5.0",
@@ -379,7 +401,7 @@ test.each([
         session_name: null,
         window_name: null,
         agent: null,
-        attention: [{ kind: "done", message: "", source: "pi", requested_at: 1 }],
+        attention: [{ kind: "done", message: "", source: "pi", driver: "human", requested_at: 1 }],
       },
     ],
   };
@@ -390,7 +412,7 @@ test.each([
 
 test("a pane missing its server tag is rejected at the pane path", () => {
   const document = {
-    murmur_snapshot: 5,
+    murmur_snapshot: 6,
     host_id: "H",
     display_name: "d",
     murmur_version: "0.5.0",
@@ -403,7 +425,7 @@ test("a pane missing its server tag is rejected at the pane path", () => {
         session_name: null,
         window_name: null,
         agent: null,
-        attention: [{ kind: "done", message: "", source: "pi", requested_at: 1 }],
+        attention: [{ kind: "done", message: "", source: "pi", driver: "human", requested_at: 1 }],
       },
     ],
   };
@@ -420,10 +442,10 @@ test("the same pane id is valid on different tmux servers", () => {
     session_name: null,
     window_name: null,
     agent: null,
-    attention: [{ kind: "done", message: "", source: "pi", requested_at: 1 }],
+    attention: [{ kind: "done", message: "", source: "pi", driver: "human", requested_at: 1 }],
   };
   const document = {
-    murmur_snapshot: 5,
+    murmur_snapshot: 6,
     host_id: "H",
     display_name: "d",
     murmur_version: "0.5.0",
@@ -449,7 +471,7 @@ test("snapshot v2 is deliberately incompatible and names both versions", () => {
         panes: [],
       }),
     ),
-  ).toThrow("murmur_snapshot: expected 5, got 2");
+  ).toThrow("murmur_snapshot: expected 6, got 2");
 });
 
 test("parseSnapshot names the first failing path so an operator can act", () => {
@@ -457,7 +479,7 @@ test("parseSnapshot names the first failing path so an operator can act", () => 
   // shows `last_error` and nothing else. "invalid snapshot" would send them to
   // read code on another machine.
   const bad = JSON.stringify({
-    murmur_snapshot: 5,
+    murmur_snapshot: 6,
     host_id: "H",
     display_name: "d",
     murmur_version: "0.1.0",
@@ -471,7 +493,9 @@ test("parseSnapshot names the first failing path so an operator can act", () => 
         session_name: null,
         window_name: null,
         agent: null,
-        attention: [{ kind: "working", message: "", source: "x", requested_at: 1 }],
+        attention: [
+          { kind: "working", message: "", source: "x", driver: "human", requested_at: 1 },
+        ],
       },
     ],
   });
@@ -482,7 +506,7 @@ test("parseSnapshot names the first failing path so an operator can act", () => 
 
 test("nothing is coerced, defaulted or carried through", () => {
   const base = {
-    murmur_snapshot: 5,
+    murmur_snapshot: 6,
     host_id: "H",
     display_name: "d",
     murmur_version: "0.1.0",
@@ -497,7 +521,7 @@ test("nothing is coerced, defaulted or carried through", () => {
     session_name: null,
     window_name: null,
     agent: null,
-    attention: [{ kind: "done", message: "", source: "pi", requested_at: 1 }],
+    attention: [{ kind: "done", message: "", source: "pi", driver: "human", requested_at: 1 }],
   };
   // One process instance, as two panes would report it if a document claimed it.
   const owner = {
@@ -528,21 +552,36 @@ test("nothing is coerced, defaulted or carried through", () => {
     // Both directions, because compatibility is offered in neither: a reader
     // that accepted the older document would be guessing at the fields that
     // version added, which are exactly the state a human acts on.
-    ["a newer protocol", { ...base, murmur_snapshot: 6 }],
-    ["an older protocol", { ...base, murmur_snapshot: 4 }],
+    ["a newer protocol", { ...base, murmur_snapshot: 7 }],
+    ["an older protocol", { ...base, murmur_snapshot: 5 }],
     ["a stringly-typed clock", { ...base, generated_at: "1" }],
     ["a fractional clock", { ...base, generated_at: 1.5 }],
     ["a negative clock", { ...base, generated_at: -1 }],
     ["an empty host_id", { ...base, host_id: "" }],
     [
       "a missing murmur_version",
-      { murmur_snapshot: 5, host_id: "H", display_name: "d", generated_at: 1, panes: [] },
+      { murmur_snapshot: 6, host_id: "H", display_name: "d", generated_at: 1, panes: [] },
     ],
     ["an unknown top-level key", { ...base, extra: 3 }],
     ["panes as an object", { ...base, panes: {} }],
     ["a pane missing window_name", { ...base, panes: [{ ...pane, window_name: undefined }] }],
     ["an unknown pane key", { ...base, panes: [{ ...pane, rank: 4 }] }],
     ["an empty pane id", { ...base, panes: [{ ...pane, pane: "" }] }],
+    // Snapshot 6 made the attention driver required: a reader defaulting it
+    // would count a peer's crew worker as yours, the bug the field exists for.
+    [
+      "an attention entry missing driver",
+      {
+        ...base,
+        panes: [
+          { ...pane, attention: [{ kind: "done", message: "", source: "pi", requested_at: 1 }] },
+        ],
+      },
+    ],
+    [
+      "an unknown attention driver",
+      { ...base, panes: [{ ...pane, attention: [{ ...pane.attention[0], driver: "robot" }] }] },
+    ],
     // Every nullable string, each wrong in the same way. `textOrNull` guards six
     // fields and NONE was covered: a sweep made it return `value as string |
     // null` -- accepting a number for all six -- and the suite stayed green.
@@ -643,7 +682,7 @@ test("murmur export prints exactly one snapshot document and nothing else", () =
   // and parse each piece, which is a reader that can act on half a document.
   expect(stdout.trimEnd().split("\n")).toHaveLength(1);
   const parsed: Snapshot = parseSnapshot(stdout);
-  expect(parsed).toMatchObject({ murmur_snapshot: 5, display_name: "exporter", panes: [] });
+  expect(parsed).toMatchObject({ murmur_snapshot: 6, display_name: "exporter", panes: [] });
 });
 
 test("murmur export takes no options: an unknown flag is rejected, not ignored", () => {
@@ -705,7 +744,7 @@ const VALID_USAGE = {
 
 function agentDocument(runtime: Record<string, unknown>): string {
   return JSON.stringify({
-    murmur_snapshot: 5,
+    murmur_snapshot: 6,
     host_id: "H",
     display_name: "d",
     murmur_version: "0.4.0",
@@ -752,7 +791,7 @@ test("a version 2 document is rejected as firmly as a newer one", () => {
   // accepted the older document would default its missing server identity,
   // potentially addressing the same pane id on the wrong tmux server.
   const older = agentDocument({ model: null, effort: null, context_pct: null }).replace(
-    '"murmur_snapshot":5',
+    '"murmur_snapshot":6',
     '"murmur_snapshot":2',
   );
   expect(() => parseSnapshot(older)).toThrow(SnapshotInvalidError);

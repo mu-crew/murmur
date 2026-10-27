@@ -5,6 +5,23 @@ so it says what changed for a user rather than listing every commit.
 
 ## Unreleased
 
+**Finished codex, cursor and opencode crew workers no longer count as yours.**
+These harnesses report only through `murmur notify`, which never creates an
+agent row, so a pane they reached had no driver and fell back to `human`. A
+codex or cursor worker that mu placed showed as `done` in your status bar when
+it finished and appeared in the default picker. `murmur notify` now records the
+driver with each request. It is `orchestrated` when the hook's environment has
+`MU_MANAGED_AGENT=1` or `MU_AGENT_NAME`, which is the test the pi extension
+already uses. Those panes now count toward `crew`. A pane with a human request
+on it stays human, and a crew repeat of the same request cannot turn it into
+crew. The `on-attention` hook still fires for these panes, as it does for any
+crew `done`, but `MURMUR_EVENT`'s `driver` now says `orchestrated`, so a hook
+that filters on it drops them.
+
+**Snapshot version 6.** Each attention entry carries a `driver`. Every node
+must upgrade together; a mixed fleet refuses each other's snapshots. The local
+store rebuilds on first open (schema 9) and keeps your peers.
+
 ## 1.3.2
 
 Upgrade with `npm i -g @mu-crew/murmur@1.3.2`, then `/reload` in running pi

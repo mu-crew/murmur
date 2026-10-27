@@ -86,6 +86,11 @@ This path is attention only: no ownership, no `running`/`idle`, no crash
 detection. Unrecognised events become `blocked`, so a new harness still puts a
 row in front of you.
 
+A request counts as crew, not yours, when the hook's environment has
+`MU_MANAGED_AGENT=1` or `MU_AGENT_NAME`, which mu sets on the agents it places.
+The hook inherits them from the harness, so a wrapper that clears the
+environment (`env -i`) makes a mu worker count as yours.
+
 ### Codex
 
 ```toml

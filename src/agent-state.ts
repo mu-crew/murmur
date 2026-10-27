@@ -1,9 +1,10 @@
 import type { WindowId } from "./ids.js";
 import type { Mux, PublishTargets } from "./mux.js";
 import type { Store } from "./store.js";
-import { DEFAULT_DRIVER, type LocalPane, type TmuxServer } from "./types.js";
+import type { LocalPane, TmuxServer } from "./types.js";
 import {
   emptyCounts,
+  paneDriver,
   RENDER_PRIORITY,
   type RenderState,
   renderState,
@@ -103,7 +104,7 @@ export function publishAgentStates(
   const human = emptyCounts();
   const crew = emptyCounts();
   for (const pane of localPanes) {
-    const target = (pane.agent?.driver ?? DEFAULT_DRIVER) === "human" ? human : crew;
+    const target = paneDriver(pane) === "human" ? human : crew;
     target[paneState(pane)] += 1;
   }
   mux.publish(

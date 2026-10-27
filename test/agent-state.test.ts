@@ -166,7 +166,13 @@ test("a later done does not replace a crashed session", () => {
   running("%1", "@1");
   running("%2", "@2");
   store.recordCrash(location("%2", "@2"));
-  store.requestAttention({ kind: "done", location: location("%1"), message: "", source: "pi" });
+  store.requestAttention({
+    kind: "done",
+    location: location("%1"),
+    message: "",
+    source: "pi",
+    driver: "human",
+  });
   const states = sessionRecorder(["%1", "%2"]);
 
   publishAgentStates(asWindowId("@1"), states.mux, store);
@@ -197,7 +203,13 @@ test("the pill counts match murmur status for this host", async () => {
   const human = { ...META, driver: "human" as const };
   running("%1", "@1", human);
   running("%2", "@1", human);
-  store.requestAttention({ kind: "blocked", location: location("%2"), message: "", source: "pi" });
+  store.requestAttention({
+    kind: "blocked",
+    location: location("%2"),
+    message: "",
+    source: "pi",
+    driver: "human",
+  });
   store.claimAgent({
     location: location("%3"),
     owner_pid: process.pid,
@@ -220,4 +232,26 @@ test("the pill counts match murmur status for this host", async () => {
   // crashed (a human must see it) and the crew total, not an idle.
   expect(lines + crew).toBe("crashed\t1\nblocked\t1\nworking\t1\ncrew\t2\n");
   expect(lines + crew).toBe(tmuxStatus(status(store, identity)));
+});
+
+test("an attention-only crew pane counts as crew in the pill, not as your done", async () => {
+  // A mu-placed codex or cursor pane: notify wrote attention and no agent row.
+  // The pill reads paneDriver through publishAgentStates, separately from
+  // `murmur status`, so both are pinned here.
+  const { status, tmuxStatus } = await import("../src/status.js");
+  store.requestAttention({
+    kind: "done",
+    location: location("%1"),
+    message: "",
+    source: "codex",
+    driver: "orchestrated",
+  });
+  const states = sessionRecorder(["%1"]);
+
+  publishAgentStates(asWindowId("@1"), states.mux, store);
+
+  const [published] = states.counts;
+  expect(published?.totals.done).toBe(0);
+  expect(published?.crew).toBe(1);
+  expect(tmuxStatus(status(store, { host_id: "HOST", display_name: "host" }))).toBe("crew\t1\n");
 });

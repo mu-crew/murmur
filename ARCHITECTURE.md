@@ -96,7 +96,10 @@ both, and the picker shows both. Every attempt to collapse these produced a
 question with no answer, and one of them shipped: a focus hook that could
 overwrite an agent's state replaced `working` with `blocked` on live panes and
 nulled the owner metadata while all three processes were running. The fix is
-structural — `attention` has no column an agent field could live in.
+structural — `attention` has no column an agent field could live in. Its
+`driver` column is not one: it says who should hear about that request, as its
+requester read its own environment, and it never reaches the `agents` row or
+overrides that row's driver.
 
 Identity and address are separated:
 
@@ -139,9 +142,11 @@ Three consequences worth stating, because each is easy to violate by accident:
   pids of which one was alive, and the live agent read idle while it worked.
   Silence is correct for a process with nothing true to say.
 - **`murmur notify` is the one deliberate exception, and it is narrow by
-  construction.** Its whole request type is `{kind, location, message, source}`
-  — there is no `agent_id`, no pid, no activity and no metadata field, so it
-  cannot say anything about a process being alive even by accident. Its range is
+  construction.** Its whole request type is `{kind, location, message, source,
+  driver}` — there is no `agent_id`, no pid, no activity and no owner metadata,
+  so it cannot say anything about a process being alive even by accident.
+  `driver` comes from the hook's own environment (`driverFromEnv`), which it
+  inherits from the harness, and says only who should hear about the request. Its range is
   `done`, `blocked` and `error`, the kinds a human can answer, chosen from the
   event type the harness itself reports; `crashed` and both activities remain
   reconciliation's and the owner's.
@@ -279,7 +284,8 @@ shapes are forbidden outright, each because it once let a writer say something
 it had no standing to say: anything that takes a row and writes it (`append`,
 `ingest`, `put`), any log read, any partial-row or column-map update, any
 activity write keyed on pane alone rather than on `agent_id` plus `owner_pid`,
-any attention method that accepts an agent field, and any escape hatch exposing
+any attention method that accepts an agent field (an attention row's own
+`driver` is the request's audience, not the agent's), and any escape hatch exposing
 the database handle.
 
 Two seams exist with exactly one implementation each: `channel` (ssh) and `mux`
@@ -290,7 +296,7 @@ command rather than an interface to implement.
 
 ## The data model
 
-Four tables in `state.db`, all `STRICT`, `user_version = 8`. `agents` and
+Four tables in `state.db`, all `STRICT`, `user_version = 9`. `agents` and
 `attention` are local truth; `peers` is a cache of other nodes; `alerted`
 remembers which attention events the `on-attention` hook has run for (see
 [Alerting](#alerting)).
@@ -321,6 +327,7 @@ CREATE TABLE attention (
   kind         TEXT    NOT NULL CHECK (kind IN ('done', 'blocked', 'error', 'crashed')),
   message      TEXT    NOT NULL,
   source       TEXT    NOT NULL,
+  driver       TEXT    NOT NULL CHECK (driver IN ('human', 'orchestrated')),
   session      TEXT    NOT NULL,               -- its own location: see below
   window       TEXT    NOT NULL,
   session_name TEXT, window_name TEXT,
@@ -378,7 +385,7 @@ three surfaces carried machinery for it:
 | attention `done` | pi extension | `agent_settled`, pane unfocused, `driver = human`, no pending work |
 | attention `error` | pi extension | `agent_settled`, pane unfocused, last assistant message `stopReason: "error"`; any driver, any pending count |
 | runtime `pending` | pi extension | a `murmur:pending` report on pi's event bus |
-| attention `done` | `murmur notify` | a harness event meaning "turn over, waiting" (`agent-turn-complete`, `session.idle`) |
+| attention `done` | `murmur notify` | a harness event meaning "turn over, waiting" (`agent-turn-complete`, `session.idle`); any driver, recorded on the row |
 | attention `error` | `murmur notify` | a Cursor stop with `status: error` |
 | attention `blocked` | `murmur notify` | any other outside-in call, including an event murmur does not recognise |
 | attention `crashed` | `reconcileLocal` | pane alive, owner pid gone, activity was `running` |
@@ -398,7 +405,7 @@ agent again, and the producer reports zero before it delivers the last one, so
 the settle after that run raises the real `done`. The channel name is a
 string on both sides, so neither package imports the other.
 
-**Versioning is one strategy, not two.** On open, if `user_version` is not 8,
+**Versioning is one strategy, not two.** On open, if `user_version` is not 9,
 murmur salvages `SELECT name, target FROM peers` — the two fields a human typed
 — deletes the database and its `-wal`/`-shm` sidecars, recreates the schema, and
 re-inserts those peers with every observed column `NULL`. There is no
@@ -451,7 +458,7 @@ where the system interpreter is least yours to touch.
 
 ```jsonc
 {
-  "murmur_snapshot": 3,
+  "murmur_snapshot": 6,
   "host_id": "1d2ee96e-3a94-41b2-90fa-5f1ee2f04276",  // from identity.json
   "display_name": "mtrojer-mac",
   "murmur_version": "0.4.0",         // read from package.json, never restated
@@ -499,7 +506,7 @@ where the system interpreter is least yours to touch.
       },
       "attention": [
         { "kind": "blocked", "message": "needs input", "source": "codex",
-          "requested_at": 1788105680000 }
+          "driver": "human", "requested_at": 1788105680000 }
       ]
     }
   ]
@@ -548,7 +555,7 @@ agents whose panes are gone, and a reader has no way to tell.
 
 **Validation is total and strict**, and happens before storage.
 `parseSnapshot` rejects an unknown key, a missing key, a wrong type, a
-`murmur_snapshot` other than `3`, a malformed server tag, an unknown `activity`,
+`murmur_snapshot` other than `6`, a malformed server tag, an unknown `activity`,
 `driver`, `kind` or `effort`, a `context_pct` outside 0..100, a negative token
 count or cost, a duplicate server/pane address, and a pane that is neither an
 agent nor an attention. Nothing is
@@ -983,8 +990,9 @@ so heuristics are where the tests go.
 **`driver` distinguishes who is waiting.** An agent you are talking to and an
 agent an orchestrator placed want opposite treatment: when the orchestrated one
 finishes, its supervisor consumes the result and nobody needs to acknowledge
-anything. Same facts, opposite attention. So an orchestrated agent raises no
-`done` at all, and its rows are hidden from status, pick, dash, and sidepanel
+anything. Same facts, opposite attention. So an orchestrated pi agent raises no
+`done` at all (a notify-only harness cannot tell, so it records `done` with
+`driver = orchestrated` and the surfaces treat it as crew), and its rows are hidden from status, pick, dash, and sidepanel
 unless its attention includes `blocked` or `crashed` — the two kinds only a
 human can answer. That list is `NEEDS_HUMAN`, shared by every surface, because
 it was two literals in two files. That duplication once hid a row that needed a
@@ -992,6 +1000,15 @@ human.
 
 It is per *agent*, not per node, because the normal case is one machine running
 your session and six spawned workers at once.
+
+A pane reached only through `murmur notify` (codex, cursor, opencode) has no
+agent row to carry a driver, so each attention row carries the driver its
+requester read from its own environment (`driverFromEnv`: `MU_MANAGED_AGENT=1`
+or `MU_AGENT_NAME`). `paneDriver` uses the agent row's driver if there is one,
+and otherwise the attention rows' driver. Any `human` request makes the pane
+human, so a mixed pane never hides a request a person raised. The same holds per
+row: a repeat keeps `requested_at`, so the upsert keeps `human` once a row has
+it, and a crew repeat cannot hide an unmet human request.
 
 **Glance, not remote rendering.** "Render any pane from the master" hides two
 different problems: a stateless `capture-pane` (cheap, and what the preview
