@@ -25,7 +25,7 @@ function addPeer(
   const store = openStore();
   store.addPeer(name, target, "fake-transport --command {attach}");
   const snapshot: Snapshot = {
-    murmur_snapshot: 5,
+    murmur_snapshot: 6,
     host_id: `host-${name}`,
     display_name: name,
     murmur_version: "0.5.0",

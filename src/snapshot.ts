@@ -158,7 +158,7 @@ const AGENT_KEYS = [
   "claimed_at",
   "updated_at",
 ] as const;
-const ATTENTION_KEYS = ["kind", "message", "source", "requested_at"] as const;
+const ATTENTION_KEYS = ["kind", "message", "source", "driver", "requested_at"] as const;
 const SERVER_KINDS = ["default", "label", "path"] as const;
 const USAGE_KEYS = [
   "input",
@@ -264,6 +264,7 @@ function parseAttention(value: unknown, path: string): SnapshotAttention[] {
       kind,
       message: anyText(row.message, `${at}.message`),
       source: anyText(row.source, `${at}.source`),
+      driver: member(row.driver, `${at}.driver`, DRIVERS),
       requested_at: timestamp(row.requested_at, `${at}.requested_at`),
     };
   });

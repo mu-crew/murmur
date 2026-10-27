@@ -114,9 +114,15 @@ test("a notification with no recognised event records blocked for the caller's p
   expect(pane).toMatchObject({ pane: "%1", window: "@1", agent: null });
   expect(pane?.attention).toEqual([
     // Falls back to the title when no message is given, rather than a
-    // placeholder. `source` carries the harness name; `driver` is not its to
-    // set.
-    { kind: "blocked", message: "Codex", source: "codex", requested_at: expect.any(Number) },
+    // placeholder. `source` carries the harness name; `driver` is read from
+    // the hook's environment, and a hook outside mu is human.
+    {
+      kind: "blocked",
+      message: "Codex",
+      source: "codex",
+      driver: "human",
+      requested_at: expect.any(Number),
+    },
   ]);
 });
 
@@ -147,9 +153,36 @@ test("a codex turn-complete records DONE, not blocked", () => {
       // word "Codex", which the `source` column already carries.
       message: "Rename complete.",
       source: "codex",
+      driver: "human",
       requested_at: expect.any(Number),
     },
   ]);
+});
+
+test("a mu-placed harness's notification counts as crew, not as yours", () => {
+  // codex and cursor never claim an agent row, so a pane they reach only
+  // through notify has no agent to say who is waiting. The hook inherits the
+  // agent's environment, and mu marks the processes it places, so the request
+  // carries `orchestrated` -- and a finished mu worker stops counting as a
+  // `done` waiting for you.
+  const mu = { MU_MANAGED_AGENT: "1", MU_AGENT_NAME: "worker-1" };
+  runNotify(store, { source: "codex" }, { type: "agent-turn-complete" }, inPane(), mu);
+
+  expect(store.localPanes()[0]?.attention).toMatchObject([
+    { kind: "done", source: "codex", driver: "orchestrated" },
+  ]);
+  const view = status(store, identity);
+  expect(view.panes[0]?.driver).toBe("orchestrated");
+  expect(view.counts.done).toBe(0);
+  expect(view.orchestrated_counts.done).toBe(1);
+});
+
+test("a harness outside mu still notifies a human", () => {
+  runNotify(store, { source: "codex" }, { type: "agent-turn-complete" }, inPane(), {});
+
+  const view = status(store, identity);
+  expect(view.panes[0]?.driver).toBe("human");
+  expect(view.counts.done).toBe(1);
 });
 
 test("the badge shows the kind actually recorded, not a fixed word", () => {
@@ -272,6 +305,7 @@ test("a notifier cannot name a process, whatever its payload claims", () => {
     // Asserting the shape says the stronger thing anyway -- there is no field
     // for a pid, a state or an activity, so no value can land in one.
     expect(Object.keys(pane?.attention[0] ?? {}).sort()).toEqual([
+      "driver",
       "kind",
       "message",
       "requested_at",

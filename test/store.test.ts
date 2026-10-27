@@ -244,7 +244,13 @@ test("replacing a dead owner clears the previous occupant's attention", () => {
   // pane now sees a different agent.
   const s = store();
   s.claimAgent({ location: location(), owner_pid: 100, meta: meta() });
-  s.requestAttention({ kind: "done", location: location(), message: "", source: "pi" });
+  s.requestAttention({
+    kind: "done",
+    location: location(),
+    message: "",
+    source: "pi",
+    driver: "human",
+  });
 
   s.claimAgent({ location: location(), owner_pid: 200, meta: meta(), isAlive: dead });
 
@@ -301,12 +307,14 @@ test("claim, reclaim, refusal, release, and attention use the full server-pane k
     location: defaultLocation,
     message: "default",
     source: "pi",
+    driver: "human",
   });
   s.requestAttention({
     kind: "done",
     location: labelledLocation,
     message: "mule",
     source: "pi",
+    driver: "human",
   });
   expect(s.acknowledgePane(defaultLocation)).toBe(1);
   expect(s.localPanes().find((pane) => pane.server.kind === "label")?.attention).toMatchObject([
@@ -365,14 +373,26 @@ test("releaseAgent keeps attention, so a done raised at settle survives the exit
   const s = store();
   const claim = s.claimAgent({ location: location(), owner_pid: 100, meta: meta() });
   const agentId = "agent_id" in claim ? claim.agent_id : "";
-  s.requestAttention({ kind: "done", location: location(), message: "finished", source: "pi" });
+  s.requestAttention({
+    kind: "done",
+    location: location(),
+    message: "finished",
+    source: "pi",
+    driver: "human",
+  });
 
   expect(s.releaseAgent({ agent_id: agentId, owner_pid: 100, location: location() })).toBe(true);
 
   const panes = s.localPanes();
   expect(panes[0]?.agent).toBeNull();
   expect(panes[0]?.attention).toEqual([
-    { kind: "done", message: "finished", source: "pi", requested_at: expect.any(Number) },
+    {
+      kind: "done",
+      message: "finished",
+      source: "pi",
+      driver: "human",
+      requested_at: expect.any(Number),
+    },
   ]);
 });
 
@@ -389,6 +409,7 @@ test("a notifier cannot change any agent field", () => {
       location: location(),
       message: "someone is wanted",
       source: "codex",
+      driver: "human",
       now: 50,
     });
   }
@@ -418,6 +439,7 @@ test("notify then clear leaves a live agent's row byte-for-byte unchanged", () =
     location: location("%250"),
     message: "needs input",
     source: "stdin-probe",
+    driver: "human",
     now: 3,
   });
   s.acknowledgePane(location("%250"));
@@ -435,21 +457,64 @@ test("a repeated attention request does not reset requested_at", () => {
   // Age means "how long this has gone unmet", so a repeat must not restart the
   // clock -- which also makes crash attention idempotent for free.
   const s = store();
-  s.requestAttention({ kind: "blocked", location: location(), message: "a", source: "x", now: 10 });
-  s.requestAttention({ kind: "blocked", location: location(), message: "b", source: "y", now: 99 });
+  s.requestAttention({
+    kind: "blocked",
+    location: location(),
+    message: "a",
+    source: "x",
+    driver: "human",
+    now: 10,
+  });
+  s.requestAttention({
+    kind: "blocked",
+    location: location(),
+    message: "b",
+    source: "y",
+    driver: "human",
+    now: 99,
+  });
 
   expect(s.localPanes()[0]?.attention).toEqual([
-    { kind: "blocked", message: "b", source: "y", requested_at: 10 },
+    { kind: "blocked", message: "b", source: "y", driver: "human", requested_at: 10 },
   ]);
+});
+
+test("a crew repeat cannot turn an unmet human request into crew", () => {
+  // The repeat keeps requested_at, so overwriting the driver too would move a
+  // still-unmet human request out of the human counts with its age intact.
+  // A sibling's `notify --pane` from a mu-placed harness is the real route.
+  const s = store();
+  const request = { kind: "done" as const, location: location(), message: "", source: "codex" };
+  s.requestAttention({ ...request, driver: "human", now: 10 });
+  s.requestAttention({ ...request, driver: "orchestrated", now: 20 });
+  expect(s.localPanes()[0]?.attention).toMatchObject([{ driver: "human", requested_at: 10 }]);
+
+  // The other way round is a human asking now, and it says so.
+  s.acknowledgePane(location());
+  s.requestAttention({ ...request, driver: "orchestrated", now: 30 });
+  s.requestAttention({ ...request, driver: "human", now: 40 });
+  expect(s.localPanes()[0]?.attention).toMatchObject([{ driver: "human", requested_at: 30 }]);
 });
 
 test("kinds coexist on one pane, and acknowledge clears them all for that pane only", () => {
   const s = store();
   for (const kind of ["blocked", "done"] as const) {
-    s.requestAttention({ kind, location: location("%1"), message: kind, source: "x" });
+    s.requestAttention({
+      kind,
+      location: location("%1"),
+      message: kind,
+      source: "x",
+      driver: "human",
+    });
   }
   s.recordCrash(location("%1"));
-  s.requestAttention({ kind: "done", location: location("%2"), message: "", source: "x" });
+  s.requestAttention({
+    kind: "done",
+    location: location("%2"),
+    message: "",
+    source: "x",
+    driver: "human",
+  });
 
   expect(s.localPanes()[0]?.attention.map((entry) => entry.kind)).toEqual([
     "crashed",
@@ -466,7 +531,13 @@ test("reconcileLocal with panes null writes nothing", () => {
   // tmux failing to answer is absence of evidence, not evidence of death.
   const s = store();
   s.claimAgent({ location: location(), owner_pid: 100, meta: meta() });
-  s.requestAttention({ kind: "done", location: location(), message: "", source: "pi" });
+  s.requestAttention({
+    kind: "done",
+    location: location(),
+    message: "",
+    source: "pi",
+    driver: "human",
+  });
   const before = agentRows();
 
   expect(s.reconcileLocal({ server: { kind: "default" }, panes: null, isAlive: dead })).toEqual({
@@ -528,7 +599,8 @@ test("a dead running owner becomes stopped plus one crashed row, idempotently", 
   expect(first.crashed).toEqual(["%1"]);
   expect(s.localPanes()[0]?.agent?.activity).toBe("stopped");
   expect(s.localPanes()[0]?.attention).toEqual([
-    { kind: "crashed", message: "", source: "murmur", requested_at: 10 },
+    // The dead agent's own driver: a crashed crew worker stays crew.
+    { kind: "crashed", message: "", source: "murmur", driver: "orchestrated", requested_at: 10 },
   ]);
 
   const after = agentRows();
@@ -546,10 +618,22 @@ test("a vanished pane loses its agent and its attention; a stopped dead owner ke
   const s = store();
   // Gone pane, with attention.
   s.claimAgent({ location: location("%1"), owner_pid: 100, meta: meta() });
-  s.requestAttention({ kind: "done", location: location("%1"), message: "", source: "pi" });
+  s.requestAttention({
+    kind: "done",
+    location: location("%1"),
+    message: "",
+    source: "pi",
+    driver: "human",
+  });
   // Live pane, stopped owner that died after finishing, with a done nobody saw.
   s.claimAgent({ location: location("%2"), owner_pid: 200, meta: meta() });
-  s.requestAttention({ kind: "done", location: location("%2"), message: "seen me", source: "pi" });
+  s.requestAttention({
+    kind: "done",
+    location: location("%2"),
+    message: "seen me",
+    source: "pi",
+    driver: "human",
+  });
 
   const summary = s.reconcileLocal({
     server: { kind: "default" },
@@ -566,7 +650,13 @@ test("a vanished pane loses its agent and its attention; a stopped dead owner ke
 
 test("attention for a pane that never had an agent is reaped when the pane goes", () => {
   const s = store();
-  s.requestAttention({ kind: "blocked", location: location("%7"), message: "", source: "codex" });
+  s.requestAttention({
+    kind: "blocked",
+    location: location("%7"),
+    message: "",
+    source: "codex",
+    driver: "human",
+  });
 
   const summary = s.reconcileLocal({
     server: { kind: "default" },
@@ -583,9 +673,21 @@ test("attention for a pane that never had an agent is reaped when the pane goes"
 test("localPanes joins by pane and exposes no owner_pid anywhere", () => {
   const s = store();
   s.claimAgent({ location: location("%1"), owner_pid: 100, meta: meta() });
-  s.requestAttention({ kind: "done", location: location("%1"), message: "", source: "pi" });
+  s.requestAttention({
+    kind: "done",
+    location: location("%1"),
+    message: "",
+    source: "pi",
+    driver: "human",
+  });
   s.claimAgent({ location: location("%2"), owner_pid: 200, meta: meta() });
-  s.requestAttention({ kind: "blocked", location: location("%3"), message: "", source: "codex" });
+  s.requestAttention({
+    kind: "blocked",
+    location: location("%3"),
+    message: "",
+    source: "codex",
+    driver: "human",
+  });
 
   const panes = s.localPanes();
 
@@ -618,7 +720,7 @@ test("buildLocalSnapshot reconciles, drops empty panes and never carries a pid",
   );
 
   expect(snapshot).toMatchObject({
-    murmur_snapshot: 5,
+    murmur_snapshot: 6,
     host_id: "H",
     display_name: "here",
     generated_at: 42,
@@ -634,7 +736,7 @@ test("a successful fetch replaces the whole document; a pane absent after is gon
   const s = store();
   s.addPeer("dev", "dev.example");
   const base = {
-    murmur_snapshot: 5 as const,
+    murmur_snapshot: 6 as const,
     host_id: "REMOTE",
     display_name: "dev",
     murmur_version: "9.9.9",
@@ -655,7 +757,9 @@ test("a successful fetch replaces the whole document; a pane absent after is gon
           session_name: null,
           window_name: null,
           agent: null,
-          attention: [{ kind: "done", message: "", source: "pi", requested_at: 1 }],
+          attention: [
+            { kind: "done", message: "", source: "pi", driver: "human", requested_at: 1 },
+          ],
         },
       ],
     },
@@ -686,7 +790,7 @@ test("a failed fetch keeps the previous snapshot and leaves fetched_at alone", (
     ok: true,
     at: 1_000,
     snapshot: {
-      murmur_snapshot: 5,
+      murmur_snapshot: 6,
       host_id: "REMOTE",
       display_name: "dev",
       murmur_version: "1.0.0",
@@ -739,7 +843,7 @@ test("addPeer corrects a target without discarding the cache", () => {
     ok: true,
     at: 1_000,
     snapshot: {
-      murmur_snapshot: 5,
+      murmur_snapshot: 6,
       host_id: "REMOTE",
       display_name: "dev",
       murmur_version: "1.0.0",
@@ -837,7 +941,11 @@ test.each([
   ],
   [
     "kind",
-    "INSERT INTO attention (server_kind, server_value, pane, kind, message, source, session, window, requested_at) VALUES ('default', '', '%9', 'working', '', 'x', '$0', '@0', 0)",
+    "INSERT INTO attention (server_kind, server_value, pane, kind, message, source, driver, session, window, requested_at) VALUES ('default', '', '%9', 'working', '', 'x', 'human', '$0', '@0', 0)",
+  ],
+  [
+    "attention driver",
+    "INSERT INTO attention (server_kind, server_value, pane, kind, message, source, driver, session, window, requested_at) VALUES ('default', '', '%9', 'done', '', 'x', 'robot', '$0', '@0', 0)",
   ],
 ])("SQLite refuses an out-of-enum %s", (_field, sql) => {
   const s = store();
@@ -868,7 +976,7 @@ test("an existing database upgrades without losing peers", () => {
     ok: true,
     at: 1_000,
     snapshot: {
-      murmur_snapshot: 5,
+      murmur_snapshot: 6,
       host_id: "REMOTE",
       display_name: "dev",
       murmur_version: "1.0.0",

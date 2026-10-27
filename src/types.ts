@@ -38,6 +38,15 @@ export type Driver = "human" | "orchestrated";
 
 export const DEFAULT_DRIVER: Driver = "human";
 
+/**
+ * The driver a process reads from its own environment: mu marks the agents it
+ * places. Shared by the pi extension and `murmur notify`, whose hook inherits
+ * the harness's environment.
+ */
+export function driverFromEnv(env: NodeJS.ProcessEnv): Driver {
+  return env.MU_MANAGED_AGENT === "1" || env.MU_AGENT_NAME ? "orchestrated" : "human";
+}
+
 export type TmuxServer =
   | { kind: "default" }
   | { kind: "label"; value: string }
@@ -229,7 +238,7 @@ export type PeerRecord = {
  * that every peer speaking the new version was incompatible, because its copy
  * still said 1.
  */
-export const SNAPSHOT_VERSION = 5;
+export const SNAPSHOT_VERSION = 6;
 
 /**
  * One node's whole current state. Complete, never a delta: a peer that returns
@@ -270,6 +279,13 @@ export type SnapshotAttention = {
   kind: AttentionKind;
   message: string;
   source: string;
+  /**
+   * Who is waiting on the pane, as the requester saw it. Carried on the request
+   * because a notify-only harness (codex, cursor, opencode) never claims an
+   * agent row, so without it an attention-only pane has no driver at all and
+   * every mu-placed codex worker counted as yours.
+   */
+  driver: Driver;
   requested_at: number;
 };
 
@@ -347,12 +363,18 @@ export type RequestableKind = Exclude<AttentionKind, "crashed">;
 /**
  * Everything an attention writer may say. There is no agent_id, no owner_pid,
  * no activity and no owner metadata field, and adding one is a contract change.
+ *
+ * `driver` is the one such change, made in snapshot 6. It is not a claim on an
+ * agent: it says who should hear about THIS request, which the writer knows
+ * from its own environment and nothing downstream can recover. Without it a
+ * pane reached only through `murmur notify` defaulted to `human`.
  */
 export type AttentionRequest = {
   kind: RequestableKind;
   location: Location;
   message: string;
   source: string;
+  driver: Driver;
   now?: number;
 };
 

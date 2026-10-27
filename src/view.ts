@@ -393,6 +393,20 @@ type ViewSource = {
   fetched_at: number | null;
 };
 
+/**
+ * Who is waiting on a pane.
+ *
+ * The agent row says, when there is one. A pane reached only through `murmur
+ * notify` has none, so its attention rows say instead: each carries the driver
+ * its requester saw in its own environment. Any human request makes the pane
+ * human -- a mixed pane must not hide a request a person raised.
+ */
+export function paneDriver(pane: Pick<SnapshotPane, "agent" | "attention">): Driver {
+  if (pane.agent) return pane.agent.driver;
+  if (pane.attention.length === 0) return DEFAULT_DRIVER;
+  return pane.attention.some((entry) => entry.driver === "human") ? "human" : "orchestrated";
+}
+
 function paneView(pane: SnapshotPane, source: ViewSource): PaneView {
   const agent = pane.agent;
   return {
@@ -427,7 +441,7 @@ function paneView(pane: SnapshotPane, source: ViewSource): PaneView {
     context_window: agent?.context_window ?? null,
     usage: agent?.usage ?? null,
     pending: agent?.pending ?? null,
-    driver: agent?.driver ?? DEFAULT_DRIVER,
+    driver: paneDriver(pane),
     // The NEWER of the two, not the agent row with attention as a fallback.
     //
     // `??` consulted the attention clock only for a pane with no agent row, so

@@ -118,7 +118,7 @@ function peer(name: string, hostId: string, panes: string[] = [], jumpCommand?: 
     ok: true,
     at: 1_000,
     snapshot: {
-      murmur_snapshot: 5,
+      murmur_snapshot: 6,
       host_id: hostId,
       display_name: name,
       murmur_version: "0.2.0",
@@ -131,7 +131,9 @@ function peer(name: string, hostId: string, panes: string[] = [], jumpCommand?: 
         session_name: null,
         window_name: null,
         agent: null,
-        attention: [{ kind: "done" as const, message: "", source: "pi", requested_at: 1 }],
+        attention: [
+          { kind: "done" as const, message: "", source: "pi", driver: "human", requested_at: 1 },
+        ],
       })),
     },
   });
@@ -766,6 +768,7 @@ test("a local pane that is really gone is pane_gone, and still writes nothing", 
     },
     message: "",
     source: "pi",
+    driver: "human",
   });
   const before = snapshotOfEverything();
 

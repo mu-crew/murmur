@@ -3,7 +3,8 @@ import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test, vi } from "vitest";
-import { driverFromEnv, settledState, turnError } from "../src/extension/decide.js";
+import { settledState, turnError } from "../src/extension/decide.js";
+import { driverFromEnv } from "../src/types.js";
 import { builtArtifact, runBuiltCli } from "./helpers/built.js";
 import { withPublish } from "./helpers/fake-mux.js";
 

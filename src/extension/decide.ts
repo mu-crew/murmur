@@ -1,4 +1,4 @@
-import { type AgentRuntime, type Driver, EFFORTS } from "../types.js";
+import { type AgentRuntime, EFFORTS } from "../types.js";
 
 /**
  * pi's three events, in the order verified at runtime against pi 0.84.3 (not
@@ -90,10 +90,6 @@ export function foldPending(counts: Map<string, number>, data: unknown): number 
   let total = 0;
   for (const n of counts.values()) total += n;
   return total;
-}
-
-export function driverFromEnv(env: NodeJS.ProcessEnv): Driver {
-  return env.MU_MANAGED_AGENT === "1" || env.MU_AGENT_NAME ? "orchestrated" : "human";
 }
 
 /**

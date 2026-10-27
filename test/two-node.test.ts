@@ -339,6 +339,7 @@ test("attention raised on one node is visible on the other, and acknowledging it
     location: location("%12", "@2"),
     message: "needs a decision",
     source: "codex",
+    driver: "human",
     now: 1_500,
   });
   a.addPeer("bubba", "bubba");
@@ -375,6 +376,34 @@ test("attention raised on one node is visible on the other, and acknowledging it
   expect(after.map((view) => view.pane)).toEqual(["%11"]);
   // Still running, on the far node's own word, after two acknowledgements.
   expect(after[0]).toMatchObject({ activity: "running", attention: [] });
+});
+
+test("a crew harness's attention-only pane crosses the wire as crew", async () => {
+  // The driver rides on the attention row, so a mu-placed codex worker that
+  // finished on B is crew on A too -- it does not land in A's own done count.
+  const a = nodeStore(dirA);
+  const b = nodeStore(dirB);
+  b.requestAttention({
+    kind: "done",
+    location: location("%12", "@2"),
+    message: "finished",
+    source: "codex",
+    driver: "orchestrated",
+    now: 1_500,
+  });
+  a.addPeer("bubba", "bubba");
+  const world = {
+    server: { kind: "default" as const },
+    panes: live("%12"),
+    isAlive: () => true,
+    now: 2_000,
+  };
+
+  await collect(a, exportFrom(b, world), 2_000, reconciling());
+
+  expect(paneViews(a, IDENTITY_A, 2_000)).toMatchObject([
+    { pane: "%12", local: false, driver: "orchestrated" },
+  ]);
 });
 
 test("a crash detected on one node reaches the other as crashed, with the dead agent still named", async () => {

@@ -41,7 +41,14 @@ function location(pane: string): Location {
 }
 
 function ask(pane: string, kind: Exclude<AttentionKind, "crashed">, at = NOW, message = "") {
-  store.requestAttention({ kind, location: location(pane), message, source: "pi", now: at });
+  store.requestAttention({
+    kind,
+    location: location(pane),
+    message,
+    source: "pi",
+    driver: "human",
+    now: at,
+  });
 }
 
 function recorder(): { run: (hook: string, event: AlertEvent) => void; fired: AlertEvent[] } {
@@ -98,7 +105,7 @@ test("collect fires for a remote peer's events and a crash it found locally", as
   // Remote: a done on another node, arriving in its snapshot.
   store.addPeer("dev", "dev");
   const remote: Snapshot = {
-    murmur_snapshot: 5,
+    murmur_snapshot: 6,
     host_id: "REMOTE",
     display_name: "Remote",
     murmur_version: "x",
@@ -107,7 +114,9 @@ test("collect fires for a remote peer's events and a crash it found locally", as
       {
         ...location("%9"),
         agent: null,
-        attention: [{ kind: "error", message: "boom", source: "pi", requested_at: NOW }],
+        attention: [
+          { kind: "error", message: "boom", source: "pi", driver: "human", requested_at: NOW },
+        ],
       },
     ],
   };
