@@ -5,6 +5,12 @@ so it says what changed for a user rather than listing every commit.
 
 ## Unreleased
 
+## 1.4.0
+
+Upgrade every node with `npm i -g @mu-crew/murmur@1.4.0`, then `/reload` in
+running pi sessions to pick up the extension. Snapshot and store change: nodes
+on different versions refuse each other until all are upgraded.
+
 **Finished codex, cursor and opencode crew workers no longer count as yours.**
 These harnesses report only through `murmur notify`, which never creates an
 agent row, so a pane they reached had no driver and fell back to `human`. A
