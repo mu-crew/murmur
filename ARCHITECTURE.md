@@ -414,6 +414,12 @@ table bumps the version and costs a rebuild, which is affordable precisely
 because nothing here is history: everything in the file is either current state
 or a cache.
 
+The rebuild only runs upward. A `user_version` above this build's is refused
+(`StoreTooNewError`, exit 4 from the CLI; the extension goes silent) and the
+file is left alone. The pi extension and the CLI are separate installs that can
+run different versions, and rebuilding downward made the two wipe each other's
+rows on every open.
+
 **Identity is never minted by the store.** `openStore()` takes no arguments and
 does not read `identity.json`. `createIdentity` is called only by `murmur init`;
 `setDisplayName` backs `murmur init --name` on an existing node and keeps its
@@ -1043,8 +1049,8 @@ agent addressing — but remote orchestration is a much harder problem than remo
 observation, and it is not murmur's.
 
 Taken from these tools, and worth stating because each is load-bearing above:
-integration installs that write hooks into each agent's own config (`murmur link
-pi`); reusing one authenticated connection; remoteness expressed at the
+integration that rides each agent's own extension mechanism (murmur ships as a
+pi package); reusing one authenticated connection; remoteness expressed at the
 connection layer rather than by splitting the runtime; identity as a stable UUID
 rather than a hostname; and ambient sync with no daemon, where every invocation
 syncs before the verb and no watcher outlives the command.

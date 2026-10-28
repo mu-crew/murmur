@@ -50,7 +50,7 @@ export { type Mux, pidAlive, tmux } from "./mux.js";
 export { configDir, dbPath, stateDir } from "./paths.js";
 export { parseSnapshot, SnapshotInvalidError } from "./snapshot.js";
 export { type Status, status, statusWithCollect, tmuxStatus } from "./status.js";
-export { openStore, type Store } from "./store.js";
+export { openStore, type Store, StoreTooNewError } from "./store.js";
 export type {
   Activity,
   ActivityUpdate,

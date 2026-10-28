@@ -78,9 +78,12 @@ On every node that runs agents:
 
 ```bash
 npm install -g @mu-crew/murmur
-murmur init      # this node's identity
-murmur link pi   # install the agent-side extension
+murmur init                      # this node's identity
+pi install npm:@mu-crew/murmur   # the agent-side extension, as a pi package
 ```
+
+Upgrading from a `murmur link pi` install? Run `murmur pi migrate --apply` once,
+or pi loads the extension twice. See [docs/setup.md](docs/setup.md#coming-from-murmur-link-pi).
 
 Agents must run **inside tmux**. A tmux server plus pane id is the address;
 without one there is nothing to jump to. Remote agents need tmux on the remote

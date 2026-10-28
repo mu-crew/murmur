@@ -9,8 +9,8 @@
  *
  *   MURMUR_STORE_MODULE=/Users/…/hacking/murmur/dist/extension/store.js
  *
- * which is exactly what the README tells you to do -- `murmur link pi` writes a
- * shim that sets it. `src/extension/murmur-pi.ts` prefers that variable over
+ * which is what the old README told you to do -- the old `murmur link pi` wrote a
+ * shim that set it. `extension/murmur-pi.ts` then preferred that variable over
  * the bare "@mu-crew/murmur/extension-store" specifier, and vitest mocks
  * by RESOLVED path, so `vi.doMock(<bare specifier>)` never applied: the real
  * store loaded, the mock counters stayed at 0, and the failure read as "the
@@ -89,8 +89,8 @@ const CLEARED = [
  * PRODUCTION, and the two states are indistinguishable from inside a test.
  *
  * So the fallbacks are moved instead: XDG_STATE_HOME and XDG_CONFIG_HOME so
- * the last resort is a temp dir, MURMUR_PI_HOME so `link pi` cannot write into
- * the real `~/.pi/agent/extensions`, and MURMUR_STATE_DIR/MURMUR_CONFIG_DIR so
+ * the last resort is a temp dir, MURMUR_PI_HOME so `pi migrate` cannot move files in
+ * the real `~/.pi/agent`, and MURMUR_STATE_DIR/MURMUR_CONFIG_DIR so
  * a test that sets neither still gets a sandbox. Any test that wants its own
  * directory overrides these exactly as before.
  *

@@ -1,11 +1,6 @@
-import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { expect, test, vi } from "vitest";
-import { settledState, turnError } from "../src/extension/decide.js";
+import { settledState, turnError } from "../extension/decide.js";
 import { driverFromEnv } from "../src/types.js";
-import { builtArtifact, runBuiltCli } from "./helpers/built.js";
 import { withPublish } from "./helpers/fake-mux.js";
 
 /**
@@ -57,95 +52,6 @@ test("driver is orchestrated only under a supervisor", () => {
   expect(driverFromEnv({})).toBe("human");
 });
 
-// Shells out to the BUILT cli on purpose: `link pi` writes a shim that
-// re-exports the install, so the artifact is the subject, not an
-// implementation detail. `builtArtifact` fails with "run npm run build" if dist
-// is missing or older than src, rather than letting a stale build produce a
-// confusing assertion diff.
-function linkPi(home: string, ...args: string[]): string {
-  return runBuiltCli(["link", "pi", ...args], { ...process.env, MURMUR_PI_HOME: home });
-}
-
-/** As above, but with a state dir of its own, so identity presence is controlled. */
-function linkPiWithState(home: string, stateDir: string, ...args: string[]): string {
-  return runBuiltCli(["link", "pi", ...args], {
-    ...process.env,
-    MURMUR_PI_HOME: home,
-    MURMUR_STATE_DIR: stateDir,
-  });
-}
-
-function installedExtension(home: string): string {
-  return readFileSync(join(home, ".pi", "agent", "extensions", "murmur.ts"), "utf8");
-}
-
-test("link pi re-exports the install rather than copying it, so upgrades apply", () => {
-  // The upgrade story. `link pi` used to inline the whole built extension, which
-  // made the installed file a point-in-time snapshot: upgrading murmur left the
-  // OLD extension running with no warning. The author's own machine was running
-  // an extension missing two committed fixes -- a silently wrong state report,
-  // which is the exact failure the extension exists to prevent.
-  const home = mkdtempSync(join(tmpdir(), "murmur-link-"));
-  linkPi(home);
-  const source = installedExtension(home);
-
-  // Points at the install; does not contain the extension's own logic.
-  expect(source).not.toContain("agent_start");
-  const entry = source.match(/await import\("([^"]+)"\)/)?.[1] ?? "";
-  expect(entry.startsWith("/")).toBe(true);
-  expect(existsSync(entry)).toBe(true);
-});
-
-test("the shim pins the store path, which the extension cannot resolve itself", () => {
-  // A bare "@mu-crew/murmur/extension-store" specifier cannot resolve from
-  // ~/.pi/agent/extensions -- not even for a global install. The failure is
-  // silent: the import throws, getStore swallows it, and every state report no-ops
-  // while the tmux badge still paints. Verified against a real pi: with the
-  // path unpinned the store module never loaded.
-  const home = mkdtempSync(join(tmpdir(), "murmur-link-"));
-  linkPi(home);
-  const source = installedExtension(home);
-
-  const storePath = source.match(/MURMUR_STORE_MODULE \?\?= "([^"]+)"/)?.[1] ?? "";
-  expect(storePath.startsWith("/")).toBe(true);
-  expect(existsSync(storePath)).toBe(true);
-
-  // Set BEFORE the import, and via a dynamic import: ESM hoists static
-  // re-exports above the assignment, so `export ... from` left the extension
-  // reading undefined. Verified directly -- the static form printed undefined.
-  expect(source.indexOf("MURMUR_STORE_MODULE")).toBeLessThan(source.indexOf("await import"));
-  expect(source).not.toMatch(/export \{ default \} from/);
-});
-
-test("--copy still inlines and pins, for an install that must stand alone", () => {
-  const home = mkdtempSync(join(tmpdir(), "murmur-link-"));
-  linkPi(home, "--copy");
-  const source = installedExtension(home);
-
-  // The real thing, with the specifier rewritten in place.
-  expect(source).toContain("agent_start");
-  const pinned =
-    source.match(/storeModule =\s*process\.env\.MURMUR_STORE_MODULE \|\| "([^"]+)"/)?.[1] ?? "";
-  expect(pinned.startsWith("/")).toBe(true);
-  expect(existsSync(pinned)).toBe(true);
-});
-
-test("re-linking reports an inlined copy it replaced, and stays quiet otherwise", () => {
-  // Anyone linked before the shim existed has a snapshot that stopped tracking
-  // upgrades silently, and "wrote a file" does not tell them their agents may
-  // have been misreporting.
-  const home = mkdtempSync(join(tmpdir(), "murmur-link-"));
-
-  expect(linkPi(home)).not.toContain("Replaced an inlined copy");
-  // Re-linking a shim must not claim it replaced a copy. This regressed once:
-  // the check keyed on the import statement, which changed when the hoisting
-  // bug above was fixed.
-  expect(linkPi(home)).not.toContain("Replaced an inlined copy");
-
-  linkPi(home, "--copy");
-  expect(linkPi(home)).toContain("Replaced an inlined copy");
-});
-
 test("runtime is reported per turn without activating pi's turn_end boundary", async () => {
   // Regression: a turn_end handler switches on pi's actionable turn boundary,
   // which errors during `/new` when the aborted response is not yet persisted.
@@ -153,7 +59,7 @@ test("runtime is reported per turn without activating pi's turn_end boundary", a
   // once per RUN, so a long tool-calling run showed stale figures throughout.
   const runtimeUpdates: { usage?: { total_tokens: number }; context_pct?: number | null }[] = [];
 
-  vi.doMock("@mu-crew/murmur/extension-store", () => ({
+  vi.doMock("../extension/store.js", () => ({
     loadIdentity: () => ({ host_id: "H", display_name: "h" }),
     openStore: () => ({
       claimAgent: () => ({ outcome: "claimed", agent_id: "a1" }),
@@ -182,7 +88,7 @@ test("runtime is reported per turn without activating pi's turn_end boundary", a
   }));
 
   vi.resetModules();
-  const { default: murmurPi } = await import("../src/extension/murmur-pi.js");
+  const { default: murmurPi } = await import("../extension/murmur-pi.js");
   const handlers = new Map<string, (event: unknown, ctx: unknown) => unknown>();
   murmurPi({
     on: (event: string, handler: (event: unknown, ctx: unknown) => unknown) =>
@@ -234,7 +140,7 @@ test("runtime is reported per turn without activating pi's turn_end boundary", a
     [undefined, 33],
   ]);
 
-  vi.doUnmock("@mu-crew/murmur/extension-store");
+  vi.doUnmock("../extension/store.js");
   vi.doUnmock("../src/mux.js");
   vi.resetModules();
 });
@@ -247,9 +153,9 @@ test("a failed write closes the store it is dropping", async () => {
   let opened = 0;
   let closed = 0;
 
-  // The extension imports its store by the published specifier, which is how
-  // it resolves once copied into ~/.pi/agent/extensions.
-  vi.doMock("@mu-crew/murmur/extension-store", () => ({
+  // The extension imports its store as the sibling ./store.js, as it does from
+  // the installed package.
+  vi.doMock("../extension/store.js", () => ({
     loadIdentity: () => ({ host_id: "H", display_name: "h" }),
     openStore: () => {
       opened += 1;
@@ -286,7 +192,7 @@ test("a failed write closes the store it is dropping", async () => {
   }));
 
   vi.resetModules();
-  const { default: murmurPi } = await import("../src/extension/murmur-pi.js");
+  const { default: murmurPi } = await import("../extension/murmur-pi.js");
 
   // Real pi passes `(event, ctx)` to every handler. An EMPTY ctx here is the
   // older-pi case -- no model, no thinking level, no context usage -- so the
@@ -308,7 +214,7 @@ test("a failed write closes the store it is dropping", async () => {
   expect(opened).toBe(1);
   expect(closed).toBe(1);
 
-  vi.doUnmock("@mu-crew/murmur/extension-store");
+  vi.doUnmock("../extension/store.js");
   vi.doUnmock("../src/mux.js");
   vi.resetModules();
 });
@@ -327,7 +233,7 @@ test("a transient write failure does not silence the agent for the rest of its l
   const reports: string[] = [];
   let failNext = true;
 
-  vi.doMock("@mu-crew/murmur/extension-store", () => ({
+  vi.doMock("../extension/store.js", () => ({
     loadIdentity: () => ({ host_id: "H", display_name: "h" }),
     openStore: () => {
       opened += 1;
@@ -365,7 +271,7 @@ test("a transient write failure does not silence the agent for the rest of its l
   }));
 
   vi.resetModules();
-  const { default: murmurPi } = await import("../src/extension/murmur-pi.js");
+  const { default: murmurPi } = await import("../extension/murmur-pi.js");
 
   // Real pi passes `(event, ctx)` to every handler. An EMPTY ctx here is the
   // older-pi case -- no model, no thinking level, no context usage -- so the
@@ -392,7 +298,7 @@ test("a transient write failure does not silence the agent for the rest of its l
   expect(reports).toEqual(["running"]);
   expect(opened).toBe(2);
 
-  vi.doUnmock("@mu-crew/murmur/extension-store");
+  vi.doUnmock("../extension/store.js");
   vi.doUnmock("../src/mux.js");
   vi.resetModules();
 });
@@ -404,7 +310,7 @@ test("a missing murmur is given up on after one attempt, not retried per event",
   // dynamic import on every turn forever.
   let imports = 0;
 
-  vi.doMock("@mu-crew/murmur/extension-store", () => {
+  vi.doMock("../extension/store.js", () => {
     imports += 1;
     throw new Error("Cannot find module");
   });
@@ -425,7 +331,7 @@ test("a missing murmur is given up on after one attempt, not retried per event",
   }));
 
   vi.resetModules();
-  const { default: murmurPi } = await import("../src/extension/murmur-pi.js");
+  const { default: murmurPi } = await import("../extension/murmur-pi.js");
 
   // Real pi passes `(event, ctx)` to every handler. An EMPTY ctx here is the
   // older-pi case -- no model, no thinking level, no context usage -- so the
@@ -448,7 +354,7 @@ test("a missing murmur is given up on after one attempt, not retried per event",
   // One attempt, however many events arrive.
   expect(imports).toBe(1);
 
-  vi.doUnmock("@mu-crew/murmur/extension-store");
+  vi.doUnmock("../extension/store.js");
   vi.doUnmock("../src/mux.js");
   vi.resetModules();
 });
@@ -464,7 +370,7 @@ test("a pane moved to another window keeps its identity and stops badging the ol
   const reports: { window: string; agent_id: string }[] = [];
   const badges: [string, string | null][] = [];
 
-  vi.doMock("@mu-crew/murmur/extension-store", () => ({
+  vi.doMock("../extension/store.js", () => ({
     loadIdentity: () => ({ host_id: "H", display_name: "h" }),
     openStore: () => ({
       claimAgent: () => ({ outcome: "claimed", agent_id: "a1" }),
@@ -499,7 +405,7 @@ test("a pane moved to another window keeps its identity and stops badging the ol
   }));
 
   vi.resetModules();
-  const { default: murmurPi } = await import("../src/extension/murmur-pi.js");
+  const { default: murmurPi } = await import("../extension/murmur-pi.js");
 
   // Real pi passes `(event, ctx)` to every handler. An EMPTY ctx here is the
   // older-pi case -- no model, no thinking level, no context usage -- so the
@@ -533,31 +439,9 @@ test("a pane moved to another window keeps its identity and stops badging the ol
   expect(badges).toContainEqual(["@1", null]);
   expect(badges.at(-1)).toEqual(["@2", "running"]);
 
-  vi.doUnmock("@mu-crew/murmur/extension-store");
+  vi.doUnmock("../extension/store.js");
   vi.doUnmock("../src/mux.js");
   vi.resetModules();
-});
-
-test("link warns when the node has no identity, since the extension would record nothing", () => {
-  // Found while testing the shim against a real pi: events fired, handlers ran,
-  // and nothing was written. The extension reads identity with loadIdentity and
-  // returns early when it is absent -- deliberately, because an agent must not
-  // decide what this node is called -- but the consequence is invisible. The
-  // badge still paints, so the agent looks fine while the log stays empty.
-  //
-  // Linking is the only moment a human is looking at this path, so it is where
-  // the warning belongs.
-  const home = mkdtempSync(join(tmpdir(), "murmur-link-"));
-  const stateDir = mkdtempSync(join(tmpdir(), "murmur-noident-"));
-
-  expect(linkPiWithState(home, stateDir)).toContain("murmur init");
-
-  // And is silent once the node has one.
-  execFileSync(process.execPath, [builtArtifact("cli.js"), "init"], {
-    env: { ...process.env, MURMUR_STATE_DIR: stateDir },
-    stdio: "ignore",
-  });
-  expect(linkPiWithState(home, stateDir)).not.toContain("murmur init");
 });
 
 test("session_shutdown does not permanently silence the extension, because /reload fires it", async () => {
@@ -569,7 +453,7 @@ test("session_shutdown does not permanently silence the extension, because /relo
   // still painted, so the agent looked fine and reported nothing.
   const reports: string[] = [];
 
-  vi.doMock("@mu-crew/murmur/extension-store", () => ({
+  vi.doMock("../extension/store.js", () => ({
     loadIdentity: () => ({ host_id: "H", display_name: "h" }),
     openStore: () => ({
       claimAgent: () => ({ outcome: "claimed", agent_id: "a1" }),
@@ -599,7 +483,7 @@ test("session_shutdown does not permanently silence the extension, because /relo
   }));
 
   vi.resetModules();
-  const { default: murmurPi } = await import("../src/extension/murmur-pi.js");
+  const { default: murmurPi } = await import("../extension/murmur-pi.js");
 
   // Real pi passes `(event, ctx)` to every handler. An EMPTY ctx here is the
   // older-pi case -- no model, no thinking level, no context usage -- so the
@@ -635,7 +519,7 @@ test("session_shutdown does not permanently silence the extension, because /relo
   await until(() => reports.length === 3, "turn after a second reload");
   expect(reports).toEqual(["running", "running", "running"]);
 
-  vi.doUnmock("@mu-crew/murmur/extension-store");
+  vi.doUnmock("../extension/store.js");
   vi.doUnmock("../src/mux.js");
   vi.resetModules();
 });
@@ -650,7 +534,7 @@ test("session_start re-arms an extension that gave up, so a reload is a real rec
   let identity: { host_id: string; display_name: string } | null = null;
   const reports: string[] = [];
 
-  vi.doMock("@mu-crew/murmur/extension-store", () => ({
+  vi.doMock("../extension/store.js", () => ({
     loadIdentity: () => identity,
     openStore: () => ({
       claimAgent: () => ({ outcome: "claimed", agent_id: "a1" }),
@@ -680,7 +564,7 @@ test("session_start re-arms an extension that gave up, so a reload is a real rec
   }));
 
   vi.resetModules();
-  const { default: murmurPi } = await import("../src/extension/murmur-pi.js");
+  const { default: murmurPi } = await import("../extension/murmur-pi.js");
 
   // Real pi passes `(event, ctx)` to every handler. An EMPTY ctx here is the
   // older-pi case -- no model, no thinking level, no context usage -- so the
@@ -712,7 +596,7 @@ test("session_start re-arms an extension that gave up, so a reload is a real rec
 
   expect(reports).toContain("running");
 
-  vi.doUnmock("@mu-crew/murmur/extension-store");
+  vi.doUnmock("../extension/store.js");
   vi.doUnmock("../src/mux.js");
   vi.resetModules();
 });
@@ -740,7 +624,7 @@ async function driveExtension(options: { focused: boolean; muManaged?: boolean }
     execFileSync: () => (options.focused ? "1" : "0"),
   }));
 
-  vi.doMock("@mu-crew/murmur/extension-store", () => ({
+  vi.doMock("../extension/store.js", () => ({
     loadIdentity: () => ({ host_id: "H", display_name: "h" }),
     openStore: () => ({
       claimAgent: () => ({ outcome: "claimed", agent_id: "a1" }),
@@ -786,7 +670,7 @@ async function driveExtension(options: { focused: boolean; muManaged?: boolean }
   const previous = process.env.MU_MANAGED_AGENT;
   if (options.muManaged) process.env.MU_MANAGED_AGENT = "1";
   else delete process.env.MU_MANAGED_AGENT;
-  const { default: murmurPi } = await import("../src/extension/murmur-pi.js");
+  const { default: murmurPi } = await import("../extension/murmur-pi.js");
   if (previous === undefined) delete process.env.MU_MANAGED_AGENT;
   else process.env.MU_MANAGED_AGENT = previous;
 
@@ -805,7 +689,7 @@ async function driveExtension(options: { focused: boolean; muManaged?: boolean }
 
 function unmockExtension(): void {
   vi.doUnmock("node:child_process");
-  vi.doUnmock("@mu-crew/murmur/extension-store");
+  vi.doUnmock("../extension/store.js");
   vi.doUnmock("../src/mux.js");
   vi.resetModules();
 }
@@ -942,7 +826,7 @@ test("a refused claim means no report and no badge, for the life of the process"
   const writes: string[] = [];
   const badges: (string | null)[] = [];
 
-  vi.doMock("@mu-crew/murmur/extension-store", () => ({
+  vi.doMock("../extension/store.js", () => ({
     loadIdentity: () => ({ host_id: "H", display_name: "h" }),
     openStore: () => ({
       claimAgent: () => ({ outcome: "refused", held_by_pid: 61980 }),
@@ -973,7 +857,7 @@ test("a refused claim means no report and no badge, for the life of the process"
   }));
 
   vi.resetModules();
-  const { default: murmurPi } = await import("../src/extension/murmur-pi.js");
+  const { default: murmurPi } = await import("../extension/murmur-pi.js");
   // Real pi passes `(event, ctx)` to every handler. An EMPTY ctx here is the
   // older-pi case -- no model, no thinking level, no context usage -- so the
   // runtime report is skipped and these tests keep asserting activity and
@@ -1012,7 +896,7 @@ test("a claim the store retained keeps reporting, which is what /reload needs", 
   const outcomes = ["claimed", "retained"] as const;
   for (const outcome of outcomes) {
     const writes: string[] = [];
-    vi.doMock("@mu-crew/murmur/extension-store", () => ({
+    vi.doMock("../extension/store.js", () => ({
       loadIdentity: () => ({ host_id: "H", display_name: "h" }),
       openStore: () => ({
         claimAgent: () => ({ outcome, agent_id: "a1" }),
@@ -1040,7 +924,7 @@ test("a claim the store retained keeps reporting, which is what /reload needs", 
     }));
 
     vi.resetModules();
-    const { default: murmurPi } = await import("../src/extension/murmur-pi.js");
+    const { default: murmurPi } = await import("../extension/murmur-pi.js");
     const handlers = new Map<string, () => void | Promise<void>>();
     murmurPi({
       on: (event: string, handler: (event: unknown, ctx: unknown) => unknown) =>
@@ -1068,7 +952,7 @@ async function rejectingRig(
   let claimCount = 0;
   let closes = 0;
 
-  vi.doMock("@mu-crew/murmur/extension-store", () => ({
+  vi.doMock("../extension/store.js", () => ({
     loadIdentity: () => ({ host_id: "H", display_name: "h" }),
     openStore: () => ({
       claimAgent: () => {
@@ -1102,7 +986,7 @@ async function rejectingRig(
   }));
 
   vi.resetModules();
-  const { default: murmurPi } = await import("../src/extension/murmur-pi.js");
+  const { default: murmurPi } = await import("../extension/murmur-pi.js");
   // Real pi passes `(event, ctx)` to every handler. An EMPTY ctx here is the
   // older-pi case -- no model, no thinking level, no context usage -- so the
   // runtime report is skipped and these tests keep asserting activity and

@@ -8,14 +8,43 @@ overview: [README](../README.md). Hard ssh cases: [SSH.md](../SSH.md).
 On every node that runs agents:
 
 ```bash
-murmur init      # this node's identity
-murmur link pi   # install the agent-side extension
+murmur init                      # this node's identity
+pi install npm:@mu-crew/murmur   # the agent-side extension, as a pi package
 ```
 
-`link pi` writes a one-line extension into `~/.pi/agent/extensions/` that
-re-exports this install. `npm install -g` is the upgrade path; re-run `link pi`
-only if the install path moves. `link pi --copy` inlines the extension and pins
-it — re-link after every upgrade if you use that form.
+pi loads the extension from the package's `pi` manifest. The CLI and the
+extension are two installs of the same package, so upgrade them together:
+
+```bash
+npm i -g @mu-crew/murmur@latest
+pi update npm:@mu-crew/murmur    # then /reload running agents
+```
+
+Both share one store. When the schema changes, the newer side rebuilds the store
+and the older side refuses it rather than rebuilding it back: a CLI verb prints
+`written by a newer murmur` and exits 4 (`notify` and `clear`, which run from
+hooks, stay silent), the dash shows the message, and an older extension records
+nothing until it is upgraded. An extension that already had the store open when a newer
+CLI rebuilt it goes stale (its agent drops out of the view) until it reloads.
+CLIs from 1.4.0 and earlier lack the refusal, so upgrade the CLI first.
+
+### Coming from `murmur link pi`
+
+The old `link pi` wrote a shim at `~/.pi/agent/extensions/murmur.ts`. Left in
+place next to the package, pi loads the extension twice and every event is
+reported twice. In this order:
+
+```bash
+pi install npm:@mu-crew/murmur   # once: registers the package
+murmur pi migrate                # report only
+murmur pi migrate --apply        # move the shim aside; nothing is deleted
+```
+
+Only a file byte for byte equal to a shim `link pi` generated (its two generated
+paths aside) is moved, into `~/.pi/agent/disabled/`, which pi does not read. A
+`link pi --copy` install, the inlined copy v0.1 `link pi` wrote, or an edited
+file is reported and left for you: move it aside yourself.
+`MURMUR_PI_HOME` changes the home directory it starts from.
 
 Running agents keep the old extension code until they restart. Order matters:
 without `murmur init` the extension loads and records nothing. Agents must run
@@ -169,8 +198,8 @@ If `murmur` is missing there, use the absolute path from `command -v murmur`.
 The probe is a real attention request: no event name → `blocked`, so the window
 badges. `murmur clear` (or focus, with the hooks above) takes it back.
 
-`notify` outside tmux records nothing and exits 0, so it cannot break the
-caller's exit code. A pane reached only via notify is still a full jumpable
+`notify` outside tmux, or against a store from a newer murmur, records nothing
+and exits 0, so it cannot break the caller's exit code. A pane reached only via notify is still a full jumpable
 row.
 
 ## Notifications

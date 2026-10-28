@@ -1,13 +1,15 @@
+import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import Database from "better-sqlite3";
 import { afterEach, beforeEach, expect, test } from "vitest";
 import { asPaneId, asSessionId, asWindowId, type PaneId } from "../src/ids.js";
 import { dbPath } from "../src/paths.js";
-import { openStore, type Store } from "../src/store.js";
+import { openStore, type Store, StoreTooNewError } from "../src/store.js";
 import { type AgentMeta, type Location, SNAPSHOT_VERSION } from "../src/types.js";
+import { builtArtifact } from "./helpers/built.js";
 
 /**
  * Every test here is a claim about what is IMPOSSIBLE, and each one names the
@@ -1025,6 +1027,53 @@ test("an existing database upgrades without losing peers", () => {
     },
   ]);
   expect(reopened.localPanes()).toEqual([]);
+});
+
+test("a store from a newer murmur is refused and left exactly as it was", () => {
+  // The pi extension and the CLI are separate installs and can run different
+  // versions. Rebuilding downward made each side wipe the other's rows on every
+  // open; an older build must stay out of the way instead.
+  const s = store();
+  s.addPeer("dev", "dev.example");
+  s.claimAgent({ location: location(), owner_pid: 100, meta: meta() });
+  s.close();
+  const database = new Database(dbPath());
+  const newer = (database.pragma("user_version", { simple: true }) as number) + 1;
+  database.pragma(`user_version = ${newer}`);
+  database.close();
+
+  expect(() => openStore()).toThrow(StoreTooNewError);
+  expect(() => openStore()).toThrow(/newer murmur .*Upgrade this murmur/);
+
+  const after = new Database(dbPath(), { readonly: true });
+  expect(after.pragma("user_version", { simple: true })).toBe(newer);
+  expect(after.prepare("SELECT COUNT(*) AS n FROM agents").get()).toEqual({ n: 1 });
+  expect(after.prepare("SELECT name FROM peers").all()).toEqual([{ name: "dev" }]);
+  after.close();
+  // The reset lock is released on the way out, so the next open is not delayed.
+  expect(existsSync(`${dbPath()}.reset-lock`)).toBe(false);
+
+  // The CLI says so in one line and a fixed exit code, not a stack trace on
+  // every status-bar tick.
+  spawnSync(process.execPath, [builtArtifact("cli.js"), "init"], { env: process.env });
+  const run = spawnSync(process.execPath, [builtArtifact("cli.js"), "status"], {
+    env: process.env,
+    encoding: "utf8",
+  });
+  expect(run.status).toBe(4);
+  expect(run.stderr).toMatch(/^murmur: .*newer murmur/);
+  expect(run.stderr).not.toContain("    at ");
+
+  // Hooks stay silent and succeed: a codex or cursor turn must not fail on it.
+  const hook = spawnSync(
+    process.execPath,
+    [builtArtifact("cli.js"), "notify", "--pane", "%1", '{"type":"agent-turn-complete"}'],
+    { env: process.env, encoding: "utf8" },
+  );
+  expect({ status: hook.status, stderr: hook.stderr }).toEqual({ status: 0, stderr: "" });
+  const untouched = new Database(dbPath(), { readonly: true });
+  expect(untouched.pragma("user_version", { simple: true })).toBe(newer);
+  untouched.close();
 });
 
 test("a corrupt database is rebuilt rather than crashing every command", () => {

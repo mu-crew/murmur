@@ -5,8 +5,8 @@ import { join } from "node:path";
 /**
  * The path to a built artifact, checked to be present and newer than `src/`.
  *
- * Some tests must run the real shipped thing: `link pi` writes a shim that
- * re-exports the install, and the concurrency test needs separate PROCESSES to
+ * Some tests must run the real shipped thing: pi loads the built extension
+ * from the package, and the concurrency test needs separate PROCESSES to
  * contend for a SQLite lock at all. Those cannot be driven in-process, so they
  * execute `dist/`.
  *
@@ -38,7 +38,9 @@ export function builtArtifact(...parts: string[]): string {
     );
   }
 
-  const { path: newest, mtime } = newestSource();
+  const src = newestSource("src");
+  const ext = newestSource("extension");
+  const { path: newest, mtime } = ext.mtime > src.mtime ? ext : src;
   if (mtime > built) {
     throw new Error(
       `${join("dist", ...parts)} is STALE: ${newest} is newer.\n` +
@@ -50,8 +52,8 @@ export function builtArtifact(...parts: string[]): string {
   return path;
 }
 
-/** The most recently modified file under `src/`, by mtime. */
-function newestSource(dir = "src"): { path: string; mtime: number } {
+/** The most recently modified file under `dir`, by mtime. */
+function newestSource(dir: string): { path: string; mtime: number } {
   let newest = { path: dir, mtime: 0 };
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const path = join(dir, entry.name);

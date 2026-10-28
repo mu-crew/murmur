@@ -81,8 +81,8 @@ function runInPane(
       env: {
         ...process.env,
         MURMUR_STATE_DIR: stateDir,
-        // Deliberately NOT set, so the extension resolves its store the way a
-        // real install does rather than through the test's own pin.
+        // For the helper's own poll of the store; the extension resolves its
+        // sibling ./store.js the way an installed package does.
         MURMUR_STORE_MODULE: STORE_MODULE,
         MURMUR_EXTENSION_ENTRY: EXTENSION_ENTRY,
         TMUX_PANE: pane,
