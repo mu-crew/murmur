@@ -8,7 +8,7 @@ import { CLEARED, OWNED, REDIRECTED } from "./setup.js";
  *
  * Six tests in extension-decide.test.ts passed on the maintainer's machine and
  * failed in every other checkout, on byte-identical files, because his shell
- * had MURMUR_STORE_MODULE set -- which is what `murmur link pi` tells you to
+ * had MURMUR_STORE_MODULE set -- which is what `murmur link pi` told you to
  * do. The tests mock the bare "@mu-crew/murmur/extension-store"
  * specifier; vitest mocks by resolved path; the variable made the extension
  * import a different path, so the mock never applied.
@@ -55,10 +55,10 @@ test("the setup file rewrites the variables rather than merely reading them", ()
   });
 });
 
-test("every environment variable src/ reads is one the rig controls", () => {
+test("every environment variable src/ and extension/ read is one the rig controls", () => {
   // The drift guard, and the reason this is a list rather than a single delete.
-  // MURMUR_STORE_MODULE is not special: `storeModule` and `muManaged` in
-  // src/extension/murmur-pi.ts are read at MODULE SCOPE, where a test cannot
+  // MURMUR_STORE_MODULE was not special: `storeModule` and `muManaged` in
+  // extension/murmur-pi.ts were read at MODULE SCOPE, where a test cannot
   // intercept them at all -- the value is baked in at import. Any future
   // MURMUR_*/MU_* read is the same hazard, and this fails the moment one is
   // added without being listed.
@@ -87,6 +87,7 @@ test("every environment variable src/ reads is one the rig controls", () => {
     }
   };
   walk("src");
+  walk("extension");
 
   // Sanity: the scan found something, so an empty result cannot pass this.
   expect(read.size).toBeGreaterThan(0);

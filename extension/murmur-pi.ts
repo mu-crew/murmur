@@ -1,14 +1,14 @@
 import { execFileSync } from "node:child_process";
-import { publishAgentStates } from "../agent-state.js";
-import { type PublishTargets, tmux } from "../mux.js";
-import type { Store } from "../store.js";
+import { publishAgentStates } from "../src/agent-state.js";
+import { type PublishTargets, tmux } from "../src/mux.js";
+import type { Store } from "../src/store.js";
 import {
   type Activity,
   type AgentMeta,
   type AgentRuntime,
   driverFromEnv,
   type Location,
-} from "../types.js";
+} from "../src/types.js";
 import {
   foldPending,
   isReportableTurn,
@@ -60,22 +60,12 @@ type ExtensionAPI = {
   events: { on(channel: string, handler: (data: unknown) => void): unknown };
 };
 
-// Where to import the store from.
-//
-// The bare specifier only resolves when murmur is a dependency of the importer,
-// which it never is: the extension loads from ~/.pi/agent/extensions, and a
-// global murmur is not resolvable from there. Unpinned, the import throws,
-// getStore swallows it, and every write no-ops while the badge still paints --
-// so nothing looks broken while the node exports nothing.
-//
-// Two ways it gets pinned, because there are two install shapes:
-//
-//   $MURMUR_STORE_MODULE  set by the shim `murmur link pi` writes, which is a
-//                         re-export of THIS file from the murmur install. The
-//                         shim cannot rewrite this constant (it does not copy
-//                         the source), so it passes the path instead.
-//   link pi --copy        inlines this file and rewrites the string literal.
-const storeModule = process.env.MURMUR_STORE_MODULE || "@mu-crew/murmur/extension-store";
+// Where to import the store from: the sibling module, dist/extension/store.js
+// in the package pi loads. Relative, so it resolves from wherever pi installed
+// the package. Held in a variable so the bundler leaves the import lazy and
+// separate: a store that cannot load (no better-sqlite3) fails this import,
+// which getStore swallows, instead of failing the extension's load inside pi.
+const storeModule = "./store.js";
 const muManaged = process.env.MU_MANAGED_AGENT === "1";
 const driver = driverFromEnv(process.env);
 

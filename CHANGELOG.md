@@ -5,6 +5,25 @@ so it says what changed for a user rather than listing every commit.
 
 ## Unreleased
 
+**murmur is a pi package.** Install the extension with
+`pi install npm:@mu-crew/murmur`; pi loads it from the package's `pi` manifest,
+and `pi update --extensions` upgrades it. `murmur link pi` is removed, along with
+the `@mu-crew/murmur/extension-store` export and `MURMUR_STORE_MODULE`: the
+extension finds its store as a sibling file. Coming from `link pi`, run
+`murmur pi migrate --apply` once after `pi install`, or pi loads the extension
+twice. It moves only a shim `link pi` provably generated, and deletes nothing.
+
+**Upgrade the CLI and the extension together.** They are now separate installs:
+`npm i -g @mu-crew/murmur@latest` and `pi update npm:@mu-crew/murmur`. Upgrade the
+CLI first, since 1.4.0 and earlier cannot refuse a newer store.
+
+**An older murmur refuses a newer store instead of wiping it.** A store whose
+schema is newer than the running build was deleted and rebuilt, so an older
+extension and a newer CLI would erase each other's agent rows on every open. Now
+a CLI verb prints `written by a newer murmur` and exits 4, and an older
+extension records nothing until it is upgraded. Older and damaged stores still
+rebuild as before.
+
 ## 1.4.0
 
 Upgrade every node with `npm i -g @mu-crew/murmur@1.4.0`, then `/reload` in

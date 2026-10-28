@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { isReportableTurn, runtimeFromContext, usageFromMessage } from "../src/extension/decide.js";
+import { isReportableTurn, runtimeFromContext, usageFromMessage } from "../extension/decide.js";
 
 /**
  * Reading pi's live values, as a pure function.

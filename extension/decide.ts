@@ -1,4 +1,4 @@
-import { type AgentRuntime, EFFORTS } from "../types.js";
+import { type AgentRuntime, EFFORTS } from "../src/types.js";
 
 /**
  * pi's three events, in the order verified at runtime against pi 0.84.3 (not

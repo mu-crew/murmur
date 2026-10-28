@@ -26,7 +26,8 @@ npm run lint:fix   # biome check --write: fixes lint AND formatting
   `noExplicitAny` or `noNonNullAssertion` fires, fix the code. Do not silence
   the rule to get green.
 - A `pre-commit` hook in `.githooks/` runs typecheck and lint on any staged
-  `src/`, `test/` or `scripts/` file. `npm install` wires it up via `prepare`.
+  `src/`, `test/`, `scripts/` or `extension/` file. `npm install` wires it up
+  via `prepare`.
 - Tests are deliberately not in the hook. They belong to your task's own
   validation step, and a slow hook is a hook people bypass.
 - `git commit --no-verify` exists for WIP on a branch. Do not use it to land

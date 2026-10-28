@@ -5,8 +5,8 @@
 # Escape hatch: git commit --no-verify. Use it for WIP on a branch, not on main.
 set -e
 
-# Nothing staged in src/ or test/ means nothing this hook can judge.
-if ! git diff --cached --name-only --diff-filter=ACMR | grep -qE '^(src|test|scripts)/.*\.(ts|tsx|mjs|js)$'; then
+# Nothing staged in src/, test/, scripts/ or extension/ means nothing this hook can judge.
+if ! git diff --cached --name-only --diff-filter=ACMR | grep -qE '^(src|test|scripts|extension)/.*\.(ts|tsx|mjs|js)$'; then
   exit 0
 fi
 

@@ -2,7 +2,7 @@ import type { Command } from "commander";
 import { publishAgentStates } from "../agent-state.js";
 import { asPaneId } from "../ids.js";
 import { type Mux, type PublishTargets, tmux } from "../mux.js";
-import { openStore, type Store } from "../store.js";
+import { openStore, type Store, StoreTooNewError } from "../store.js";
 import { driverFromEnv, type Location, type RequestableKind } from "../types.js";
 
 /**
@@ -369,7 +369,15 @@ export function registerNotify(program: Command): void {
         const fromArgs = payloadFromArgs(operands);
         const payload =
           Object.keys(fromArgs).length > 0 ? fromArgs : parsePayload(await readStdin());
-        const store = openStore();
+        let store: Store;
+        try {
+          store = openStore();
+        } catch (error) {
+          // A hook must not fail the agent's turn: a store from a newer murmur
+          // records nothing here, as outside tmux, and the next upgrade fixes it.
+          if (error instanceof StoreTooNewError) return;
+          throw error;
+        }
         try {
           runNotify(store, options, payload);
         } finally {

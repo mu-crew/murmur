@@ -75,7 +75,7 @@ async function rig(
   let closes = 0;
   let asked = 0;
 
-  vi.doMock("@mu-crew/murmur/extension-store", () => ({
+  vi.doMock("../extension/store.js", () => ({
     loadIdentity: () => ({ host_id: "H", display_name: "h" }),
     openStore: () => {
       opens += 1;
@@ -159,7 +159,7 @@ async function rig(
   }));
 
   vi.resetModules();
-  const { default: murmurPi } = await import("../src/extension/murmur-pi.js");
+  const { default: murmurPi } = await import("../extension/murmur-pi.js");
   // Real pi hands every handler `(event, ctx)`; the ones that ignore both just
   // declare no parameters. The harness curries those arguments away so a test
   // can call `handlers.get("agent_start")?.()` as before -- and passes an EMPTY
@@ -194,7 +194,7 @@ async function rig(
 }
 
 function unmock(): void {
-  vi.doUnmock("@mu-crew/murmur/extension-store");
+  vi.doUnmock("../extension/store.js");
   vi.doUnmock("node:child_process");
   vi.doUnmock("../src/mux.js");
   vi.resetModules();

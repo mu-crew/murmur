@@ -507,15 +507,24 @@ export function App({ dashStore, initial }: DashProps) {
     async (floored: boolean) => {
       const identity = requireIdentity();
       if (!identity) return;
-      if (refreshDashStore(dashStore)) setStoreRevision((revision) => revision + 1);
-      const activeStore = dashStore.store;
-      const updated = await statusWithCollect(
-        activeStore,
-        identity,
-        Date.now(),
-        ssh,
-        floored ? { floorMs: COLLECT_FLOOR_MS } : {},
-      );
+      let updated: Status;
+      try {
+        if (refreshDashStore(dashStore)) setStoreRevision((revision) => revision + 1);
+        updated = await statusWithCollect(
+          dashStore.store,
+          identity,
+          Date.now(),
+          ssh,
+          floored ? { floorMs: COLLECT_FLOOR_MS } : {},
+        );
+      } catch (error) {
+        // A replaced store this build cannot open (a newer murmur rebuilt it)
+        // would otherwise reject with nobody awaiting it and kill the dash with
+        // its message hidden behind the alternate screen. Keep the old view and
+        // say why, as the side panel does.
+        setMessage(error instanceof Error ? error.message : String(error));
+        return;
+      }
       const at = Date.now();
       setView(updated);
       setNow(at);

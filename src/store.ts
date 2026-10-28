@@ -426,22 +426,50 @@ function countDiscarded(path: string): { agents: number; attention: number } | n
   }
 }
 
-function needsReset(path: string): boolean {
+/**
+ * A store written by a newer murmur than this one.
+ *
+ * Refused, never rebuilt. The pi extension and the CLI are separate installs
+ * (`pi install` and `npm i -g`) and can run different versions; rebuilding
+ * downward made each side wipe the other's agent and attention rows on every
+ * open, a status-bar tick included. An older build stays out of the way
+ * instead: the extension goes silent, a CLI verb prints this and exits.
+ */
+export class StoreTooNewError extends Error {
+  constructor(
+    readonly path: string,
+    readonly found: number,
+  ) {
+    super(
+      `${path} was written by a newer murmur (schema ${found}, this build ${SCHEMA_USER_VERSION}). ` +
+        "Upgrade this murmur: `npm i -g @mu-crew/murmur@latest` for the CLI, " +
+        "`pi update npm:@mu-crew/murmur` for the pi extension. " +
+        `To downgrade on purpose, delete ${path}.`,
+    );
+    this.name = "StoreTooNewError";
+  }
+}
+
+/**
+ * What the file on disk needs before it can be opened. One read decides, and it
+ * runs before salvage or counting, so a too-new store is left exactly as found.
+ */
+function storeCondition(path: string): "ok" | "reset" | StoreTooNewError {
   let existing: Database.Database;
   try {
     existing = new Database(path, { fileMustExist: true });
   } catch {
     // No file yet. Nothing to remove, and the schema is created below.
-    return false;
+    return "ok";
   }
   try {
-    return (
-      ((existing.pragma("user_version", { simple: true }) as number) ?? 0) !== SCHEMA_USER_VERSION
-    );
+    const version = (existing.pragma("user_version", { simple: true }) as number) ?? 0;
+    if (version > SCHEMA_USER_VERSION) return new StoreTooNewError(path, version);
+    return version === SCHEMA_USER_VERSION ? "ok" : "reset";
   } catch {
     // Opened but unreadable: not a database, or damaged past the header. This
     // is the case that used to answer `false` and crash every later command.
-    return true;
+    return "reset";
   } finally {
     existing.close();
   }
@@ -581,8 +609,10 @@ export function openStore(): Store {
   // Peers are the only rows worth this trouble: every other fact is re-observed
   // within a tick, while a name and target cannot be re-derived from anything.
   const database = withResetLock(path, () => {
+    const condition = storeCondition(path);
+    if (condition instanceof StoreTooNewError) throw condition;
     const salvaged = salvagePeers(path);
-    if (needsReset(path)) {
+    if (condition === "reset") {
       // SAY WHAT IS BEING THROWN AWAY, on stderr, once.
       //
       // The rebuild is documented and correct -- ARCHITECTURE.md accepts that a
@@ -644,23 +674,35 @@ export function openStore(): Store {
     // The re-read INSIDE the transaction is the other half. Without it the
     // loser would hold the lock and still act on the version it read before
     // waiting for it, which is the original bug with extra steps.
-    opened
-      .transaction(() => {
-        const version = (opened.pragma("user_version", { simple: true }) as number) ?? 0;
-        if (version === SCHEMA_USER_VERSION) return;
-        opened.exec(SCHEMA);
-        opened.pragma(`user_version = ${SCHEMA_USER_VERSION}`);
-        // Re-inserted with every OBSERVED column null: a salvaged peer has no
-        // snapshot and has never been fetched, and saying otherwise would
-        // render a never-reached host as fresh.
-        const restore = opened.prepare(
-          "INSERT OR IGNORE INTO peers (name, target, jump_command) VALUES (?, ?, ?)",
-        );
-        for (const peer of salvaged) {
-          restore.run(peer.name, peer.target, peer.jump_command ?? defaultJumpCommand(peer.target));
-        }
-      })
-      .immediate();
+    try {
+      opened
+        .transaction(() => {
+          const version = (opened.pragma("user_version", { simple: true }) as number) ?? 0;
+          if (version === SCHEMA_USER_VERSION) return;
+          // The reset lock is best effort and can be stolen, so a newer build may
+          // have written the file since the check above. Never build over it.
+          if (version > SCHEMA_USER_VERSION) throw new StoreTooNewError(path, version);
+          opened.exec(SCHEMA);
+          opened.pragma(`user_version = ${SCHEMA_USER_VERSION}`);
+          // Re-inserted with every OBSERVED column null: a salvaged peer has no
+          // snapshot and has never been fetched, and saying otherwise would
+          // render a never-reached host as fresh.
+          const restore = opened.prepare(
+            "INSERT OR IGNORE INTO peers (name, target, jump_command) VALUES (?, ?, ?)",
+          );
+          for (const peer of salvaged) {
+            restore.run(
+              peer.name,
+              peer.target,
+              peer.jump_command ?? defaultJumpCommand(peer.target),
+            );
+          }
+        })
+        .immediate();
+    } catch (error) {
+      opened.close();
+      throw error;
+    }
 
     // Forced out of the WAL before the lock drops, so the rebuilt rows live in
     // the database file itself. Otherwise the salvage sits in `-wal` and the
