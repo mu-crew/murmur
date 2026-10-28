@@ -5,6 +5,12 @@ so it says what changed for a user rather than listing every commit.
 
 ## Unreleased
 
+**The picker stays open when there is nothing to pick.** With no agents,
+`murmur pick` printed `No agents` and exited, so the usual `display-popup -E`
+binding flashed open and shut. It now opens fzf with the reason in the header
+(`No agents`, or `No human agents (+N crew — press ctrl-a)`) until esc, and
+ctrl-a still reveals crew agents from there.
+
 **murmur is a pi package.** Install the extension with
 `pi install npm:@mu-crew/murmur`; pi loads it from the package's `pi` manifest,
 and `pi update --extensions` upgrades it. `murmur link pi` is removed, along with

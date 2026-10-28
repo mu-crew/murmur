@@ -530,3 +530,38 @@ test("the launch path paints without waiting for a collect", async () => {
   expect(started).toBe(true);
   expect(rows.some((row) => row.split("\t")[1] === "%1")).toBe(true);
 });
+
+test("an empty picker stays open with a message instead of flashing a popup shut", async () => {
+  // `display-popup -E` closes when the process exits, so printing "No agents"
+  // and returning showed the popup for a frame and nothing else. fzf holds it
+  // open on an empty list with the reason in the header, until esc.
+  const seen: { args: string[]; input: string }[] = [];
+  const pick = () =>
+    runPick(
+      store,
+      {},
+      {
+        fzf: (args, input) => {
+          seen.push({ args, input });
+          return "";
+        },
+        jump: () => ({ ok: true }),
+        collect: () => {},
+      },
+    );
+  const header = (n: number) => {
+    const args = seen[n]?.args ?? [];
+    return args[args.indexOf("--header") + 1] ?? "";
+  };
+
+  await pick();
+  expect(seen).toHaveLength(1);
+  expect(seen[0]?.input).toBe("");
+  expect(header(0)).toContain("No agents");
+
+  // Crew only: the message says how to reveal them, and the key it names is bound.
+  agent("%2", "orchestrated");
+  await pick();
+  expect(header(1)).toMatch(/No human agents .*1 crew/);
+  expect(seen[1]?.args.join(" ")).toContain("ctrl-a:transform");
+});

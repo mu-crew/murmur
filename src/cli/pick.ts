@@ -123,14 +123,18 @@ export async function runPick(
   const agents = view.panes.filter((agent) => options.all || isVisible(agent));
   const hidden = view.panes.length - agents.length;
 
-  if (agents.length === 0) {
-    process.stdout.write(
-      hidden
-        ? `No human agents  (+${hidden} crew — press ctrl-a or rerun with --all)\n`
-        : "No agents\n",
-    );
-    return;
-  }
+  // Shown in fzf's header rather than printed: the picker usually runs in a
+  // `display-popup -E`, which closes the moment this process exits, so a
+  // printed line flashed the popup open and shut with nothing readable. fzf
+  // stays up on an empty list (`--no-exit-0`) until esc, and ctrl-a still
+  // works from here. The line describes the launch split, so it stays true
+  // after the toggle.
+  const empty =
+    agents.length > 0
+      ? null
+      : hidden
+        ? `No human agents  (+${hidden} crew — press ctrl-a)`
+        : "No agents";
 
   const showHost = agents.some((agent) => !agent.local);
   const currentPane = process.env.TMUX_PANE ?? "";
@@ -190,6 +194,7 @@ export async function runPick(
         // FIRST, and only when it applies: the one header line that asks for an
         // action, so nothing static may precede it.
         sessionNotice(view.peers) ?? "",
+        empty ?? "",
         "ctrl-a crew",
         headerRow(showHost),
       ]
