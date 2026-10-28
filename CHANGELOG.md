@@ -5,11 +5,13 @@ so it says what changed for a user rather than listing every commit.
 
 ## Unreleased
 
-**The picker stays open when there is nothing to pick.** With no agents,
-`murmur pick` printed `No agents` and exited, so the usual `display-popup -E`
-binding flashed open and shut. It now opens fzf with the reason in the header
-(`No agents`, or `No human agents (+N crew — press ctrl-a)`) until esc, and
-ctrl-a still reveals crew agents from there.
+## 1.5.0
+
+Upgrade every node in this order: `npm i -g @mu-crew/murmur@1.5.0`, then
+`pi install npm:@mu-crew/murmur`, then `murmur pi migrate --apply` to retire the
+old `link pi` shim, then `/reload` in running pi sessions. No snapshot or store
+change; nodes can upgrade one at a time. From now on, upgrade the CLI and the pi
+package together, CLI first.
 
 **murmur is a pi package.** Install the extension with
 `pi install npm:@mu-crew/murmur`; pi loads it from the package's `pi` manifest,
@@ -29,6 +31,12 @@ extension and a newer CLI would erase each other's agent rows on every open. Now
 a CLI verb prints `written by a newer murmur` and exits 4, and an older
 extension records nothing until it is upgraded. Older and damaged stores still
 rebuild as before.
+
+**The picker stays open when there is nothing to pick.** With no agents,
+`murmur pick` printed `No agents` and exited, so the usual `display-popup -E`
+binding flashed open and shut. It now opens fzf with the reason in the header
+(`No agents`, or `No human agents (+N crew — press ctrl-a)`) until esc, and
+ctrl-a still reveals crew agents from there.
 
 ## 1.4.0
 
