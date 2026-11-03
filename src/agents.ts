@@ -262,7 +262,8 @@ export type JumpResult =
  *   ends. The picker, run from a plain shell.
  * - `rex`: open it in a new Rex tab (`rex window new`), so the caller -- the
  *   dash, or a picker in a Rex pane -- keeps its own terminal and the agent
- *   gets a tab of its own, which Rex marks from the agent's program status.
+ *   gets a tab of its own. (That tab carries no program status: tmux drops
+ *   OSC 7501 from the pane, so `rex-feed` is what shows the agent's state.)
  *
  * Inside tmux neither applies: a local jump is a `switch-client` and a remote
  * one a wrapper session, as before.

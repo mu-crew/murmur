@@ -377,9 +377,14 @@ does not jump to the agent. Use `murmur pick` or the dash for that.
 Both run in a Rex pane outside tmux. A jump opens the agent in a new tab of
 the current Rex session, named after the agent (`linuxpc · dotfiles` for a
 remote one): `tmux attach -t <pane>` for a local agent, the peer's jump
-command for a remote one. The picker or dash stays where it was, and Rex
-marks the new tab from the agent's own program status. Closing the tab, or
-detaching, ends the attach.
+command for a remote one. The picker or dash stays where it was. Closing the
+tab, or detaching, ends the attach.
+
+That tab shows no program status of its own: the agent runs inside tmux, and
+tmux drops OSC 7501 rather than pass it to the outer terminal (pi does not
+wrap it in DCS passthrough). Keep `rex-feed` running for the fleet's state.
+An agent started directly in a Rex pane, not in tmux, reports its own (pi
+does), but murmur cannot see it.
 
 The dash's glance and prompt input (`i`) work as in tmux: both address the
 agent's pane, not a client. Still tmux-only: `murmur sidepanel` (it lays out
