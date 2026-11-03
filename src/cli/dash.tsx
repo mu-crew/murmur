@@ -9,7 +9,7 @@ import {
   useWindowSize,
 } from "ink";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { agentLabel, jumpToAgent, terminalText } from "../agents.js";
+import { agentLabel, jumpToAgent, outsideTmux, terminalText } from "../agents.js";
 import { ensureStringWidth } from "../ansi-width.js";
 import { ssh } from "../channel.js";
 import { COLLECT_FLOOR_MS } from "../collector.js";
@@ -151,12 +151,20 @@ export async function withDashTerminalSuspended<T>(
   return outcome.value;
 }
 
+/**
+ * Where the dash may run: inside tmux, or in a Rex pane. In Rex a jump opens
+ * the agent in a new tab (see `outsideTmux`), so the dash keeps its terminal
+ * and there is no client to switch. Anywhere else a jump would have to take
+ * over this terminal from under Ink, which is what this guard exists to stop.
+ */
 export function requireDashTmux(
   env: NodeJS.ProcessEnv = process.env,
   writeError: (message: string) => unknown = process.stderr.write.bind(process.stderr),
 ): boolean {
-  if (env.TMUX) return true;
-  writeError("murmur dash must run inside tmux; start tmux and run it again.\n");
+  if (env.TMUX || outsideTmux(env) === "rex") return true;
+  writeError(
+    "murmur dash must run inside tmux or a Rex pane; start tmux and run it again, or use murmur pick.\n",
+  );
   process.exitCode = 1;
   return false;
 }
@@ -630,13 +638,17 @@ export function App({ dashStore, initial }: DashProps) {
 
   const activatePane = useCallback(
     async (pane: PaneView) => {
-      const result = await withDashTerminalSuspended(suspendTerminal, () =>
-        pane.attached_pane
+      // In Rex the jump opens a tab and returns, so Ink keeps the terminal;
+      // suspending it would only flash the screen.
+      const jump = () =>
+        pane.attached_pane && process.env.TMUX
           ? tmux.attach(pane.attached_pane)
             ? { ok: true as const }
             : { ok: false as const, message: `could not focus ${pane.attached_pane}` }
-          : jumpToAgent(store, pane),
-      );
+          : jumpToAgent(store, pane);
+      const result = process.env.TMUX
+        ? await withDashTerminalSuspended(suspendTerminal, jump)
+        : jump();
       setMessage(result.ok ? "" : result.message);
     },
     [store, suspendTerminal],

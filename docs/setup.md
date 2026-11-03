@@ -372,6 +372,21 @@ rex window new crew -- murmur rex-feed
 The records belong to the feed's pane, so Rex lists them there; selecting one
 does not jump to the agent. Use `murmur pick` or the dash for that.
 
+### pick and dash in a Rex pane
+
+Both run in a Rex pane outside tmux. A jump opens the agent in a new tab of
+the current Rex session, named after the agent (`linuxpc · dotfiles` for a
+remote one): `tmux attach -t <pane>` for a local agent, the peer's jump
+command for a remote one. The picker or dash stays where it was, and Rex
+marks the new tab from the agent's own program status. Closing the tab, or
+detaching, ends the attach.
+
+The dash's glance and prompt input (`i`) work as in tmux: both address the
+agent's pane, not a client. Still tmux-only: `murmur sidepanel` (it lays out
+a tmux window) and `murmur dash --goto` (a tmux key binding). In a plain
+terminal outside both, the picker attaches in place and the dash refuses to
+start.
+
 ## Jump command override
 
 `target` is always ssh (collector). The jump command is for a human and need not

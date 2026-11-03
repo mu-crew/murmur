@@ -10,6 +10,15 @@ OSC 7501 program status records in its own pane, one per agent plus a root
 summary, so a Rex tab marks blocked, done and failed agents from every host.
 See [Rex](docs/setup.md#rex).
 
+**`murmur pick` and `murmur dash` work in a Rex pane.** A jump opens the agent
+in a new Rex tab instead of taking over the terminal, so the dash now starts
+outside tmux when it runs in Rex. Glance and prompt input already addressed
+panes, not clients.
+
+**Fixed: a local jump from outside tmux moved another terminal.** It ran a
+bare `tmux switch-client`, which tmux applied to some other attached client,
+and reported success. It now attaches in place, or in a Rex tab.
+
 ## 1.5.0
 
 Upgrade every node in this order: `npm i -g @mu-crew/murmur@1.5.0`, then

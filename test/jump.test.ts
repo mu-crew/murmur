@@ -665,6 +665,7 @@ test("outside tmux, a failed ssh attach is reported", () => {
 });
 
 test("a local jump reports a failed select-window instead of claiming success", () => {
+  vi.stubEnv("TMUX", "/tmp/tmux-501/default,1,0");
   // A select-window that fails is the local twin of the remote symptom: the
   // picker closes, nothing moves, and nothing says why.
   const result = jumpToAgent(
@@ -677,6 +678,7 @@ test("a local jump reports a failed select-window instead of claiming success", 
 });
 
 test("a local jump to a live pane succeeds", () => {
+  vi.stubEnv("TMUX", "/tmp/tmux-501/default,1,0");
   const servers: unknown[] = [];
   const result = jumpToAgent(
     store,
@@ -701,6 +703,7 @@ test("a local jump to a live pane succeeds", () => {
 });
 
 test("a local pane that MOVED window is still jumped to, and nothing is written", () => {
+  vi.stubEnv("TMUX", "/tmp/tmux-501/default,1,0");
   // The regression this rule exists for, and the reproduction that filed it:
   // `move-pane -s %0 -t @1` leaves %0 alive in its new window and removes @0
   // from list-windows entirely. Judging the pane by its recorded WINDOW
@@ -753,6 +756,7 @@ test("a local pane that MOVED window is still jumped to, and nothing is written"
 });
 
 test("a local pane that is really gone is pane_gone, and still writes nothing", () => {
+  vi.stubEnv("TMUX", "/tmp/tmux-501/default,1,0");
   // Reported, not cleared. Reconciliation removes the row -- it is the one path
   // that consults tmux and the pid table together, inside one transaction -- and
   // a jump has no business doing half of that job from a keypress.
@@ -785,6 +789,7 @@ test("a local pane that is really gone is pane_gone, and still writes nothing", 
 });
 
 test("a local jump proceeds when tmux cannot answer at all", () => {
+  vi.stubEnv("TMUX", "/tmp/tmux-501/default,1,0");
   // null is "could not tell", not "no panes". Conflating them deleted every
   // agent on the host the moment tmux was briefly unreachable.
   const result = jumpToAgent(store, localView(), fakeMux({ livePanes: () => null }));
@@ -940,4 +945,113 @@ test("outside tmux the jump arms no marker, because there is nothing to come bac
   );
 
   expect(remoteCommands.every((command) => !command.includes("client-attached"))).toBe(true);
+});
+
+test("outside tmux a local jump attaches here, and never switches some other client", () => {
+  // A bare `switch-client` with no $TMUX moved another terminal's tmux
+  // client and reported success.
+  let switched = 0;
+  const calls: [string, string[], boolean | undefined][] = [];
+  const result = jumpToAgent(
+    store,
+    localView({ server: { kind: "label", value: "mule" } }),
+    fakeMux({
+      livePanes: () => new Set([asPaneId("%9")]),
+      attach: () => {
+        switched += 1;
+        return true;
+      },
+    }),
+    (file, args, inherit) => {
+      calls.push([file, args, inherit]);
+      return ok();
+    },
+    {},
+  );
+  expect(result).toEqual({ ok: true });
+  expect(switched).toBe(0);
+  expect(calls).toEqual([["sh", ["-c", "tmux -L 'mule' attach -t '%9'"], true]]);
+});
+
+test("in a Rex pane a local jump opens the agent in a new tab of this session", () => {
+  const calls: [string, string[], boolean | undefined][] = [];
+  const result = jumpToAgent(
+    store,
+    localView({ agent_name: "worker-1" }),
+    fakeMux({ livePanes: () => new Set([asPaneId("%9")]) }),
+    (file, args, inherit) => {
+      calls.push([file, args, inherit]);
+      return ok();
+    },
+    { TERM_PROGRAM: "rex", REX_SESSION: "session:abc" },
+  );
+  expect(result).toEqual({ ok: true });
+  expect(calls).toEqual([
+    [
+      "rex",
+      ["window", "new", "-s", "session:abc", "worker-1", "--", "sh", "-c", "tmux attach -t '%9'"],
+      undefined,
+    ],
+  ]);
+});
+
+test("in a Rex pane a remote jump probes, then opens the jump command in a new tab", () => {
+  peer("p", "remote-host");
+  const calls: [string, string[], boolean | undefined][] = [];
+  const result = jumpToAgent(
+    store,
+    view({ agent_name: "worker-9" }),
+    fakeMux(),
+    (file, args, inherit) => {
+      calls.push([file, args, inherit]);
+      return calls.length === 1 ? ok("%9\n") : ok();
+    },
+    { TERM_PROGRAM: "rex", REX_SESSION: "session:abc" },
+  );
+  expect(result).toEqual({ ok: true });
+  expect(calls[0]?.[0]).toBe("ssh");
+  // No arm: nothing local to come back to.
+  expect(calls[0]?.[1].at(-1)).not.toMatch(/set-hook/);
+  expect(calls[1]).toEqual([
+    "rex",
+    [
+      "window",
+      "new",
+      "-s",
+      "session:abc",
+      "p · worker-9",
+      "--",
+      "sh",
+      "-c",
+      "ssh -t 'p' env LC_CTYPE=C.UTF-8 'tmux attach -t '\\''%9'\\'''",
+    ],
+    undefined,
+  ]);
+});
+
+test("in a Rex pane a tab that cannot be opened is reported", () => {
+  const result = jumpToAgent(
+    store,
+    localView(),
+    fakeMux({ livePanes: () => new Set([asPaneId("%9")]) }),
+    () => ({ status: 1, stdout: "", failed: false }),
+    { TERM_PROGRAM: "rex", REX_SESSION: "session:abc" },
+  );
+  expect(result).toMatchObject({ ok: false, reason: "attach_failed" });
+});
+
+test("outside tmux a local pane that is gone is pane_gone, and nothing is run", () => {
+  let ran = 0;
+  const result = jumpToAgent(
+    store,
+    localView(),
+    fakeMux({ livePanes: () => new Set([asPaneId("%1")]) }),
+    () => {
+      ran += 1;
+      return ok();
+    },
+    {},
+  );
+  expect(result).toMatchObject({ ok: false, reason: "pane_gone" });
+  expect(ran).toBe(0);
 });

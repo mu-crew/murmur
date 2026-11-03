@@ -9,11 +9,16 @@ afterEach(() => {
   process.exitCode = 0;
 });
 
-test("dash refuses to start outside tmux but allows a tmux popup", () => {
+test("dash refuses a plain terminal but allows tmux and a Rex pane", () => {
   const errors: string[] = [];
   expect(requireDashTmux({}, (message) => errors.push(message))).toBe(false);
-  expect(errors.join("")).toContain("murmur dash must run inside tmux");
+  expect(errors.join("")).toContain("murmur dash must run inside tmux or a Rex pane");
   expect(requireDashTmux({ TMUX: "/tmp/tmux/default,1,0" }, () => undefined)).toBe(true);
+  expect(requireDashTmux({ TERM_PROGRAM: "rex", REX_SESSION: "session:1" }, () => undefined)).toBe(
+    true,
+  );
+  // Rex's name alone is not enough: no session means nowhere to open a tab.
+  expect(requireDashTmux({ TERM_PROGRAM: "rex" }, () => undefined)).toBe(false);
 });
 
 test("a jump releases and restores the dash terminal around the action", async () => {
