@@ -5,6 +5,11 @@ so it says what changed for a user rather than listing every commit.
 
 ## Unreleased
 
+**`murmur rex-feed`, for Rex.** Reports the agents the status pill counts as
+OSC 7501 program status records in its own pane, one per agent plus a root
+summary, so a Rex tab marks blocked, done and failed agents from every host.
+See [Rex](docs/setup.md#rex).
+
 ## 1.5.0
 
 Upgrade every node in this order: `npm i -g @mu-crew/murmur@1.5.0`, then

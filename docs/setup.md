@@ -346,6 +346,32 @@ server. A jump command override that does not itself attach a tmux client, or
 attaches after some other client does, leaves the jump unmarked — then `--goto`
 switches to the remote host's own dash instead of coming home.
 
+## Rex
+
+[Rex](https://www.superlogical.com/rex/) shows terminal program status
+([OSC 7501](https://www.superlogical.com/rex/docs/build/program-status)) on
+its tabs and in its session picker, and pi already reports its own pane that
+way. `murmur rex-feed` adds the rest of the fleet: run it in a tab of its own,
+and that tab carries one record per agent the status pill counts, with the
+most urgent state on its root record.
+
+```sh
+rex window new crew -- murmur rex-feed
+```
+
+- Which agents: human-driven agents that are not idle, and crew agents only
+  when `blocked`, `error` or `crashed`, as in the pill.
+- States map onto the protocol's five: `crashed` and `error` are `error`,
+  `blocked` is `blocked` (kind `question`), `done` is `done`, `running` and
+  `waiting` are `working`. Idle agents get no record.
+- Each record's title is the agent's label, prefixed with its host for a
+  remote agent; its message is the dash card's one-liner.
+- It re-reads the store every 2 s and fetches peers on the collect floor,
+  as `murmur status` does. Ctrl-C clears every record it set.
+
+The records belong to the feed's pane, so Rex lists them there; selecting one
+does not jump to the agent. Use `murmur pick` or the dash for that.
+
 ## Jump command override
 
 `target` is always ssh (collector). The jump command is for a human and need not

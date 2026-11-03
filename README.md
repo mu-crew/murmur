@@ -21,6 +21,7 @@ agent over ssh without leaving it.
 | `murmur pick` | fzf jump list — type to narrow, enter jumps, `ctrl-a` / `--all` toggles crew |
 | `murmur dash` | Full-screen dashboard: watch, prompt, and stop local or remote agents |
 | `murmur sidepanel` | Compact agent list in a full-height pane beside the current tmux window |
+| `murmur rex-feed` | The status pill's agents as terminal program status (OSC 7501), for Rex |
 
 All four read the same list. Local jump is a window switch; remote jump opens
 over ssh (or your `--jump-command`). Orchestrated (`crew`) agents stay hidden
