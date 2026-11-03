@@ -7,6 +7,7 @@ import {
   renderJumpCommand,
   suggestedJumpCommand,
   supportsServer,
+  tmuxAttachCommand,
 } from "./jump-command.js";
 import { type Mux, tmux } from "./mux.js";
 import type { Store } from "./store.js";
@@ -254,12 +255,84 @@ export type JumpResult =
  * nothing written. The next collect reconciles either way, and only the owning
  * node can author facts about its own panes.
  */
+/**
+ * How a jump reaches the terminal when it is not inside tmux.
+ *
+ * - `inherit`: run the attach in this process's terminal, blocking until it
+ *   ends. The picker, run from a plain shell.
+ * - `rex`: open it in a new Rex tab (`rex window new`), so the caller -- the
+ *   dash, or a picker in a Rex pane -- keeps its own terminal and the agent
+ *   gets a tab of its own, which Rex marks from the agent's program status.
+ *
+ * Inside tmux neither applies: a local jump is a `switch-client` and a remote
+ * one a wrapper session, as before.
+ */
+export type Outside = "inherit" | "rex";
+
+/** `rex` when this process runs in a Rex pane, else `inherit`. */
+export function outsideTmux(env: NodeJS.ProcessEnv = process.env): Outside {
+  return env.TERM_PROGRAM === "rex" && env.REX_SESSION ? "rex" : "inherit";
+}
+
+/**
+ * Run an interactive attach outside tmux.
+ *
+ * `rex` hands the command to `rex window new` in the caller's session, with
+ * the agent's label as the tab name. It returns at once: the tab owns the
+ * attach from there, and closes when it ends.
+ */
+function runOutside(
+  run: Runner,
+  how: Outside,
+  command: string,
+  label: string,
+  env: NodeJS.ProcessEnv,
+): boolean {
+  const result =
+    how === "rex"
+      ? run("rex", [
+          "window",
+          "new",
+          ...(env.REX_SESSION ? ["-s", env.REX_SESSION] : []),
+          label,
+          "--",
+          "sh",
+          "-c",
+          command,
+        ])
+      : run("sh", ["-c", command], true);
+  return result.status === 0 && !result.failed;
+}
+
 export function jumpToAgent(
   store: Store,
   agent: PaneView,
   mux: Mux = tmux,
   run: Runner = spawnRunner,
+  env: NodeJS.ProcessEnv = process.env,
 ): JumpResult {
+  if (agent.local && !env.TMUX) {
+    // Outside tmux there is no client to switch. A bare `switch-client` did
+    // not fail here: tmux picked SOME attached client -- another terminal's --
+    // and moved that one, so the jump "succeeded" on a screen the operator
+    // was not looking at. Attach instead, as the remote path does.
+    const panes = mux.livePanes(agent.server);
+    if (panes && !panes.has(agent.pane)) {
+      return {
+        ok: false,
+        reason: "pane_gone",
+        message: `${agentLabel(agent)} is gone -- its pane no longer exists.`,
+      };
+    }
+    const attach = tmuxAttachCommand(agent);
+    return runOutside(run, outsideTmux(env), attach, agentLabel(agent), env)
+      ? { ok: true }
+      : {
+          ok: false,
+          reason: "attach_failed",
+          message: `could not attach to ${agentLabel(agent)} (${attach} failed).`,
+        };
+  }
   if (agent.local) {
     // The PANE decides. This once asked about the WINDOW, which a live pane
     // routinely outlives: after `move-pane -s %0 -t @1`, list-panes still has
@@ -348,7 +421,7 @@ export function jumpToAgent(
     agent.server.kind === "default"
       ? "tmux"
       : `tmux ${agent.server.kind === "label" ? "-L" : "-S"} ${shellQuote(agent.server.value)}`;
-  const arm = process.env.TMUX ? ` ; { ${tmuxPrefix} ${mux.armJumpMarkerCommand()} || true; }` : "";
+  const arm = env.TMUX ? ` ; { ${tmuxPrefix} ${mux.armJumpMarkerCommand()} || true; }` : "";
   const probe = run("ssh", [
     ...SSH_OPTIONS,
     target,
@@ -416,7 +489,7 @@ export function jumpToAgent(
   // Both would be global on a window and would break every local session. The
   // cost is that the local server is unreachable from inside the wrapper; the
   // README documents a root-table key that detaches out.
-  if (process.env.TMUX) {
+  if (env.TMUX) {
     // Read BEFORE the wrapper exists, or the wrapper itself is recorded as the
     // place to come back to and the return is a no-op.
     const client = mux.clientName();
@@ -520,8 +593,7 @@ export function jumpToAgent(
   //
   // The tradeoff, no reuse of an existing attach, is correct rather than
   // missing: there is no local server holding one.
-  const attached = run("sh", ["-c", attach], true);
-  return attached.status === 0 && !attached.failed
+  return runOutside(run, outsideTmux(env), attach, `${peer.name} · ${agentLabel(agent)}`, env)
     ? { ok: true }
     : {
         ok: false,

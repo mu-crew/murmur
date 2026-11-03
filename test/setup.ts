@@ -77,6 +77,11 @@ const CLEARED = [
   "TMUX",
   "TMUX_PANE",
   "TMUX_TMPDIR",
+  // A suite run from a Rex pane would otherwise take the Rex jump path and
+  // open real tabs (`outsideTmux`).
+  "TERM_PROGRAM",
+  "REX_SESSION",
+  "REX_BLOCK",
 ] as const;
 
 /**
