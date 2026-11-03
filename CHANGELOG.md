@@ -5,6 +5,11 @@ so it says what changed for a user rather than listing every commit.
 
 ## Unreleased
 
+## 1.5.1
+
+No snapshot or store change; nodes can upgrade one at a time. Upgrade the CLI
+first (`npm i -g @mu-crew/murmur@1.5.1`), then `pi update npm:@mu-crew/murmur`.
+
 **`murmur rex-feed`, for Rex.** Reports the agents the status pill counts as
 OSC 7501 program status records in its own pane, one per agent plus a root
 summary, so a Rex tab marks blocked, done and failed agents from every host.
