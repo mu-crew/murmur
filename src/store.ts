@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { closeSync, openSync, rmSync } from "node:fs";
+import { createRequire } from "node:module";
 import { dirname } from "node:path";
-import Database from "better-sqlite3";
+import type BetterSqlite3 from "better-sqlite3";
 import { ensureDir } from "./dirs.js";
 import type { NodeIdentity } from "./identity.js";
 import { asPaneId, asSessionId, asWindowId } from "./ids.js";
@@ -56,6 +57,67 @@ const SCHEMA_USER_VERSION = 9;
  * which would otherwise end the literal and change the statement's meaning.
  */
 const EFFORT_SQL_LIST = EFFORTS.map((effort) => `'${effort.replaceAll("'", "''")}'`).join(", ");
+
+type Database = BetterSqlite3.Database;
+type OpenOptions = { fileMustExist?: boolean; readonly?: boolean };
+
+/** The slice of `bun:sqlite` this file uses. */
+type BunDatabase = {
+  prepare(source: string): { all(): Record<string, unknown>[] };
+};
+type BunDatabaseConstructor = new (
+  path: string,
+  options: { readonly?: boolean; readwrite?: boolean; create?: boolean; strict?: boolean },
+) => BunDatabase;
+
+/**
+ * better-sqlite3 under Node, `bun:sqlite` under Bun.
+ *
+ * pi can run on Bun (a single-file Bun build of pi loads this file through the
+ * extension). Bun cannot load better-sqlite3's native addon: the load is a
+ * `NAPI FATAL ERROR` panic that takes pi down before its first prompt, not an
+ * exception the extension's lazy import could swallow. So the driver is chosen
+ * at runtime with `require`, never a static import, which would load the addon
+ * the moment this module is evaluated.
+ *
+ * `bun:sqlite` covers everything used below with the same names, except two
+ * gaps the Bun branch fills:
+ *
+ * - No `pragma()`. It is a `PRAGMA` statement, with `{ simple: true }` reading
+ *   the first column of the first row, as better-sqlite3 does.
+ * - Different constructor options. `fileMustExist` is "read and write, never
+ *   create"; `strict: true` binds `@name` parameters from plain object keys, as
+ *   better-sqlite3 does.
+ *
+ * One difference stays: Bun's `get()` returns `null` for no row where
+ * better-sqlite3 returns `undefined`. Every caller here tests the result for
+ * truthiness, so both read as "no row".
+ */
+const openDatabase: (path: string, options?: OpenOptions) => Database = (() => {
+  const require = createRequire(import.meta.url);
+  if (process.versions.bun === undefined) {
+    const NodeDatabase = require("better-sqlite3") as typeof BetterSqlite3;
+    return (path, options) => new NodeDatabase(path, options);
+  }
+  const { Database: BunDatabaseClass } = require("bun:sqlite") as {
+    Database: BunDatabaseConstructor;
+  };
+  return (path, options = {}) => {
+    const opened = new BunDatabaseClass(path, {
+      readonly: options.readonly === true,
+      readwrite: options.readonly !== true,
+      create: options.readonly !== true && options.fileMustExist !== true,
+      strict: true,
+    });
+    const pragma = (source: string, pragmaOptions?: { simple?: boolean }): unknown => {
+      const rows = opened.prepare(`PRAGMA ${source}`).all();
+      if (pragmaOptions?.simple !== true) return rows;
+      const first = rows[0];
+      return first === undefined ? undefined : Object.values(first)[0];
+    };
+    return Object.assign(opened, { pragma }) as unknown as Database;
+  };
+})();
 
 /**
  * The columns `setRuntime` may write, as an allowlist.
@@ -354,7 +416,7 @@ function withResetLock<T>(path: string, work: () => T): T {
 /** Human-authored peer fields, and the only state worth salvaging. */
 function salvagePeers(path: string): { name: string; target: string; jump_command?: string }[] {
   try {
-    const existing = new Database(path, { fileMustExist: true });
+    const existing = openDatabase(path, { fileMustExist: true });
     try {
       const version = (existing.pragma("user_version", { simple: true }) as number) ?? 0;
       if (version === SCHEMA_USER_VERSION) return [];
@@ -408,9 +470,9 @@ function salvagePeers(path: string): { name: string; target: string; jump_comman
  * be read at all, which is the case where there is nothing to warn about anyway.
  */
 function countDiscarded(path: string): { agents: number; attention: number } | null {
-  let existing: Database.Database;
+  let existing: Database;
   try {
-    existing = new Database(path, { fileMustExist: true, readonly: true });
+    existing = openDatabase(path, { fileMustExist: true, readonly: true });
   } catch {
     return null;
   }
@@ -455,9 +517,9 @@ export class StoreTooNewError extends Error {
  * runs before salvage or counting, so a too-new store is left exactly as found.
  */
 function storeCondition(path: string): "ok" | "reset" | StoreTooNewError {
-  let existing: Database.Database;
+  let existing: Database;
   try {
-    existing = new Database(path, { fileMustExist: true });
+    existing = openDatabase(path, { fileMustExist: true });
   } catch {
     // No file yet. Nothing to remove, and the schema is created below.
     return "ok";
@@ -638,7 +700,7 @@ export function openStore(): Store {
       for (const suffix of ["", "-wal", "-shm"]) rmSync(`${path}${suffix}`, { force: true });
     }
 
-    const opened = new Database(path);
+    const opened = openDatabase(path);
     opened.pragma("journal_mode = WAL");
     opened.pragma("busy_timeout = 5000");
 
