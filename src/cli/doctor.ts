@@ -18,6 +18,7 @@ import {
   type Topology,
   type TopologyNode,
 } from "../doctor.js";
+import { INBOX_PANE_CAP, inboxBacklog } from "../inbox.js";
 import { openStore } from "../store.js";
 import type { PeerRecord } from "../types.js";
 import { requireIdentity } from "./identity-guard.js";
@@ -144,6 +145,11 @@ const GROUP: Record<FindingKind, { heading: string; because: string | null }> = 
   unsurveyable: {
     heading: "Could not be surveyed",
     because: "Normal for a sleeping laptop or a box switched off.",
+  },
+  "inbox-full": {
+    heading: "Undrained pane inboxes",
+    because:
+      "A hook harness's events wait here until a reader drains them; past the cap its hook stops writing.",
   },
 };
 
@@ -401,6 +407,8 @@ export function registerDoctor(program: Command): void {
           host_id: identity.host_id,
           display_name: identity.display_name,
           peers,
+          inbox: inboxBacklog(),
+          inboxCap: INBOX_PANE_CAP,
         };
         const findings = diagnose(local, surveys);
 

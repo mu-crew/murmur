@@ -580,3 +580,26 @@ test("suppression is scoped to the gated peer, not to every peer", () => {
     "needs-session",
   ]);
 });
+
+test("a pane inbox at its cap is an observation naming the drain", () => {
+  const findings = diagnose(
+    localNode([], {
+      inbox: [
+        { key: "abc", waiting: 10 },
+        { key: "def", waiting: 9 },
+      ],
+      inboxCap: 10,
+      display_name: "laptop",
+    }),
+    [],
+  );
+  expect(findings).toEqual([
+    expect.objectContaining({
+      kind: "inbox-full",
+      severity: "observation",
+      subject: "laptop",
+      detail: "inbox abc: 10 events waiting",
+      remedy: "murmur status",
+    }),
+  ]);
+});

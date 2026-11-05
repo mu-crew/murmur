@@ -1,4 +1,5 @@
 import type { PaneId, SessionId, WindowId } from "./ids.js";
+import type { InboxEvent } from "./inbox-event.js";
 
 /**
  * The three independent facts, as types.
@@ -295,12 +296,39 @@ export type SnapshotAttention = {
  */
 export type LiveCheck = (pid: number) => boolean;
 
+/**
+ * Whether a pid is an ancestor of the claiming process. A parameter, like
+ * `LiveCheck`, so a test needs no process table.
+ */
+export type AncestorCheck = (pid: number) => boolean;
+
+/**
+ * The pid of a live harness other than pi that the claiming pi runs inside,
+ * or null. A parameter, like `LiveCheck`, so a test needs no process table.
+ */
+export type NestCheck = () => number | null;
+
 export type AgentClaim = {
   location: Location;
   owner_pid: number;
   meta: AgentMeta;
   now?: number;
   isAlive?: LiveCheck;
+  /**
+   * Consulted only against an `inbox` incumbent that is still alive: pi
+   * replaces it unless it is pi's own ancestor, which is the nested-agent case.
+   * Defaults to reading the process table, and fails closed (refuses) when the
+   * table cannot be read.
+   */
+  isAncestor?: AncestorCheck;
+  /**
+   * Consulted before any claim or replace: a pi inside a live claude, codex,
+   * cursor-agent or muse is refused even when that harness has no row yet --
+   * its events may still wait in the inbox, undrained. Defaults to reading the
+   * process table up to the server `$TMUX` names, for a claim made by this
+   * process; anything else, and an unreadable table, reads as not nested.
+   */
+  nestedUnder?: NestCheck;
 };
 
 export type ClaimResult =
@@ -401,3 +429,62 @@ export type ReconcileSummary = {
 export type PeerFetch =
   | { ok: true; snapshot: Snapshot; at: number }
   | { ok: false; error: string; at: number };
+
+/**
+ * Who reports a pane's agent row: pi's extension in-process, or the inbox drain
+ * for a hook harness. A `pi` row ignores inbox events; pi replaces an `inbox`
+ * row unless its owner is alive and pi's ancestor.
+ */
+export type AgentSource = "pi" | "inbox";
+
+/**
+ * One inbox event, ready to apply, as the drain hands it to the store.
+ *
+ * The drain read the file and located the pane under the store's lock; the
+ * store decides what the event means and calls `consume` once it is applied or
+ * refused, so an event is never applied twice.
+ */
+export type InboxDelivery = {
+  location: Location;
+  /** Whether a human is looking at the pane: a focused `turn_stopped` raises no `done`. */
+  focused: boolean;
+  /** Null when the file did not hold a valid event. It is consumed and dropped. */
+  event: InboxEvent | null;
+  /** Whether a pi runs in the pane's process tree. Asked only before claiming an unclaimed pane. */
+  piRuns: () => boolean;
+  consume: () => void;
+};
+
+export type IngestOptions = {
+  isAlive?: LiveCheck;
+};
+
+export type IngestSummary = {
+  applied: number;
+  /** Valid events the ownership rules refused: a pi row, a live other owner, another session. */
+  ignored: number;
+  malformed: number;
+  /** Every pane whose state an applied event changed, for publishing. */
+  changed: Location[];
+};
+
+/**
+ * A local pane's harness-side state, for `murmur pane --json`.
+ *
+ * Local only and never in a snapshot: `toAgent` picks its fields explicitly,
+ * so none of these reach the wire. No `owner_pid` either, the same as every
+ * other read shape.
+ */
+export type HarnessState = {
+  source: AgentSource;
+  harness: string | null;
+  session_id: string | null;
+  /** Prompts submitted in this session; null for a pi row, which does not count them. */
+  run_count: number | null;
+  last_text: string | null;
+  /**
+   * False while the activity is mu's assertion rather than the harness's: an
+   * interrupt mu sent and no harness event has confirmed yet (`idle?`).
+   */
+  confirmed: boolean;
+};

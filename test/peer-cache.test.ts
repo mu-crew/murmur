@@ -376,6 +376,11 @@ test("the store exposes no reader-side mutation of remote state", () => {
   //
   // `claimAlerts` writes only its own dedup table: which events the
   // on-attention hook has run for. It says nothing about any pane.
+  //
+  // `ingestInbox` is the one ingest, and it is LOCAL: hook events about this
+  // node's own panes, which the hook placed by walking its own process chain to
+  // one of this node's tmux servers. `harnessState` is its local read for
+  // `murmur pane`; neither touches a peer's snapshot.
   expect(Object.keys(store()).sort()).toEqual([
     "acknowledgePane",
     "addPeer",
@@ -383,6 +388,8 @@ test("the store exposes no reader-side mutation of remote state", () => {
     "claimAgent",
     "claimAlerts",
     "close",
+    "harnessState",
+    "ingestInbox",
     "localPanes",
     "peers",
     "reconcileLocal",

@@ -3,10 +3,12 @@
 // The CLI is a thin layer over exactly these units.
 //
 // Deliberately NOT here: anything from the forbidden-shapes list (no append, no
-// ingest, no log read, no narrow local read, no partial-row update) and no raw
-// database handle under any name. `reconcileLocal` and `buildLocalSnapshot` are
-// reachable only as `Store` methods, which keeps src/store.ts the sole owner of
-// SQL.
+// log read, no narrow local read, no partial-row update) and no raw database
+// handle under any name. `reconcileLocal`, `buildLocalSnapshot` and the one
+// ingest, `ingestInbox`, are reachable only as `Store` methods, which keeps
+// src/store.ts the sole owner of SQL. The inbox's file side -- writing an event,
+// draining a node's inbox -- is here, because a hook writer is a separate
+// process and the drain only delivers what the store decides.
 //
 // The version comes from src/version.ts, the one module that can find
 // package.json from any bundle depth.
@@ -25,6 +27,7 @@ export {
   MAX_CONCURRENT_PEERS,
 } from "./collector.js";
 export { glance } from "./glance.js";
+export { HARNESSES, type Harness, harnessFromArgv } from "./harnesses.js";
 export {
   createIdentity,
   loadIdentity,
@@ -40,6 +43,24 @@ export {
   type WindowId,
 } from "./ids.js";
 export {
+  type DrainOptions,
+  type DrainSummary,
+  drainInbox,
+  INBOX_PANE_CAP,
+  type InboxHost,
+  inboxDir,
+  inboxKey,
+  tmuxInboxHost,
+  writeInboxEvent,
+} from "./inbox.js";
+export {
+  INBOX_EVENTS,
+  type InboxEvent,
+  type InboxEventName,
+  LAST_TEXT_MAX_BYTES,
+  parseInboxEvent,
+} from "./inbox-event.js";
+export {
   ATTACH_PLACEHOLDER,
   defaultJumpCommand,
   PANE_PLACEHOLDER,
@@ -48,6 +69,12 @@ export {
 } from "./jump-command.js";
 export { type Mux, pidAlive, tmux } from "./mux.js";
 export { configDir, dbPath, stateDir } from "./paths.js";
+export {
+  type Placement,
+  type ProcessRow,
+  placeEvent,
+  readProcessTable,
+} from "./process-chain.js";
 export { parseSnapshot, SnapshotInvalidError } from "./snapshot.js";
 export { type Status, status, statusWithCollect, tmuxStatus } from "./status.js";
 export { openStore, type Store, StoreTooNewError } from "./store.js";
@@ -61,6 +88,9 @@ export type {
   AttentionRequest,
   ClaimResult,
   Driver,
+  HarnessState,
+  InboxDelivery,
+  IngestSummary,
   LiveCheck,
   LocalPane,
   LocalWorld,

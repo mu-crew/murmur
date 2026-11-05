@@ -2,6 +2,7 @@ import { publishAgentStates } from "./agent-state.js";
 import { type AlertRunner, alertHook, fireAlerts, runHook } from "./alert.js";
 import { type Channel, hasWarmSocket } from "./channel.js";
 import { loadIdentity, type NodeIdentity } from "./identity.js";
+import { type DrainOptions, drainInbox } from "./inbox.js";
 import { type Mux, tmux } from "./mux.js";
 import { parseSnapshot, SnapshotInvalidError } from "./snapshot.js";
 import type { Store } from "./store.js";
@@ -204,6 +205,11 @@ export type CollectOptions = {
   warm?: (target: string) => boolean;
   /** Pause before retrying a busy session channel. Injected so tests need not wait. */
   busyRetryMs?: number;
+  /**
+   * How the pane inbox is drained before reconciliation; `false` skips it.
+   * Injected so a test needs no tmux and no process table.
+   */
+  inbox?: DrainOptions | false;
   /**
    * The on-attention hook, its runner, and the identity the merged view needs.
    * Injected so a test needs no executable on disk and no `murmur init`.
@@ -608,6 +614,16 @@ export async function collect(
     });
   } finally {
     clearTimeout(timer);
+  }
+
+  // Hook harnesses' events first, so this read -- every surface's -- shows them,
+  // and so reconciliation below sees the panes they claimed.
+  if (options.inbox !== false) {
+    try {
+      drainInbox(store, { mux, ...options.inbox });
+    } catch {
+      // Same rule as housekeeping: the drain must never fail a collect.
+    }
   }
 
   // Runs once per invocation including with zero peers, which is why it is here
