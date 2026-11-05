@@ -18,6 +18,7 @@ import {
   type Topology,
   type TopologyNode,
 } from "../doctor.js";
+import { checkHooks } from "../hook-install.js";
 import { INBOX_PANE_CAP, inboxBacklog } from "../inbox.js";
 import { openStore } from "../store.js";
 import type { PeerRecord } from "../types.js";
@@ -120,6 +121,16 @@ const GROUP: Record<FindingKind, { heading: string; because: string | null }> = 
     heading: "Incompatible versions",
     because: "State will not sync with these until murmur versions match.",
   },
+  "hook-drift": {
+    heading: "Hook drift",
+    because:
+      "murmur's hook entries for these harnesses are not what `murmur init` writes, so events go missing.",
+  },
+  "reported-twice": {
+    heading: "Reported twice",
+    because:
+      "These harnesses run murmur from a hook and from an older `notify` line, so each finished turn is reported twice.",
+  },
   island: {
     heading: "Not visible to the fleet",
     because: null,
@@ -145,6 +156,10 @@ const GROUP: Record<FindingKind, { heading: string; because: string | null }> = 
   unsurveyable: {
     heading: "Could not be surveyed",
     because: "Normal for a sleeping laptop or a box switched off.",
+  },
+  "hooks-absent": {
+    heading: "Harnesses without murmur hooks",
+    because: "Set up on this node, but their panes report nothing to murmur.",
   },
   "inbox-full": {
     heading: "Undrained pane inboxes",
@@ -181,9 +196,17 @@ export function render(
   // The denominator first, because it bounds every claim that follows: a report
   // over one answered peer of four is a much weaker statement than one over four,
   // and the reader cannot discount the findings without knowing which.
-  if (surveys.length === 0) return "No peers configured, so there is nothing to survey.\n";
+  //
+  // With no peers there is no survey to bound anything, but this node's own
+  // findings (its hook config, its inboxes) still stand, so they are not lost
+  // behind the early return.
+  if (surveys.length === 0 && findings.length === 0) {
+    return "No peers configured, so there is nothing to survey.\n";
+  }
   out.push(
-    `Surveyed ${surveys.length} peer${surveys.length === 1 ? "" : "s"}, ${answered} answered.\n`,
+    surveys.length === 0
+      ? "No peers configured, so only this node was checked.\n"
+      : `Surveyed ${surveys.length} peer${surveys.length === 1 ? "" : "s"}, ${answered} answered.\n`,
   );
   if (findings.length === 0) {
     out.push("\nNo problems found.\n");
@@ -385,7 +408,9 @@ export function registerDoctor(program: Command): void {
     // machine, so a --fix would mean murmur rewriting a remote node's
     // configuration -- a far larger claim than a diagnostic, and one that cuts
     // against membership being local. The commands are printed instead.
-    .description("Survey peers over ssh and report what only a fleet-wide view can see")
+    .description(
+      "Survey peers over ssh and report what only a fleet-wide view can see, plus this node's hook entries",
+    )
     .option("--json", "print the finding list")
     // Opt in, because it costs O(N^2) remote dials where the survey costs O(N).
     // Plain `doctor` answers "is my fleet mutual?"; this answers "what fleet
@@ -409,6 +434,7 @@ export function registerDoctor(program: Command): void {
           peers,
           inbox: inboxBacklog(),
           inboxCap: INBOX_PANE_CAP,
+          hooks: checkHooks(),
         };
         const findings = diagnose(local, surveys);
 

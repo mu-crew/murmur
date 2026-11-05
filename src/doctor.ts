@@ -6,6 +6,7 @@ import {
   mapSettled,
   needsInteractiveAuth,
 } from "./collector.js";
+import { describeDrift, type HookCheck } from "./hook-install.js";
 import { parseSnapshot } from "./snapshot.js";
 import type { PeerRecord } from "./types.js";
 
@@ -218,14 +219,18 @@ export type FindingKind =
   | "needs-session"
   | "naming-drift"
   | "unsurveyable"
-  | "inbox-full";
+  | "inbox-full"
+  | "hook-drift"
+  | "hooks-absent"
+  | "reported-twice";
 
 export type Finding = {
   kind: FindingKind;
   severity: Severity;
   /**
-   * The handle the operator would type: a peer's local name, or this node's
-   * display_name for a finding about this node. Never a host_id -- that is how
+   * The handle the operator would type: a peer's local name, this node's
+   * display_name for a finding about this node, or a hook harness's name
+   * (`claude`) for one about its hook config. Never a host_id -- that is how
    * findings are computed, not how they are read.
    */
   subject: string;
@@ -288,6 +293,11 @@ export type LocalNode = {
   inbox?: readonly { key: string; waiting: number }[];
   /** The per-pane cap past which a hook stops writing. */
   inboxCap?: number;
+  /**
+   * murmur's entries in each hook harness's config (`checkHooks`). Optional,
+   * like `inbox`: the fleet-shape tests have no home directory to read.
+   */
+  hooks?: readonly HookCheck[];
 };
 
 /** One host this node can name, with the identity every check compares on. */
@@ -375,6 +385,46 @@ export function diagnose(local: LocalNode, surveys: SurveyResult[]): Finding[] {
       display_name: survey?.display_name ?? peer.display_name,
       localName: peer.name,
       target: peer.target,
+    });
+  }
+
+  // A hook harness whose murmur entries are not what `murmur init` writes --
+  // PROBLEM. First, because it is this node's own configuration and murmur
+  // provably loses events: a missing `Stop` never reports a finished turn, and
+  // Muse delivers no `Interrupt` to a handler not declared async. The subject
+  // is the harness, the handle `murmur init --hooks` takes.
+  for (const check of local.hooks ?? []) {
+    if (check.state !== "drift" && check.state !== "unreadable") continue;
+    const what =
+      check.state === "unreadable"
+        ? `cannot be checked: ${check.error ?? "unreadable"}`
+        : describeDrift(check);
+    findings.push({
+      kind: "hook-drift",
+      severity: "problem",
+      subject: check.harness,
+      message:
+        check.state === "unreadable"
+          ? `${check.harness}'s hook config ${check.path} ${what}, and \`murmur init\` will not rewrite it`
+          : `${check.harness}'s murmur hook entries in ${check.path} differ from what \`murmur init\` writes: ${what}`,
+      detail: `${what} (${check.path})`,
+      // An unreadable file is the user's to fix: init refuses it too.
+      remedy: check.state === "unreadable" ? null : "murmur init",
+    });
+  }
+
+  // codex hooked AND still running murmur from its older `notify` line --
+  // PROBLEM: every finished turn is reported twice. No command: murmur does
+  // not edit codex's TOML, so the line is the user's to remove.
+  for (const check of local.hooks ?? []) {
+    if (check.notifyConfig === undefined) continue;
+    findings.push({
+      kind: "reported-twice",
+      severity: "problem",
+      subject: check.harness,
+      message: `${check.harness} runs murmur from both its hooks and the \`notify\` line in ${check.notifyConfig}, so every finished turn is reported twice; remove the \`notify\` line`,
+      detail: `remove the \`notify\` line from ${check.notifyConfig}`,
+      remedy: null,
     });
   }
 
@@ -656,6 +706,21 @@ export function diagnose(local: LocalNode, surveys: SurveyResult[]): Finding[] {
       message: `pane inbox ${key} holds ${waiting} undrained events, so its hook has stopped writing -- run \`murmur status\` to drain it`,
       detail: `inbox ${key}: ${waiting} events waiting`,
       remedy: "murmur status",
+    });
+  }
+
+  // A hook harness set up here with no murmur entry at all -- OBSERVATION. It
+  // may be deliberate (a harness still on `murmur notify`, or not used with
+  // tmux), and only the operator can say, but its panes report nothing.
+  for (const check of local.hooks ?? []) {
+    if (check.state !== "unhooked") continue;
+    findings.push({
+      kind: "hooks-absent",
+      severity: "observation",
+      subject: check.harness,
+      message: `${check.harness} is set up here but ${check.path} has no murmur hook entries, so its panes report nothing to murmur`,
+      detail: `no murmur entries in ${check.path}`,
+      remedy: "murmur init",
     });
   }
 

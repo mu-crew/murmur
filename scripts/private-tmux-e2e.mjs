@@ -31,7 +31,7 @@ const tmux = (...args) => run("tmux", ["-L", socket, "-f", "/dev/null", ...args]
 let socketPath;
 let ownsServer = false;
 try {
-  run(process.execPath, [join(root, "dist/cli.js"), "init", "--name", "mule-e2e"]);
+  run(process.execPath, [join(root, "dist/cli.js"), "init", "--name", "mule-e2e", "--no-hooks"]);
   const command = [
     `MURMUR_STATE_DIR=${JSON.stringify(murmurState)}`,
     `node ${JSON.stringify(join(root, "test/helpers/private-claimant.mjs"))}`,

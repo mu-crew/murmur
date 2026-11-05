@@ -105,8 +105,10 @@ const CLEARED = [
  *
  * So the fallbacks are moved instead: XDG_STATE_HOME and XDG_CONFIG_HOME so
  * the last resort is a temp dir, MURMUR_PI_HOME so `pi migrate` cannot move files in
- * the real `~/.pi/agent`, and MURMUR_STATE_DIR/MURMUR_CONFIG_DIR so
- * a test that sets neither still gets a sandbox. Any test that wants its own
+ * the real `~/.pi/agent`, MURMUR_HOOK_HOME so `init` and `doctor` cannot read
+ * or rewrite the real `~/.claude`, `~/.codex`, `~/.cursor` or Muse settings,
+ * and MURMUR_STATE_DIR/MURMUR_CONFIG_DIR so a test that sets neither still gets
+ * a sandbox. Any test that wants its own
  * directory overrides these exactly as before.
  *
  * One directory per test FILE (a setup file runs once per file), created here
@@ -134,6 +136,7 @@ const REDIRECTED = {
   MURMUR_STATE_DIR: join(sandbox, "state"),
   MURMUR_CONFIG_DIR: join(sandbox, "config"),
   MURMUR_PI_HOME: join(sandbox, "home"),
+  MURMUR_HOOK_HOME: join(sandbox, "hook-home"),
   XDG_STATE_HOME: join(sandbox, "xdg-state"),
   XDG_CONFIG_HOME: join(sandbox, "xdg-config"),
 } as const;
