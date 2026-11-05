@@ -5,10 +5,12 @@ import { join } from "node:path";
 import { afterEach, beforeEach, expect, test } from "vitest";
 import { createIdentity } from "../src/identity.js";
 import { asPaneId, asSessionId, asWindowId, type PaneId } from "../src/ids.js";
+import { drainInbox, type InboxHost, writeInboxEvent } from "../src/inbox.js";
 import { parseSnapshot, SnapshotInvalidError } from "../src/snapshot.js";
 import { openStore, type Store } from "../src/store.js";
 import type { AgentMeta, Location, Snapshot, TmuxServer } from "../src/types.js";
 import { builtArtifact } from "./helpers/built.js";
+import { fakeMux } from "./helpers/fake-mux.js";
 
 /**
  * The snapshot document, as the ONE thing a node publishes.
@@ -932,4 +934,99 @@ test("a negative token count or cost is rejected, per field", () => {
     parseSnapshot(agentDocument({ model: "m", effort: "low", context_pct: 1, usage: zeroed }))
       .panes[0]?.agent?.usage,
   ).toMatchObject({ input: 0, cost_total: 0 });
+});
+
+test("the snapshot is byte-identical to the one before the inbox, and inbox rows add no field", () => {
+  // The inbox release added store columns (source, harness, session_id,
+  // run_count, last_text, confirmed) that must never reach the wire: a peer's
+  // reader rejects unknown keys and any version but its own, so one leaked
+  // field would force every node in the fleet to upgrade at once. `toAgent`
+  // picks its fields explicitly; this pins the document byte for byte against
+  // what the build before the inbox produced for the same rows.
+  const s = store();
+  const claim = s.claimAgent({ location: location("%1"), owner_pid: 4242, meta: META, now: 1000 });
+  if (claim.outcome !== "claimed") throw new Error(claim.outcome);
+  s.setActivity({
+    agent_id: claim.agent_id,
+    owner_pid: 4242,
+    activity: "running",
+    location: location("%1"),
+    now: 2000,
+  });
+  s.setRuntime({
+    agent_id: claim.agent_id,
+    owner_pid: 4242,
+    model: "m",
+    provider: "p",
+    effort: "high",
+    context_pct: 12.5,
+    pending: 0,
+    now: 3000,
+  });
+  s.requestAttention({
+    kind: "done",
+    location: location("%2"),
+    message: "",
+    source: "codex",
+    driver: "human",
+    now: 4000,
+  });
+  const built = s.buildLocalSnapshot(IDENTITY, {
+    server: { kind: "default" },
+    panes: live("%1", "%2"),
+    isAlive: alive([4242]),
+    now: 5000,
+  });
+  // Captured from the build before the inbox (murmur 1.5.2), with the agent id
+  // and version substituted.
+  const before =
+    '{"murmur_snapshot":6,"host_id":"H","display_name":"here","murmur_version":"VERSION","generated_at":5000,"panes":[{"server":{"kind":"default"},"pane":"%1","session":"$0","window":"@1","session_name":"work","window_name":"worker-1","agent":{"agent_id":"AGENT","activity":"running","agent_name":"worker-1","pi_session":"01JQ","workstream":"murmur","role":"implementer","cli":"pi","driver":"orchestrated","model":"m","provider":"p","effort":"high","context_pct":12.5,"context_tokens":null,"context_window":null,"provider_effort":null,"usage":null,"pending":0,"claimed_at":1000,"updated_at":3000},"attention":[]},{"server":{"kind":"default"},"pane":"%2","session":"$0","window":"@1","session_name":"work","window_name":"worker-1","agent":null,"attention":[{"kind":"done","message":"","source":"codex","driver":"human","requested_at":4000}]}]}';
+  expect(
+    JSON.stringify(built)
+      .replace(claim.agent_id, "AGENT")
+      .replace(`"murmur_version":"${built.murmur_version}"`, '"murmur_version":"VERSION"'),
+  ).toBe(before);
+
+  // An inbox-sourced row, with every new column set, publishes exactly the
+  // fields a pi row does.
+  const hostless: InboxHost = {
+    isAlive: () => true,
+    serverFor: () => ({ kind: "default" }),
+    panes: () => new Map([[77, { location: location("%3"), focused: false }]]),
+    piRunsUnder: () => false,
+  };
+  for (const event of ["prompt_submitted", "turn_stopped"] as const) {
+    writeInboxEvent({
+      v: 1,
+      event,
+      harness: "claude",
+      at: 6000,
+      server_pid: 66,
+      root_pid: 77,
+      owner_pid: 4242,
+      tmux: null,
+      tmux_pane: null,
+      session_id: "s1",
+      source: null,
+      reason: null,
+      message: null,
+      text: "the last text",
+      generation_id: null,
+      by: "harness",
+      agent: { agent_name: null, workstream: null, role: null, cli: null, driver: "human" },
+    });
+  }
+  expect(drainInbox(s, { host: hostless, mux: fakeMux() })).toMatchObject({ applied: 2 });
+  const withInbox = s.buildLocalSnapshot(IDENTITY, {
+    server: { kind: "default" },
+    panes: live("%1", "%2", "%3"),
+    isAlive: alive([4242]),
+    now: 7000,
+  });
+  const keys = (pane: string) =>
+    Object.keys(withInbox.panes.find((entry) => entry.pane === pane)?.agent ?? {});
+  expect(keys("%3")).toEqual(keys("%1"));
+  expect(JSON.stringify(withInbox)).not.toContain("the last text");
+  // And the document still validates as the version peers speak.
+  expect(parseSnapshot(JSON.stringify(withInbox)).panes).toHaveLength(3);
 });

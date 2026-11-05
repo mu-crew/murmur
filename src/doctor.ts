@@ -217,7 +217,8 @@ export type FindingKind =
   | "never-worked"
   | "needs-session"
   | "naming-drift"
-  | "unsurveyable";
+  | "unsurveyable"
+  | "inbox-full";
 
 export type Finding = {
   kind: FindingKind;
@@ -280,6 +281,13 @@ export type LocalNode = {
   host_id: string;
   display_name: string;
   peers: LocalPeer[];
+  /**
+   * Events waiting in each pane inbox (`inboxBacklog`). Optional, so a caller
+   * with no inbox to read -- every fleet-shape test -- passes nothing.
+   */
+  inbox?: readonly { key: string; waiting: number }[];
+  /** The per-pane cap past which a hook stops writing. */
+  inboxCap?: number;
 };
 
 /** One host this node can name, with the identity every check compares on. */
@@ -632,6 +640,22 @@ export function diagnose(local: LocalNode, surveys: SurveyResult[]): Finding[] {
         survey.reason === "roster-unsupported"
           ? `ssh ${survey.target} npm i -g @mu-crew/murmur`
           : null,
+    });
+  }
+
+  // A pane inbox at its cap: that pane's hook has stopped writing, so its
+  // harness's state is frozen until a reader drains it. Nothing drains on an
+  // idle host (no attached client, no mu call), which is the usual cause.
+  const cap = local.inboxCap ?? Number.POSITIVE_INFINITY;
+  for (const { key, waiting } of local.inbox ?? []) {
+    if (waiting < cap) continue;
+    findings.push({
+      kind: "inbox-full",
+      severity: "observation",
+      subject: local.display_name,
+      message: `pane inbox ${key} holds ${waiting} undrained events, so its hook has stopped writing -- run \`murmur status\` to drain it`,
+      detail: `inbox ${key}: ${waiting} events waiting`,
+      remedy: "murmur status",
     });
   }
 

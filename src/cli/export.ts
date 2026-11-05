@@ -1,4 +1,5 @@
 import type { Command } from "commander";
+import { drainInbox } from "../inbox.js";
 import { tmux } from "../mux.js";
 import { openStore } from "../store.js";
 import { requireIdentity } from "./identity-guard.js";
@@ -15,6 +16,8 @@ export function registerExport(program: Command): void {
       if (!identity) return;
       const store = openStore();
       try {
+        // Hook harnesses' waiting events, so the document includes their panes.
+        drainInbox(store);
         // `buildLocalSnapshot` reconciles first, which is what makes the
         // document authoritative: a snapshot built from unreconciled rows would
         // publish agents whose panes are gone, and a reader has no way to tell.

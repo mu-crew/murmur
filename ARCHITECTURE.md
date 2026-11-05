@@ -40,7 +40,9 @@ Everything else, including the store schema and other JSON fields, is internal.
 ## The shape
 
 ```
-pi agent ──in-process── murmur store ── state.db   (one per node)
+pi agent ──in-process──────────────┐
+                                    murmur store ── state.db   (one per node)
+hook harness ── murmur hook ── inbox ─┘   ▲ drained by every reader
                                             │
                                     ssh murmur export
                                             │
@@ -48,6 +50,11 @@ pi agent ──in-process── murmur store ── state.db   (one per node)
                                                        │
                                      jump: local switch, or ssh -t
 ```
+
+pi integrates in-process. Every other blessed harness (claude, codex,
+cursor-agent, muse) writes events into a per-pane inbox from its hooks,
+and readers own the store: `status`, `pane`, the dash and `export` drain the
+inbox into it before they read. See [The inbox](#the-inbox).
 
 Each node keeps one SQLite database describing the current state of its own
 panes. `murmur export` prints that state as a single complete JSON document — a
@@ -141,6 +148,18 @@ Three consequences worth stating, because each is easy to violate by accident:
   to report *as* the pane's real agent, so one pane accumulated six reporting
   pids of which one was alive, and the live agent read idle while it worked.
   Silence is correct for a process with nothing true to say.
+
+  For an inbox event the gate applies a pid the HOOK recorded -- the harness
+  process its process chain found -- rather than the pid of the process
+  writing to the store, which is a reader draining the inbox. The trust model
+  is stated, not hidden: any process running as the user can write an event
+  file, so inbox state is advisory. Nothing that acts on it (mu) closes work on
+  a state transition alone.
+- **A node's inbox names only its own panes.** A hook places its event by
+  walking its own process chain to a tmux server on this machine, and the
+  drain maps that server and pane root to this node's store key the way the
+  collector does. A remote worker's hook writes to a separate area keyed by its
+  origin, which this node's drain never reads and its snapshot never exports.
 - **`murmur notify` is the one deliberate exception, and it is narrow by
   construction.** Its whole request type is `{kind, location, message, source,
   driver}` — there is no `agent_id`, no pid, no activity and no owner metadata,
@@ -261,6 +280,8 @@ a core.
 | `channel` | Seam: `exec(target, argv) -> stdout`. One impl: ssh | OS |
 | `collector` | Fetch each peer, validate, replace its cache whole | `channel`, `store` |
 | `mux` | Seam: window/pane queries, tmux state options, attach. One impl: tmux | OS |
+| `process-chain` | **Pure** over a `ps` table: place a hook's event by walking to its tmux server | OS (`ps`) |
+| `inbox` | Write one event file; drain every pane inbox into the store and publish pane options | `store`, `mux`, `process-chain` |
 
 `view` and `snapshot` being pure and `store` being the only SQL is the boundary
 that carries the design. All three are testable without a machine, a network or
@@ -291,13 +312,22 @@ the database handle.
 Two seams exist with exactly one implementation each: `channel` (ssh) and `mux`
 (tmux). Defined so a second backend is possible; not designed for one that does
 not exist. The harness is not a third: pi reports in-process through the
-extension, and every other harness comes in through `murmur notify`, which is a
-command rather than an interface to implement.
+extension, the blessed hook harnesses write inbox events through `murmur hook`,
+and any other harness comes in through `murmur notify`. Both are commands
+rather than interfaces to implement.
+
+**The one ingest.** "No `ingest`" reopens for exactly one path, the inbox
+(`Store.ingestInbox`). It is an ingest keyed on pane, not an event log: the
+caller delivers events, the store decides what each means under its ownership
+rules, and an applied event is deleted. There is no replay, no retention and no
+history. Its read side, `harnessState`, is local-only like `owner_pid`: none of
+it reaches a snapshot.
 
 ## The data model
 
-Four tables in `state.db`, all `STRICT`, `user_version = 9`. `agents` and
-`attention` are local truth; `peers` is a cache of other nodes; `alerted`
+Five tables in `state.db`, all `STRICT`, `user_version = 10`. `agents` and
+`attention` are local truth; `peers` is a cache of other nodes; `compat` holds
+the one-row "compatible since" stamp (see Versioning below); `alerted`
 remembers which attention events the `on-attention` hook has run for (see
 [Alerting](#alerting)).
 
@@ -315,6 +345,13 @@ CREATE TABLE agents (
   agent_name   TEXT, pi_session TEXT, workstream TEXT, role TEXT,
   cli          TEXT    NOT NULL,
   driver       TEXT    NOT NULL CHECK (driver IN ('human', 'orchestrated')),
+  -- runtime columns (model, effort, usage, pending, ...) elided
+  source       TEXT    NOT NULL DEFAULT 'pi' CHECK (source IN ('pi', 'inbox')),
+  harness      TEXT,                           -- claude, codex, cursor-agent, muse, pi
+  session_id   TEXT,                           -- the hook harness's session
+  run_count    INTEGER,                        -- prompts this session; null for pi
+  last_text    TEXT,                           -- last turn's text, at most 64 KB
+  confirmed    INTEGER NOT NULL DEFAULT 1,     -- 0: activity is mu's word (`idle?`)
   claimed_at   INTEGER NOT NULL,
   updated_at   INTEGER NOT NULL,
   UNIQUE (server_kind, server_value, pane)
@@ -391,6 +428,7 @@ three surfaces carried machinery for it:
 | attention `crashed` | `reconcileLocal` | pane alive, owner pid gone, activity was `running` |
 | (row removed) | `releaseAgent` | `session_shutdown` |
 | (attention removed) | `acknowledgePane` | `murmur clear`, i.e. tmux focus, or `i` in the dash (over ssh for a remote pane) |
+| activity, `run_count`, `last_text`, attention `done`/`blocked`/`error` | the inbox drain | a hook harness's events; see [The inbox](#the-inbox) |
 
 Nothing writes `crashed` from inside an agent, for the obvious reason.
 
@@ -405,20 +443,27 @@ agent again, and the producer reports zero before it delivers the last one, so
 the settle after that run raises the real `done`. The channel name is a
 string on both sides, so neither package imports the other.
 
-**Versioning is one strategy, not two.** On open, if `user_version` is not 9,
-murmur salvages `SELECT name, target FROM peers` — the two fields a human typed
-— deletes the database and its `-wal`/`-shm` sidecars, recreates the schema, and
-re-inserts those peers with every observed column `NULL`. There is no
-`ALTER TABLE` anywhere and no additive path to forget to use. Any change to any
-table bumps the version and costs a rebuild, which is affordable precisely
-because nothing here is history: everything in the file is either current state
-or a cache.
+**Versioning is one strategy, not two.** On open, if `user_version` is older
+than 10, murmur salvages `SELECT name, target FROM peers` — the two fields a
+human typed — deletes the database and its `-wal`/`-shm` sidecars, recreates the
+schema, and re-inserts those peers with every observed column `NULL`. There is
+no `ALTER TABLE` in this build. Any change to any table bumps the version, which
+is affordable precisely because nothing here is history: everything in the file
+is either current state or a cache.
 
 The rebuild only runs upward. A `user_version` above this build's is refused
 (`StoreTooNewError`, exit 4 from the CLI; the extension goes silent) and the
-file is left alone. The pi extension and the CLI are separate installs that can
-run different versions, and rebuilding downward made the two wipe each other's
-rows on every open.
+file is left alone -- unless its `compat` stamp says this build can still use it.
+The pi extension and the CLI are separate installs that can run different
+versions, and rebuilding downward made the two wipe each other's rows on every
+open.
+
+**The "compatible since" stamp.** Schema 10 writes `compat.compatible_since =
+10` beside `user_version`. A later build that only adds nullable columns bumps
+`user_version` and keeps the stamp, so this build opens its store rather than
+refusing it: every INSERT here names its columns, and a column it does not know
+takes its default. Schema 10 is the one reset the stamp cannot spare, because
+older builds have no stamp; the CLI and the pi package upgrade together for it.
 
 **Identity is never minted by the store.** `openStore()` takes no arguments and
 does not read `identity.json`. `createIdentity` is called only by `murmur init`;
@@ -456,6 +501,94 @@ skew affects display order only).
 running agents already has Node and npm. Python would mean inventing a
 cross-machine install story for the ecosystem that handles it worst, on machines
 where the system interpreter is least yours to touch.
+
+## The inbox
+
+How claude, codex, cursor-agent and muse report state, given that none of
+them can load an extension into their own process. The event format, the
+placement rules and the drain live in `src/inbox-event.ts`,
+`src/process-chain.ts` and `src/inbox.ts`; each harness's hook row maps its own
+payload onto the vocabulary below.
+
+```text
+harness hook ─► murmur hook <harness> ─► one event file in the pane's inbox
+murmur status / pane / dash / export ─► drain the inbox into the store under its lock ─► state + pane options
+```
+
+**One event, one file.** A hook maps one payload to a canonical event, writes it
+under `inbox/tmp/` and links it to `inbox/<pane key>/<ns timestamp>-<pid>.json`.
+A reader never sees a partial event, whatever its size. The hook opens no
+database, takes no lock, calls no tmux and prints nothing, and stops writing for
+a pane past 10,000 waiting files (`doctor` reports it).
+
+**The process chain places an event, not the environment.** A harness may
+clear its hooks' environment, so a hook reads the process table once and walks its
+parents to the tmux server (field 2 of `$TMUX` when set, else the tmux argv).
+The pane root is the ancestor right below the server, and the pane key is a
+hash of the server pid and the root pid. Harnesses are matched by argv
+(`src/harnesses.ts`), and an adjacent run of one harness -- a launcher and the
+binary it starts -- is one harness. A second, separate harness before the server
+means a nested agent, and nothing is written; so does a chain that never reaches
+a tmux server. An anchor file mu wrote for an ancestor supplies the agent's
+identity.
+
+**Readers drain.** Under the store's write lock (`ingestInbox`, `IMMEDIATE`), a
+reader lists each pane's inbox in name order, applies each event and deletes the
+file. Before that, outside the lock, it maps each inbox's server pid to a tmux
+server and its root pid to a pane (`list-panes -F '#{pane_pid} #{pane_id}'`),
+and deletes the inbox of a dead server or a gone pane. An inbox whose server pid
+is alive but answers on no socket the drain can find waits for a later drain,
+until its oldest event is an hour old. A drained inbox's emptied directory is
+removed (non-recursively, so a hook that just linked an event keeps it; a hook
+that finds it gone recreates it): the key is a one-way hash, so an empty
+directory could never be checked against its server or pane again. After the
+apply, the drain publishes `@murmur_pane_state` and the other pane options for
+every pane it changed, through the same `publishAgentStates` every writer uses.
+
+**Ownership, in order:**
+
+1. A row with source `pi` ignores inbox events while its pi lives.
+2. A pane with no row, or a dead owner (a dead pi's included, as pi's own claim
+   replaces one), is claimed on the first event of any kind, so a hook installed
+   mid-session recovers -- except `session_end`, and never while a pi runs in
+   the pane's process tree. A pi below the event's own harness does not count:
+   that pi is the harness's nested agent, not the pane's owner.
+3. A different live owner is refused: the store's nested-agent defence, with the
+   pid the hook recorded.
+4. An event whose `session_id` differs from the claimed session is ignored,
+   unless it is `session_start`.
+
+**pi keeps its pane.** pi's claim replaces an `inbox` incumbent unless that
+incumbent's owner is alive AND is pi's ancestor. That covers a stray inbox claim
+during pi's `/new` release window or after a store reset, while a pi nested
+under a live claude is still refused. So is a pi whose process chain shows a
+live claude, codex, cursor-agent or muse between it and the tmux server, even
+with no row for that harness yet: until a reader drains, the harness's events
+wait in the inbox and the pane looks unclaimed. That check reads the process
+table only for a claim the pi makes about itself under `$TMUX`, and reads as
+"not nested" when it cannot tell, so a pi that is not nested claims as before.
+That replace KEEPS the incumbent's attention rows; only a dead `pi`
+incumbent's are cleared, as before.
+
+**The vocabulary.**
+
+| Event | Effect |
+| --- | --- |
+| `session_start` (source) | claim if unclaimed; `startup`/`clear`: new `session_id`, `run_count` 0, idle; `resume`: idle; `compact`: nothing |
+| `prompt_submitted` | running; `run_count += 1`; clear `done` |
+| `continued` | running (mu's stop hook blocked the stop) |
+| `permission_requested` | attention `blocked`, message is the tool |
+| `interrupted` | from the harness: idle; from mu: `idle?` until the next harness event |
+| `turn_stopped` | idle; `last_text` (64 KB); `done` through `settledState` |
+| `turn_failed` | idle; attention `error` |
+| `session_end` (reason) | `clear`: keep the claim; otherwise release, keeping attention |
+
+`blocked` clears on the next event of any other kind.
+
+`murmur pane <pane> --json` drains first and prints one pane's state with the
+harness-side fields (`run_count`, `session_id`, `last_text`), for mu's send gate
+and acknowledgement. None of those fields reach the snapshot: `toAgent` picks
+its fields explicitly, and a test pins the document byte for byte.
 
 ## The snapshot
 
@@ -1072,7 +1205,7 @@ identity (never mint one), open the store, and `claimAgent`. Then:
 | --- | --- | --- |
 | `claimed` | the pane had no owner | keep the `agent_id`, register handlers |
 | `retained` | same pid re-claiming | keep the same `agent_id` and activity |
-| `replaced` | previous owner is dead | fresh `agent_id`; the old occupant's attention is cleared |
+| `replaced` | previous owner is dead, or an `inbox` owner that is not this pi's ancestor | fresh `agent_id`; a dead pi occupant's attention is cleared, an inbox occupant's is kept |
 | `refused` | another live process owns the pane | register nothing, paint nothing, close the store |
 
 `retained` is what makes pi's `/reload` a no-op: pi re-runs the extension
@@ -1151,6 +1284,9 @@ assert what is **impossible** rather than what is implemented:
 | No `owner_pid` on any read path | Remote liveness inference creeping back in |
 | Freshness derivation | A dead peer showing last-known state as current |
 | Jump failure mutating nothing | A keypress deleting a healthy agent |
+| An inbox event nested under pi is dropped | A `claude -p` inside pi reporting as the pane's agent |
+| pi takes its pane back, keeping attention | A stray inbox claim silencing pi for good |
+| The snapshot is byte-identical with inbox rows present | A local column leaking onto the wire and forcing a fleet upgrade |
 
 Several of those are asserted structurally — over the whole returned object
 graph, not by reading the type — because a type says what the author intended
@@ -1204,7 +1340,8 @@ do not tell you the tool is usable.
 Each was considered and refused with reasons above:
 
 - a daemon or listening socket
-- history of any kind: an event log, a state timeline, an audit trail
+- history of any kind: an event log, a state timeline, an audit trail. The
+  inbox is not one: an applied event is deleted, and nothing replays it
 - interactive remote terminal rendering
 - orchestration or work placement
 - a generic put/del op-log
@@ -1213,8 +1350,9 @@ Each was considered and refused with reasons above:
 - configuration knobs beyond peers, jump commands, and dashboard view
   preferences
 - multiplexers other than tmux, channels other than ssh
-- an in-process integration for any harness other than pi. `murmur notify` is
-  the outside-in path for the rest, and it is not the same thing: a harness that
+- in-process integration beyond pi. pi integrates in-process; the other blessed
+  harnesses write events, and readers own the store. `murmur notify` stays the
+  attention-only path for any harness outside the blessed five: a harness that
   can only run a command when something happens can ask for attention, but
   cannot report activity or ownership.
 
@@ -1333,3 +1471,9 @@ each was cheaper to accept than to solve:
 - **A host demanding a hardware-token touch per connection is unhandled.**
   `BatchMode` cannot detect the touch before the token blinks. `hasWarmSocket`
   exists for it and is not wired up, because no peer in use needs it.
+- **An inbox event's `generation_id` is carried but not read yet.**
+  cursor-agent's last text can arrive after its `stop`, and its `error` stop
+  that follows an `aborted` for the same generation must be dropped. Both need
+  the drain to pair events by `generation_id`, which lands with the
+  cursor-agent hook row, together with the event shape that row writes for a
+  late text. Until then nothing in the store keeps a generation.

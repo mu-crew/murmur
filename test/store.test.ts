@@ -1040,6 +1040,9 @@ test("a store from a newer murmur is refused and left exactly as it was", () => 
   const database = new Database(dbPath());
   const newer = (database.pragma("user_version", { simple: true }) as number) + 1;
   database.pragma(`user_version = ${newer}`);
+  // A newer build that says this one can no longer use its store. One that only
+  // added columns keeps the stamp, and is opened: see the next test.
+  database.prepare("UPDATE compat SET compatible_since = ?").run(newer);
   database.close();
 
   expect(() => openStore()).toThrow(StoreTooNewError);
@@ -1074,6 +1077,59 @@ test("a store from a newer murmur is refused and left exactly as it was", () => 
   const untouched = new Database(dbPath(), { readonly: true });
   expect(untouched.pragma("user_version", { simple: true })).toBe(newer);
   untouched.close();
+});
+
+test("a newer store whose compat stamp still includes this build is opened, not refused or reset", () => {
+  // The "compatible since" stamp is for the NEXT release: a build that only adds
+  // nullable columns bumps user_version and keeps the stamp, and this build must
+  // keep working against its store instead of refusing it -- the CLI and the pi
+  // extension upgrade separately, so either can be the older one for a while.
+  const s = store();
+  s.addPeer("dev", "dev.example");
+  s.claimAgent({ location: location(), owner_pid: 100, meta: meta() });
+  s.close();
+  const database = new Database(dbPath());
+  const ours = database.pragma("user_version", { simple: true }) as number;
+  database.pragma(`user_version = ${ours + 1}`);
+  database.exec("ALTER TABLE agents ADD COLUMN later_column TEXT");
+  database.close();
+
+  const reopened = store();
+  // Kept: no reset discarded the agent or the peer.
+  expect(reopened.localPanes().map((pane) => pane.agent?.agent_name)).toEqual(["worker-1"]);
+  expect(reopened.peers().map((peer) => peer.name)).toEqual(["dev"]);
+  // And usable: a write that names its columns ignores the one it does not know.
+  expect(
+    reopened.claimAgent({ location: location("%2"), owner_pid: 101, meta: meta() }).outcome,
+  ).toBe("claimed");
+  reopened.close();
+  const after = new Database(dbPath(), { readonly: true });
+  expect(after.pragma("user_version", { simple: true })).toBe(ours + 1);
+  after.close();
+});
+
+test("a store from before the compat stamp is reset once, keeping peers", () => {
+  // Schema 9 had no stamp and no inbox columns. The one upgrade cost of the
+  // inbox release is this reset: agent and attention rows go, and the next
+  // events (or pi's next claim) restore them.
+  const s = store();
+  s.addPeer("dev", "dev.example");
+  s.claimAgent({ location: location(), owner_pid: 100, meta: meta() });
+  s.close();
+  const database = new Database(dbPath());
+  database.exec("DROP TABLE compat");
+  database.pragma("user_version = 9");
+  database.close();
+
+  const reopened = store();
+  expect(reopened.localPanes()).toEqual([]);
+  expect(reopened.peers().map((peer) => peer.name)).toEqual(["dev"]);
+  reopened.close();
+  const after = new Database(dbPath(), { readonly: true });
+  expect(after.prepare("SELECT compatible_since FROM compat").all()).toEqual([
+    { compatible_since: 10 },
+  ]);
+  after.close();
 });
 
 test("a corrupt database is rebuilt rather than crashing every command", () => {

@@ -19,6 +19,7 @@ const TMUX_RIG_TESTS = [
   "test/mux-targets.test.ts",
   "test/sidepanel-controller.test.ts",
   "test/sidepanel-tmux.test.ts",
+  "test/inbox-tmux.test.ts",
 ];
 
 const shared = {

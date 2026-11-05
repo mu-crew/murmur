@@ -5,6 +5,30 @@ so it says what changed for a user rather than listing every commit.
 
 ## Unreleased
 
+**Store reset, once: upgrade the CLI and the pi package together.** The store
+moves to schema 10 for the hook-harness inbox. The first open by the new build
+resets it, keeping peers; running pi agents reappear on their next event, or
+on `/new`. An older build refuses the new store and goes silent until it is
+upgraded. Schema 10 also stamps the store "compatible since 10", so a later
+release that only adds columns will not force another reset. No snapshot
+change: nodes still federate across versions.
+
+**The pane inbox.** Hook harnesses (claude, codex, cursor-agent, muse) get
+a per-pane inbox of event files that every reader -- `status`, the dash, the
+picker, `export` -- drains into the store, publishing the same tmux pane options
+pi's extension does. Events are placed by walking the hook's process chain to
+its tmux server, so a hook with a cleared environment still lands in the right
+pane, and an agent nested inside another agent (a `claude -p` run by pi) writes
+nothing. pi keeps its pane: its claim replaces a stray inbox claim unless that
+owner is pi's own live parent, and keeps that claim's attention. A pi started
+inside a live claude, codex, cursor-agent or muse is refused even before that
+harness's events are drained, and a crashed pi's row no longer hides the
+harness started in its pane next.
+
+**`murmur pane <pane> --json`.** One local pane's state after draining the
+inbox, with the hook harness's `run_count`, `session_id` and last turn text.
+`murmur doctor` reports a pane inbox that has hit its 10,000-event cap.
+
 ## 1.5.2
 
 No snapshot or store change; nodes can upgrade one at a time. Upgrade the CLI
