@@ -5,6 +5,17 @@ so it says what changed for a user rather than listing every commit.
 
 ## Unreleased
 
+## 1.5.2
+
+No snapshot or store change; nodes can upgrade one at a time. Upgrade the CLI
+first (`npm i -g @mu-crew/murmur@1.5.2`), then `pi update npm:@mu-crew/murmur`.
+
+**Fixed: pi built on Bun crashed on start with murmur installed.** A pi
+shipped as a single-file Bun executable loaded the extension's store, and Bun
+panicked on better-sqlite3's native addon (`NAPI FATAL ERROR`) before the first
+prompt, then hung until killed. Under Bun the store now opens `bun:sqlite`; under
+Node nothing changes.
+
 ## 1.5.1
 
 No snapshot or store change; nodes can upgrade one at a time. Upgrade the CLI
