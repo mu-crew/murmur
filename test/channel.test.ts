@@ -7,7 +7,7 @@ test("the warm-socket remedy opens no session of its own", () => {
   // `-N` is the one flag whose absence made the remedy CAUSE the symptom.
   //
   // A host may cap session channels per connection (`MaxSessions 1` on the
-  // devserver this was found on). `ssh -M <host>` opens an interactive shell, and
+  // dev host this was found on). `ssh -M <host>` opens an interactive shell, and
   // that shell OCCUPIES the single slot -- so while the reader sits at the
   // prompt the picker told them to open, every collect over the socket is
   // refused with `Session open refused by peer`. The notice then stays up,

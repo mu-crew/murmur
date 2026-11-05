@@ -26,7 +26,7 @@ const CONTROL_PATH = "~/.ssh/control/%r@%h:%p";
  * contention, and no flag here prevents it.
  *
  * `-N` is the flag whose absence made this remedy CAUSE the symptom. A host may
- * cap session channels per connection (`MaxSessions 1` on the devserver this was
+ * cap session channels per connection (`MaxSessions 1` on the dev host this was
  * found on), and `ssh -M <host>` opens an interactive shell that OCCUPIES the
  * single slot -- so while the reader sat at the prompt the picker told them to
  * open, every collect was refused with `Session open refused by peer` and the
