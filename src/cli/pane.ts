@@ -2,6 +2,7 @@ import type { Command } from "commander";
 import { asPaneId, type PaneId } from "../ids.js";
 import { type DrainOptions, drainInbox } from "../inbox.js";
 import { deriveTmuxServer, tmuxAgentState } from "../mux.js";
+import { drainRemote } from "../remote.js";
 import { openStore, type Store } from "../store.js";
 import type { SnapshotAttention, TmuxServer } from "../types.js";
 import { renderState } from "../view.js";
@@ -110,15 +111,42 @@ export function paneServer(
 export function registerPane(program: Command): void {
   program
     .command("pane")
-    .description("Show one local pane's state, after draining hook events")
-    .argument("<pane>", "tmux pane id, e.g. %12")
+    .description("Show one local pane's state after draining hook events, or a remote worker's")
+    .argument("[pane]", "tmux pane id, e.g. %12")
     .option("--json", "print JSON")
+    .option(
+      "--remote <key>",
+      "a remote worker's state by its key (`<origin host>/<origin pane key>`), read on its node",
+    )
     .option("-L, --socket-name <name>", "tmux server socket name")
     .option("-S, --socket-path <path>", "tmux server socket path")
     .action(
-      (raw: string, options: { json?: boolean; socketName?: string; socketPath?: string }) => {
-        if (!/^%\d+$/.test(raw)) {
-          process.stderr.write(`murmur: not a tmux pane id: ${raw}\n`);
+      (
+        raw: string | undefined,
+        options: { json?: boolean; remote?: string; socketName?: string; socketPath?: string },
+      ) => {
+        if (options.remote !== undefined) {
+          if (raw !== undefined) {
+            process.stderr.write("murmur: pane: give a pane or --remote, not both\n");
+            process.exitCode = 2;
+            return;
+          }
+          // No store: a remote worker's events never reach this node's.
+          const report = drainRemote(options.remote);
+          if (typeof report === "string") {
+            process.stderr.write(`murmur: ${report}\n`);
+            process.exitCode = 2;
+            return;
+          }
+          process.stdout.write(
+            options.json
+              ? `${JSON.stringify(report, null, 2)}\n`
+              : `${report.remote}\t${report.state ?? "-"}\t${report.agent?.harness ?? "-"}\n`,
+          );
+          return;
+        }
+        if (raw === undefined || !/^%\d+$/.test(raw)) {
+          process.stderr.write(`murmur: not a tmux pane id: ${raw ?? ""}\n`);
           process.exitCode = 2;
           return;
         }

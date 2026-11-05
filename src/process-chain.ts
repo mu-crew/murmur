@@ -107,13 +107,32 @@ export type Placement =
       harness: Harness;
       anchor: AgentAnchor | null;
     }
-  | { kind: "remote"; remote_key: string; owner_pid: number; harness: Harness; anchor: AgentAnchor }
+  | {
+      kind: "remote";
+      remote_key: string;
+      owner_pid: number;
+      harness: Harness;
+      /** Null when the key came from `$MU_REMOTE_KEY` rather than an anchor. */
+      anchor: AgentAnchor | null;
+    }
   | { kind: "drop"; reason: "no-process" | "no-harness" | "nested" | "no-server" };
 
 export type PlaceOptions = {
   /** `$TMUX`, when the hook has it: field 2 names the server outright. */
   tmuxEnv?: string | undefined;
   anchor?: AnchorLookup;
+  /**
+   * `$MU_REMOTE_KEY`, when the hook has it: the fallback for a remote worker
+   * whose chain holds no anchor. An anchor, remote or not, outranks it.
+   */
+  remoteKey?: string | undefined;
+  /**
+   * The walk starts at the harness itself rather than at a hook under it: an
+   * in-process reporter (pi's extension in its store-free mode) placing its
+   * own events. Its argv may name nothing (a renamed pi build), so the harness
+   * is given, not read.
+   */
+  selfHarness?: Harness;
 };
 
 /** Bound on the walk, against a cycle in a table read mid-fork. */
@@ -130,7 +149,8 @@ const MAX_DEPTH = 64;
  *   nested agent, and it is dropped. So is a chain with no harness in it.
  * - An anchor with a remote key routes the event to the remote area, never the
  *   inbox, whether or not the chain reaches a tmux server: that pane belongs to
- *   the origin node.
+ *   the origin node. With no anchor in the chain, `$MU_REMOTE_KEY` does the
+ *   same; an anchor without a key outranks the variable.
  * - A chain that never reaches a tmux server, with no remote key, is dropped.
  *   claude's detached children, reparented to init, fire `SessionEnd` with
  *   `$TMUX_PANE` still set, and must not land in any pane.
@@ -159,7 +179,8 @@ export function placeEvent(
     if (isServer) {
       if (!child) return { kind: "drop", reason: "no-process" };
       if (!owner) return { kind: "drop", reason: "no-harness" };
-      if (anchor?.remote_key) return remote(owner, anchor, anchor.remote_key);
+      const key = remoteKey(anchor, options);
+      if (key) return remote(owner, anchor, key);
       return {
         kind: "local",
         server_pid: current.pid,
@@ -169,8 +190,10 @@ export function placeEvent(
         anchor,
       };
     }
-    // The hook process itself is never the harness, whatever its argv says.
-    const harness = current.pid === self ? null : harnessFromArgv(current.args);
+    // The hook process itself is never the harness, whatever its argv says --
+    // unless the harness is what is placing its own event.
+    const harness =
+      current.pid === self ? (options.selfHarness ?? null) : harnessFromArgv(current.args);
     if (harness !== null) {
       if (owner === null) owner = { pid: current.pid, harness };
       else if (run !== harness) return { kind: "drop", reason: "nested" };
@@ -182,13 +205,20 @@ export function placeEvent(
     current = table.get(current.ppid);
   }
 
-  if (owner && anchor?.remote_key) return remote(owner, anchor, anchor.remote_key);
+  const key = remoteKey(anchor, options);
+  if (owner && key) return remote(owner, anchor, key);
   return { kind: "drop", reason: owner ? "no-server" : "no-harness" };
+}
+
+/** The remote key that routes an event away from the inbox: the anchor's, else the variable's. */
+function remoteKey(anchor: AgentAnchor | null, options: PlaceOptions): string | null {
+  if (anchor) return anchor.remote_key;
+  return options.remoteKey ? options.remoteKey : null;
 }
 
 function remote(
   owner: { pid: number; harness: Harness },
-  anchor: AgentAnchor,
+  anchor: AgentAnchor | null,
   key: string,
 ): Placement {
   return { kind: "remote", remote_key: key, owner_pid: owner.pid, harness: owner.harness, anchor };

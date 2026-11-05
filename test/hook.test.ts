@@ -925,6 +925,7 @@ test("a harness hook exits 0 and prints nothing, whatever it is given", () => {
     [["hook", "claude"], ""],
     [["hook", "codex"], JSON.stringify(title.payload)],
     [["hook", "cursor-agent"], "{}"],
+    [["hook", "muse"], JSON.stringify({ hook_event_name: "SubagentStop" })],
     [["hook", "claude", "extra", "args"], "[]"],
     [["hook", "claude", "--x"], "{}"],
     [["hook", "codex", "--verbose", "-q"], "{}"],

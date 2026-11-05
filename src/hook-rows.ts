@@ -156,10 +156,114 @@ const codex: HookRow = (payload) => {
   }
 };
 
+/**
+ * cursor-agent. Its own event names, camelCased, and one `stop` for every way
+ * a turn ends, told apart by `status`: `completed` is a stop, `aborted` an
+ * interrupt the user made (Escape), `error` a failure.
+ *
+ * Every payload names its turn with `generation_id`, carried on the event,
+ * because two of cursor-agent's rules pair events of one turn and only the
+ * store sees both:
+ *
+ * - The text arrives in its own event, `afterAgentResponse`, which can land
+ *   AFTER the turn's `stop` (hooks run concurrently). It is written as a
+ *   `turn_stopped` carrying the text; the store ends a generation's turn once,
+ *   on whichever comes first, and a later one only fills in the text.
+ * - An aborted turn is followed by an `error` stop for the same generation,
+ *   which is the abort's echo, not a failure: the store drops it.
+ *
+ * No permission hook exists, so a cursor-agent pane is never `blocked`. A
+ * session's end says `completed` whatever ended it; none keeps the claim.
+ *
+ * Never copied: `user_email`, nor anything of the environment's
+ * (`CURSOR_USER_EMAIL`, `CURSOR_ASKPASS_SECRET`). Like every row, this one
+ * reads only the fields it maps.
+ */
+const cursorAgent: HookRow = (payload) => {
+  const generation = { generation_id: text(payload.generation_id) };
+  switch (payload.hook_event_name) {
+    case "sessionStart":
+      return mapping("session_start", payload, generation);
+    case "beforeSubmitPrompt":
+      return mapping("prompt_submitted", payload, generation);
+    case "afterAgentResponse": {
+      const said = text(payload.text);
+      return said === null
+        ? null
+        : mapping("turn_stopped", payload, { ...generation, text: capLastText(said) });
+    }
+    case "stop":
+      switch (payload.status) {
+        case "completed":
+          return mapping("turn_stopped", payload, generation);
+        case "aborted":
+          return mapping("interrupted", payload, generation);
+        case "error":
+          return mapping("turn_failed", payload, {
+            ...generation,
+            message: text(payload.error_message) ?? text(payload.error) ?? "error",
+          });
+        default:
+          return null;
+      }
+    case "sessionEnd":
+      return mapping("session_end", payload, { ...generation, reason: text(payload.reason) });
+    default:
+      return null;
+  }
+};
+
+/**
+ * Muse Code. Claude Code's event names and payload fields, so claude's
+ * mappings, from either of its two hook routes: a Claude-format plugin, or
+ * Muse-format entries under `hooks` in its settings, the only route that
+ * delivers `Interrupt` (with `turn_id`, like codex's).
+ *
+ * Its hooks run with a cleared environment (no `$TMUX`, none of mu's variables), which is
+ * why placement walks the process chain and identity reads mu's anchor.
+ *
+ * `transcript_path` is null on every Muse payload, so codex's title-session
+ * rule must not apply here. `SubagentStop` is a subagent's turn (Muse fires one
+ * for its built-in reminder subagents after most turns), not the pane's.
+ * `StopFailure` is mapped in claude's shape, unrecorded for Muse.
+ *
+ * `Interrupt` must be declared async, so it can land after the `Stop` of the
+ * turn it names, even after the next prompt (Muse sent one after a `Stop` on
+ * quitting). `turn_id` is carried as the generation on `Stop` and `Interrupt`,
+ * so the store ignores an interrupt of a turn that already stopped instead of
+ * idling the turn running now. A `Stop` that a Stop hook's block continued
+ * names the same turn again, and only refreshes its text. `StopFailure` carries
+ * none: cursor-agent's rule that an interrupt after a failure is the failure's
+ * echo must not clear a Muse error.
+ */
+const muse: HookRow = (payload) => {
+  const generation = { generation_id: text(payload.turn_id) };
+  switch (payload.hook_event_name) {
+    case "SessionStart":
+      return mapping("session_start", payload, { source: text(payload.source) });
+    case "UserPromptSubmit":
+      return mapping("prompt_submitted", payload, generation);
+    case "PermissionRequest":
+      return mapping("permission_requested", payload, { message: permissionMessage(payload) });
+    case "Stop":
+      return { ...stopped(payload), ...generation };
+    case "StopFailure":
+      return mapping("turn_failed", payload, { message: failureMessage(payload) });
+    case "Interrupt":
+      return mapping("interrupted", payload, generation);
+    case "SessionEnd":
+      return mapping("session_end", payload, { reason: text(payload.reason) });
+    default:
+      return null;
+  }
+};
+
 /** The harnesses `murmur hook <harness>` has a row for. */
 export const HOOK_ROWS: Readonly<Partial<Record<Harness, HookRow>>> = Object.freeze({
   claude,
   codex,
+  "cursor-agent": cursorAgent,
+  muse,
 });
 
 export function hasHookRow(name: string): name is Harness {

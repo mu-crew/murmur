@@ -1,22 +1,10 @@
 import { execFileSync } from "node:child_process";
-import { createHash } from "node:crypto";
-import {
-  linkSync,
-  mkdirSync,
-  readdirSync,
-  readFileSync,
-  renameSync,
-  rmdirSync,
-  rmSync,
-  statSync,
-  unlinkSync,
-  writeFileSync,
-} from "node:fs";
+import { readdirSync, readFileSync, rmdirSync, rmSync, statSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { publishAgentStates } from "./agent-state.js";
-import { ensureDir } from "./dirs.js";
 import { asPaneId, asSessionId, asWindowId } from "./ids.js";
 import { type InboxEvent, parseInboxEvent } from "./inbox-event.js";
+import { inboxDir } from "./inbox-file.js";
 import {
   chosenWindowName,
   conventionalTmuxDirectory,
@@ -26,10 +14,12 @@ import {
   tmux,
   tmuxArgs,
 } from "./mux.js";
-import { stateDir } from "./paths.js";
 import { type ProcessTable, readProcessTable, treeRuns } from "./process-chain.js";
 import type { Store } from "./store.js";
 import type { InboxDelivery, IngestSummary, LiveCheck, Location, TmuxServer } from "./types.js";
+
+// The write side lives in its own module, so a writer loads none of the drain.
+export { INBOX_PANE_CAP, inboxDir, inboxKey, writeInboxEvent } from "./inbox-file.js";
 
 /**
  * The pane inbox: hook events as files, drained into the store by readers.
@@ -45,122 +35,6 @@ import type { InboxDelivery, IngestSummary, LiveCheck, Location, TmuxServer } fr
  * own tmux servers, because the hook placed the event by walking its own
  * process chain to one of them.
  */
-
-/** Past this many waiting files a pane's hook stops writing. `doctor` reports it. */
-export const INBOX_PANE_CAP = 10_000;
-
-export function inboxDir(): string {
-  return join(stateDir(), "inbox");
-}
-
-/**
- * The directory name for one pane: a hash of the tmux server pid and the pane
- * root pid. Both are what the hook can see; the drain maps them to a pane.
- */
-export function inboxKey(serverPid: number, rootPid: number): string {
-  return createHash("sha256").update(`${serverPid}:${rootPid}`).digest("hex").slice(0, 32);
-}
-
-/** Wall-clock nanoseconds, zero-padded so name order is time order. */
-function nanoseconds(): bigint {
-  return BigInt(Math.round((performance.timeOrigin + performance.now()) * 1e6));
-}
-
-function eventName(ns: bigint, pid: number): string {
-  return `${ns.toString().padStart(20, "0")}-${String(pid).padStart(10, "0")}.json`;
-}
-
-/**
- * Write one event into its pane's inbox. Never throws, prints nothing, and
- * answers whether the event landed.
- *
- * Written whole under `tmp/`, then LINKED into place: `link` is atomic like
- * `rename`, and unlike it refuses to replace a file, so two events with one name
- * (the same pid in the same nanosecond) cannot overwrite each other -- the
- * second steps its timestamp and tries again.
- */
-export function writeInboxEvent(
-  event: InboxEvent,
-  dir = inboxDir(),
-  cap = INBOX_PANE_CAP,
-): boolean {
-  let temporary: string | null = null;
-  try {
-    const paneDir = join(dir, inboxKey(event.server_pid, event.root_pid));
-    const tmp = join(dir, "tmp");
-    ensureDir(tmp);
-    makeDir(paneDir);
-    let waiting = 0;
-    try {
-      waiting = readdirSync(paneDir).length;
-    } catch {
-      waiting = 0;
-    }
-    if (waiting >= cap) return false;
-    let ns = nanoseconds();
-    const written = join(
-      tmp,
-      `${eventName(ns, process.pid)}.${Math.random().toString(36).slice(2)}`,
-    );
-    temporary = written;
-    writeFileSync(written, JSON.stringify(event), { flag: "wx" });
-    for (let attempt = 0; attempt < 16; attempt += 1) {
-      const target = join(paneDir, eventName(ns, process.pid));
-      try {
-        linkSync(written, target);
-        return true;
-      } catch (error) {
-        const code = (error as NodeJS.ErrnoException).code;
-        if (code === "EEXIST") {
-          ns += 1n;
-          continue;
-        }
-        if (!directoryGone(code)) {
-          // A filesystem without hard links: rename is still atomic.
-          try {
-            renameSync(written, target);
-            temporary = null;
-            return true;
-          } catch (renameError) {
-            if (!directoryGone((renameError as NodeJS.ErrnoException).code)) throw renameError;
-          }
-        }
-        // A drain removed the pane's directory since the mkdir: it emptied it,
-        // or its server died. Recreated, so the event is not lost to a race.
-        makeDir(paneDir);
-      }
-    }
-    return false;
-  } catch {
-    return false;
-  } finally {
-    if (temporary !== null) {
-      try {
-        unlinkSync(temporary);
-      } catch {
-        // Gone already, or renamed into place.
-      }
-    }
-  }
-}
-
-/**
- * Whether a link or rename failed because the target directory was removed
- * under it: ENOENT, or EINVAL, which macOS returns for a directory unlinked
- * between the lookup and the link.
- */
-function directoryGone(code: string | undefined): boolean {
-  return code === "ENOENT" || code === "EINVAL";
-}
-
-/** `mkdir` that treats "already there" as success, under a parent that exists. */
-function makeDir(path: string): void {
-  try {
-    mkdirSync(path);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-  }
-}
 
 /** One pane of a tmux server, keyed by its root process. */
 export type InboxPane = { location: Location; focused: boolean };
@@ -489,7 +363,10 @@ export function drainInbox(store: Store, options: DrainOptions = {}): DrainSumma
               location: pane.location,
               focused: pane.focused,
               event,
-              piRuns: () => host.piRunsUnder(root_pid, event?.owner_pid ?? 0),
+              // pi's own store-free mode writes events as harness `pi`: that
+              // pi is the pane's one writer, never a pi to stand aside for.
+              piRuns: () =>
+                event?.harness === "pi" ? false : host.piRunsUnder(root_pid, event?.owner_pid ?? 0),
               consume: () => unlinkSync(path),
             };
           }),

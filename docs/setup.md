@@ -107,12 +107,13 @@ and visibility settings.
 
 ## Harnesses other than pi
 
-pi reports in-process through the extension. Claude Code and Codex report
-through `murmur hook`, which gives them ownership of their pane, `running` and
-`idle`, `blocked`, and the last turn's text. The rest — opencode, the Cursor
-CLI, and Codex set up the older way — use `murmur notify`.
+pi reports in-process through the extension. Claude Code, Codex, the Cursor
+CLI (`cursor-agent`) and Muse Code report through `murmur hook`, which gives
+them ownership of their pane, `running` and `idle`, `blocked`, and the last
+turn's text. The rest — opencode, and Codex or the Cursor CLI set up the older
+way — use `murmur notify`.
 
-### Claude Code and Codex: `murmur hook`
+### Claude Code, Codex, Cursor CLI and Muse Code: `murmur hook`
 
 Run `murmur hook claude` (or `murmur hook codex`) for each hooked event. The
 payload arrives on stdin and names its own event, so one command serves them
@@ -138,6 +139,50 @@ for `SessionStart`, `UserPromptSubmit`, `PermissionRequest`, `Stop`,
 once. Drop the `notify` line from `~/.codex/config.toml` when you add these,
 or a finished turn is reported twice.
 
+The Cursor CLI, in `~/.cursor/hooks.json` (or a project's `.cursor/hooks.json`),
+with `murmur hook cursor-agent`:
+
+```json
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [{ "command": "murmur hook cursor-agent" }],
+    "beforeSubmitPrompt": [{ "command": "murmur hook cursor-agent" }],
+    "afterAgentResponse": [{ "command": "murmur hook cursor-agent" }],
+    "stop": [{ "command": "murmur hook cursor-agent" }],
+    "sessionEnd": [{ "command": "murmur hook cursor-agent" }]
+  }
+}
+```
+
+`afterAgentResponse` carries the turn's text and may land after `stop`; murmur
+pairs the two by the turn's `generation_id`. An Escape reads `idle`, and the
+`error` stop cursor-agent sends after it is dropped. The Cursor CLI has no
+permission hook, so its pane never reads `blocked`. Replace the
+`murmur notify --source cursor` entry below when you add these.
+
+Muse Code, under the `hooks` key of `~/.config/muse/settings.json` (or a
+project's `.muse/hooks.json`), in Claude Code's shape with
+`murmur hook muse`, for `SessionStart`, `UserPromptSubmit`,
+`PermissionRequest`, `Stop`, `StopFailure`, `Interrupt` and `SessionEnd`.
+`Interrupt` must be declared asynchronous, and only this settings route
+delivers it; a Claude-format plugin cannot subscribe to it:
+
+```json
+{
+  "hooks": {
+    "Interrupt": [
+      { "hooks": [{ "type": "command", "command": "murmur hook muse", "async": true }] }
+    ]
+  }
+}
+```
+
+Muse runs its hooks with a cleared environment (no `$TMUX`, none of mu's
+variables), which murmur does not need: it places the event by walking the
+hook's process chain to the tmux server, and names a mu worker from mu's
+anchor file.
+
 Do not hook `PreToolUse` or `PostToolUse`: they fire on every tool call and
 carry no state murmur uses. The hook prints nothing and always exits 0, so a
 murmur problem never blocks a turn. The agent must run in a tmux pane; a hook
@@ -145,6 +190,18 @@ whose process chain does not reach a tmux server writes nothing. Events wait in
 a per-pane inbox until a reader (`murmur status`, the dash, `murmur pane`)
 applies them. An agent counts as crew when mu started it (its anchor file), or
 when the hook sees `MU_MANAGED_AGENT=1` or `MU_AGENT_NAME`.
+
+A worker mu starts on a remote host for a pane on this one carries a remote
+key (in its anchor, or `MU_REMOTE_KEY`). Its hooks write to that host's remote
+area instead of its inbox, so it never appears in the host's own `murmur
+status`; mu reads it with `murmur pane --remote <key> --json` on that host.
+
+### pi on mu's `hooks` channel
+
+With `MU_PI_CHANNEL=hooks` in its environment, murmur's pi extension stops
+using the store: it writes inbox events like the hooks above and never claims
+the pane or loads a native module. Set it only for a pi build that cannot load
+murmur's store; mu then drives that pi like the harnesses above.
 
 ### `murmur notify`
 
@@ -204,6 +261,8 @@ as `session.idle`, which murmur records as `done`. `permission.asked` is not in
 murmur's table, so it becomes `blocked`.
 
 ### Cursor CLI
+
+The attention-only form; `murmur hook cursor-agent` above supersedes it.
 
 ```json
 {
