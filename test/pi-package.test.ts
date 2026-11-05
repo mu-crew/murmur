@@ -71,7 +71,61 @@ describe("package manifest", () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  // pi also ships as a single-file Bun build, and Bun panics on better-sqlite3's
+  // native addon instead of throwing. This runs the built store under Bun: open,
+  // claim, write, reopen, and the corrupt-file reset. MURMUR_TEST_BUN names a Bun
+  // binary; BUN_BE_BUN lets a Bun-compiled app (such as such a pi build) act as one.
+  const bun = process.env.MURMUR_TEST_BUN ?? onPath("bun");
+  test.skipIf(bun === null)("the store the extension loads works under Bun", () => {
+    const dir = mkdtempSync(join(tmpdir(), "murmur-bun-"));
+    const script = join(dir, "probe.mjs");
+    writeFileSync(
+      script,
+      `const m = await import(${JSON.stringify(builtArtifact("extension", "store.js"))});
+       const location = { server: { kind: "default" }, session: "$0", window: "@0", pane: "%1",
+         session_name: "work", window_name: "w" };
+       const meta = { agent_name: "worker-1", pi_session: null, workstream: "ws", role: null,
+         cli: "pi", driver: "orchestrated" };
+       let s = m.openStore();
+       const claim = s.claimAgent({ location, owner_pid: process.pid, meta });
+       const refused = s.claimAgent({ location, owner_pid: 1, meta }).outcome;
+       const moved = s.setActivity({ agent_id: claim.agent_id, owner_pid: process.pid,
+         activity: "running", location });
+       s.addPeer("devbox", "devbox");
+       s.close();
+       s = m.openStore();
+       const panes = s.localPanes().length;
+       const peers = s.peers().map((p) => p.name).join(",");
+       s.close();
+       console.log(JSON.stringify({ claimed: claim.outcome, refused, moved, panes, peers }));`,
+    );
+    const run = () =>
+      execFileSync(bun as string, [script], {
+        encoding: "utf8",
+        env: { ...process.env, MURMUR_STATE_DIR: dir, BUN_BE_BUN: "1" },
+      });
+    try {
+      expect(JSON.parse(run())).toEqual({
+        claimed: "claimed",
+        refused: "refused",
+        moved: true,
+        panes: 1,
+        peers: "devbox",
+      });
+      // An unreadable state.db is reset, not fatal, on Bun as on Node.
+      writeFileSync(join(dir, "state.db"), "not a database");
+      expect(JSON.parse(run()).claimed).toBe("claimed");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
+
+function onPath(name: string): string | null {
+  const found = spawnSync("sh", ["-c", `command -v ${name}`], { encoding: "utf8" });
+  return found.status === 0 ? found.stdout.trim() : null;
+}
 
 describe("murmur pi migrate", () => {
   let home: string;
