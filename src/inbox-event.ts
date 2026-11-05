@@ -139,7 +139,8 @@ export function parseInboxEvent(raw: string): InboxEvent | null {
   };
 }
 
-function parseAgent(value: unknown): InboxAgent | null {
+/** An event's `agent`, validated, or null; absent reads as the human's own agent. */
+export function parseAgent(value: unknown): InboxAgent | null {
   if (value === undefined || value === null) {
     return { agent_name: null, workstream: null, role: null, cli: null, driver: "human" };
   }

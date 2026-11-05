@@ -74,6 +74,10 @@ const CLEARED = [
   "MU_AGENT_NAME",
   "MU_WORKSTREAM",
   "MU_ROLE",
+  // Who a hook harness's event names, when no anchor does (src/hook.ts).
+  "MU_AGENT_CLI",
+  // Set in every Claude Code shell, so a suite run from one would inherit it.
+  "CLAUDE_PID",
   "TMUX",
   "TMUX_PANE",
   "TMUX_TMPDIR",

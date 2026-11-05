@@ -585,6 +585,65 @@ incumbent's are cleared, as before.
 
 `blocked` clears on the next event of any other kind.
 
+**The hook rows.** `murmur hook <harness>` is the command a harness's hook
+runs, once per hooked event, with the payload on stdin. Each harness's row
+(`src/hook-rows.ts`) maps a payload to one event and owns that harness's drop
+rules; the process chain then places it (`src/hook.ts`). The command opens no
+store, takes no lock, calls no tmux, prints nothing and exits 0, whatever
+happens: claude reads exit 2 from a Stop hook as "block the stop".
+
+| Event | claude | codex |
+| --- | --- | --- |
+| `session_start` | `SessionStart` (`source`) | `SessionStart` (`source`) |
+| `prompt_submitted` | `UserPromptSubmit` | `UserPromptSubmit` |
+| `permission_requested` | `PermissionRequest` (`tool_name`); `Notification` of type `permission_prompt` | `PermissionRequest` |
+| `turn_stopped` | `Stop` (`last_assistant_message`) | `Stop` (`last_assistant_message`) |
+| `turn_failed` | `StopFailure` (`error`, `error_details`) | none seen |
+| `interrupted` | none: mu writes it | `Interrupt` |
+| `session_end` | `SessionEnd` (`reason`) | `SessionEnd` (`reason`) |
+| dropped | `SubagentStop`, any other event; chains that never reach tmux | every payload with `transcript_path: null` (the hidden title-generation session) |
+
+The last assistant text comes from the payload, capped at 64 KB in the event
+file. Nothing reads a transcript: when the hook runs, the transcript can still
+end with the previous turn. Prompts, tool inputs and transcript paths never
+reach the event.
+
+The agent's identity comes from mu's anchor when an ancestor has one, and is
+then crew; otherwise from `MU_AGENT_NAME`, `MU_WORKSTREAM`, `MU_ROLE`,
+`MU_AGENT_CLI` and `driverFromEnv`. A hook configured for one harness that
+runs under another writes nothing. An agent whose anchor has a remote key
+writes nothing here: its events belong to the origin node's remote area.
+
+`murmur hook mu` is mu's way into the same inbox: one vocabulary event as JSON
+on stdin (`{"event": "continued"}`, plus any of `harness`, `session_id`,
+`source`, `reason`, `message`, `text` and `agent`), written with `by: "mu"`.
+Without
+`--pane` it is placed by the process chain like a harness hook, so `mu hook
+stop`, running as the harness's own Stop hook, lands its `continued` on that
+pane with that harness's owner pid. With `--pane %N` (and `-L`/`-S`), tmux
+names the pane's server and root, and the pane's harness is found from the
+root downward (`paneHarness`): the shallowest harness process, then down its
+launcher-plus-binary run to the member the pane's own hooks record as owner,
+so mu's event passes the same owner gate. A pane with no local harness (an ssh
+pane) takes the `harness` mu names, and as owner the shallowest process in the
+pane that is not a shell (`paneProgram`: the ssh, not the login shell under
+it), so the claim dies with the remote session and a harness started in the
+pane afterwards can take it. A pane holding only shells is refused: its shell
+would own the pane, and refuse every later harness, for as long as it lives.
+The agent's identity is the anchor's when the pane has one, else the `agent`
+object mu sends (`agent_name`, `workstream`, `role`, `cli`, and `driver`
+`human` or `orchestrated`), so a remote crew worker's relayed turn raises no
+`done`; the store fixes a row's identity when it claims the pane. `hook mu` is
+the one form that reports failure, on stderr with exit 1 (exit 2 for a bad
+`--pane` or an unknown option).
+
+A nested `codex exec` is not always behind a shell: a shell that `exec`s its
+only command leaves the nested codex directly below the outer one, and the
+chain reads as one codex run. Its events are placed and then refused by the
+store's owner gate while the outer codex owns the pane. Only an unclaimed pane
+can be claimed by one, until the outer codex's next event replaces the dead
+nested owner.
+
 `murmur pane <pane> --json` drains first and prints one pane's state with the
 harness-side fields (`run_count`, `session_id`, `last_text`), for mu's send gate
 and acknowledgement. None of those fields reach the snapshot: `toAgent` picks
