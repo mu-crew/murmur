@@ -3,13 +3,15 @@ import type { Command } from "commander";
 import { anchorLookup } from "../anchors.js";
 import {
   type HookContext,
-  harnessHookEvent,
+  type HookWrite,
   type MuHookTarget,
   muHookEvent,
+  muRemoteEvent,
   parseMuHookInput,
+  placeHarnessHook,
 } from "../hook.js";
 import { type HookPayload, hasHookRow } from "../hook-rows.js";
-import { writeInboxEvent } from "../inbox.js";
+import { remoteKeyName, writeInboxEvent, writeRemoteEvent } from "../inbox-file.js";
 import { tmuxArgs } from "../mux.js";
 import { readProcessTable } from "../process-chain.js";
 import type { TmuxServer } from "../types.js";
@@ -44,14 +46,19 @@ function context(): HookContext | null {
   return { table, self: process.pid, env: process.env, anchor: anchorLookup(), now: Date.now() };
 }
 
+/** One placed event, written to its pane's inbox or its remote area. Never throws. */
+export function writeHookEvent(write: HookWrite): boolean {
+  return write.area === "inbox" ? writeInboxEvent(write.event) : writeRemoteEvent(write.event);
+}
+
 /** One harness payload, mapped, placed and written. Never throws. */
 export function runHarnessHook(name: string, payload: HookPayload): boolean {
   try {
     if (!hasHookRow(name)) return false;
     const found = context();
     if (!found) return false;
-    const event = harnessHookEvent(name, payload, found);
-    return event !== null && writeInboxEvent(event);
+    const placed = placeHarnessHook(name, payload, found);
+    return placed !== null && writeHookEvent(placed);
   } catch {
     return false;
   }
@@ -85,10 +92,16 @@ function resolvePane(pane: string, server: TmuxServer): MuHookTarget | string {
 /** mu's event, placed and written, or the reason it was not. */
 export function runMuHook(
   payload: HookPayload,
-  options: { pane?: string; socketName?: string; socketPath?: string },
+  options: { pane?: string; remote?: string; socketName?: string; socketPath?: string },
 ): string | null {
   const input = parseMuHookInput(payload);
   if (typeof input === "string") return input;
+  if (options.remote !== undefined) {
+    // A remote worker's key, on the worker's node: no pane here to place it in.
+    return writeRemoteEvent(muRemoteEvent(input, options.remote, Date.now()))
+      ? null
+      : "the event could not be written to the remote area";
+  }
   let target: MuHookTarget | null = null;
   if (options.pane !== undefined) {
     const resolved = resolvePane(options.pane, paneServer(options));
@@ -105,10 +118,16 @@ export function runMuHook(
 export function registerHook(program: Command): void {
   program
     .command("hook")
-    .description("Record one hook event in the pane's inbox (claude, codex), or one of mu's (mu)")
-    .argument("<harness>", "claude or codex, as a harness hook; mu, for mu's own events")
+    .description(
+      "Record one hook event in the pane's inbox (claude, codex, cursor-agent, muse), or one of mu's (mu)",
+    )
+    .argument(
+      "<harness>",
+      "claude, codex, cursor-agent or muse, as a harness hook; mu, for mu's own",
+    )
     .argument("[ignored...]", "anything a harness appends")
     .option("--pane <pane>", "mu only: the pane the event is about (default: the pane it runs in)")
+    .option("--remote <key>", "mu only: a remote worker's key, on its node, instead of a pane")
     .option("-L, --socket-name <name>", "mu only: tmux server socket name, with --pane")
     .option("-S, --socket-path <path>", "mu only: tmux server socket path, with --pane")
     // A flag a harness appends must not make commander print and exit 1 before
@@ -118,7 +137,7 @@ export function registerHook(program: Command): void {
       async (
         name: string,
         ignored: string[],
-        options: { pane?: string; socketName?: string; socketPath?: string },
+        options: { pane?: string; remote?: string; socketName?: string; socketPath?: string },
       ) => {
         if (name === "mu") {
           const unknown = ignored.find((arg) => arg.startsWith("-"));
@@ -131,6 +150,20 @@ export function registerHook(program: Command): void {
             process.stderr.write(`murmur: not a tmux pane id: ${options.pane}\n`);
             process.exitCode = 2;
             return;
+          }
+          if (options.remote !== undefined) {
+            if (options.pane !== undefined) {
+              process.stderr.write("murmur: hook mu: --pane and --remote are exclusive\n");
+              process.exitCode = 2;
+              return;
+            }
+            if (remoteKeyName(options.remote) === null) {
+              process.stderr.write(
+                `murmur: not a usable remote key: ${JSON.stringify(options.remote)}\n`,
+              );
+              process.exitCode = 2;
+              return;
+            }
           }
           const failure = runMuHook(parsePayload(await readStdin(HOOK_STDIN_DEADLINE_MS)), options);
           if (failure !== null) {

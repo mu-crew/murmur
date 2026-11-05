@@ -8,10 +8,12 @@ import {
   type InboxEvent,
   type InboxEventName,
   parseAgent,
+  type RemoteEvent,
 } from "./inbox-event.js";
 import {
   type AgentAnchor,
   type AnchorLookup,
+  type Placement,
   type ProcessTable,
   paneHarness,
   paneProgram,
@@ -65,7 +67,7 @@ export function hookAgent(anchor: AgentAnchor | null, env: NodeJS.ProcessEnv): I
   };
 }
 
-type EventFields = Pick<
+export type EventFields = Pick<
   InboxEvent,
   "event" | "session_id" | "source" | "reason" | "message" | "text" | "generation_id"
 >;
@@ -85,9 +87,13 @@ function inboxEvent(
   return { v: INBOX_EVENT_VERSION, ...fields, ...where, at: now, by, agent };
 }
 
+/** Where one event goes: a pane's inbox on this node, or a remote worker's area. */
+export type HookWrite =
+  | { area: "inbox"; event: InboxEvent }
+  | { area: "remote"; event: RemoteEvent };
+
 /**
- * The event a harness's hook payload means, placed in its pane, or null to
- * write nothing.
+ * The event a harness's hook payload means, placed, or null to write nothing.
  *
  * In order: the harness's row maps the payload (and applies its drop rules);
  * the process chain places it. Nothing is written for a nested agent, a chain
@@ -95,35 +101,102 @@ function inboxEvent(
  * hook was configured for: a `murmur hook claude` line that runs under codex
  * is a misconfiguration, and codex's own row decides what its payloads mean.
  *
- * A remote-keyed agent's events belong to its origin node and go to a separate
- * area, which this build does not write yet: nothing is written for one.
+ * A remote-keyed agent's events (an anchor's key, else `$MU_REMOTE_KEY`)
+ * belong to its origin node: they go to the remote area, never the inbox,
+ * whether or not the chain reached a tmux server here.
  */
+export function placeHarnessHook(
+  harness: Harness,
+  payload: HookPayload,
+  context: HookContext,
+): HookWrite | null {
+  const mapped = mapHookPayload(harness, payload);
+  if (!mapped) return null;
+  const placement = placeEvent(context.table, context.self, placeOptions(context));
+  if (placement.kind === "drop" || placement.harness !== harness) return null;
+  return placedWrite(mapped, placement, "harness", context);
+}
+
+/** The local half of `placeHarnessHook`: the inbox event, or null for anything else. */
 export function harnessHookEvent(
   harness: Harness,
   payload: HookPayload,
   context: HookContext,
 ): InboxEvent | null {
-  const mapped = mapHookPayload(harness, payload);
-  if (!mapped) return null;
+  const placed = placeHarnessHook(harness, payload, context);
+  return placed?.area === "inbox" ? placed.event : null;
+}
+
+/**
+ * An event an in-process harness reports about itself -- pi's extension in its
+ * store-free mode (D15) -- placed by the same walk, starting at its own pid.
+ * Null when the walk drops it: outside tmux with no remote key, or nested in
+ * another harness.
+ */
+export function selfHookEvent(
+  harness: Harness,
+  fields: EventFields,
+  context: HookContext,
+): HookWrite | null {
   const placement = placeEvent(context.table, context.self, {
-    tmuxEnv: context.env.TMUX,
-    ...(context.anchor ? { anchor: context.anchor } : {}),
+    ...placeOptions(context),
+    selfHarness: harness,
   });
-  if (placement.kind !== "local" || placement.harness !== harness) return null;
-  return inboxEvent(
-    mapped,
-    {
-      harness,
-      server_pid: placement.server_pid,
-      root_pid: placement.root_pid,
-      owner_pid: placement.owner_pid,
-      tmux: context.env.TMUX ?? null,
-      tmux_pane: context.env.TMUX_PANE ?? null,
-    },
-    "harness",
-    hookAgent(placement.anchor, context.env),
-    context.now,
-  );
+  if (placement.kind === "drop" || placement.harness !== harness) return null;
+  return placedWrite(fields, placement, "harness", context);
+}
+
+function placeOptions(context: HookContext) {
+  return {
+    tmuxEnv: context.env.TMUX,
+    remoteKey: context.env.MU_REMOTE_KEY,
+    ...(context.anchor ? { anchor: context.anchor } : {}),
+  };
+}
+
+function placedWrite(
+  fields: EventFields,
+  placement: Exclude<Placement, { kind: "drop" }>,
+  by: InboxEvent["by"],
+  context: HookContext,
+): HookWrite {
+  const agent = hookAgent(placement.anchor, context.env);
+  const tmux = context.env.TMUX ?? null;
+  const tmux_pane = context.env.TMUX_PANE ?? null;
+  if (placement.kind === "remote") {
+    return {
+      area: "remote",
+      event: {
+        v: INBOX_EVENT_VERSION,
+        ...fields,
+        remote_key: placement.remote_key,
+        harness: placement.harness,
+        owner_pid: placement.owner_pid,
+        tmux,
+        tmux_pane,
+        at: context.now,
+        by,
+        agent,
+      },
+    };
+  }
+  return {
+    area: "inbox",
+    event: inboxEvent(
+      fields,
+      {
+        harness: placement.harness,
+        server_pid: placement.server_pid,
+        root_pid: placement.root_pid,
+        owner_pid: placement.owner_pid,
+        tmux,
+        tmux_pane,
+      },
+      by,
+      agent,
+      context.now,
+    ),
+  };
 }
 
 /**
@@ -223,10 +296,7 @@ export function muHookEvent(
 ): InboxEvent | string {
   const { harness: named, agent: given, ...fields } = input;
   if (!target) {
-    const placement = placeEvent(context.table, context.self, {
-      tmuxEnv: context.env.TMUX,
-      ...(context.anchor ? { anchor: context.anchor } : {}),
-    });
+    const placement = placeEvent(context.table, context.self, placeOptions(context));
     if (placement.kind === "remote") return "a remote agent's pane is on its origin node";
     if (placement.kind === "drop") return `not inside a harness's tmux pane (${placement.reason})`;
     if (named !== null && named !== placement.harness) {
@@ -275,6 +345,28 @@ export function muHookEvent(
     anchor || !given ? hookAgent(anchor, {}) : given,
     context.now,
   );
+}
+
+/**
+ * mu's event for a remote worker, by its key (`murmur hook mu --remote`): what
+ * mu writes on the worker's node through the host profile's `exec`, an
+ * interrupt it sent, say. It names no owner, so it applies to whoever holds
+ * the key, and only once some harness event has claimed it.
+ */
+export function muRemoteEvent(input: MuHookInput, key: string, now: number): RemoteEvent {
+  const { harness, agent, ...fields } = input;
+  return {
+    v: INBOX_EVENT_VERSION,
+    ...fields,
+    remote_key: key,
+    harness,
+    owner_pid: null,
+    tmux: null,
+    tmux_pane: null,
+    at: now,
+    by: "mu",
+    agent: agent ?? hookAgent(null, {}),
+  };
 }
 
 /** The first anchor from `pid` up to `root`, inclusive. */

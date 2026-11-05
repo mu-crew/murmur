@@ -82,27 +82,23 @@ function optionalText(value: unknown): string | null | undefined {
 }
 
 /**
- * One event, validated, or null.
- *
- * Total: a malformed file is dropped by the drain, never applied in part. Keys
- * this build does not know are ignored, so a newer hook's extra fields do not
- * cost the whole event.
+ * An event bound for the remote area rather than a pane's inbox: a worker whose
+ * pane is on another node (D11). It names its origin's key instead of a server
+ * and pane root. mu's own remote events (`murmur hook mu --remote`) name no
+ * owner and may name no harness: they apply to whoever holds the key.
  */
-export function parseInboxEvent(raw: string): InboxEvent | null {
-  let data: unknown;
-  try {
-    data = JSON.parse(raw);
-  } catch {
-    return null;
-  }
-  if (typeof data !== "object" || data === null || Array.isArray(data)) return null;
-  const record = data as Record<string, unknown>;
-  if (record.v !== INBOX_EVENT_VERSION) return null;
-  if (!isEventName(record.event) || !isHarness(record.harness)) return null;
+export type RemoteEvent = Omit<InboxEvent, "harness" | "server_pid" | "root_pid" | "owner_pid"> & {
+  remote_key: string;
+  harness: Harness | null;
+  owner_pid: number | null;
+};
+
+type EventBody = Omit<InboxEvent, "v" | "harness" | "server_pid" | "root_pid" | "owner_pid">;
+
+/** The fields every event shares, validated, or null. */
+function parseBody(record: Record<string, unknown>): EventBody | null {
+  if (!isEventName(record.event)) return null;
   if (typeof record.at !== "number" || !Number.isFinite(record.at) || record.at < 0) return null;
-  if (!isPid(record.server_pid) || !isPid(record.root_pid) || !isPid(record.owner_pid)) {
-    return null;
-  }
   const texts = {
     tmux: optionalText(record.tmux),
     tmux_pane: optionalText(record.tmux_pane),
@@ -119,13 +115,8 @@ export function parseInboxEvent(raw: string): InboxEvent | null {
   const agent = parseAgent(record.agent);
   if (!agent) return null;
   return {
-    v: INBOX_EVENT_VERSION,
     event: record.event,
-    harness: record.harness,
     at: Math.floor(record.at),
-    server_pid: record.server_pid,
-    root_pid: record.root_pid,
-    owner_pid: record.owner_pid,
     tmux: texts.tmux ?? null,
     tmux_pane: texts.tmux_pane ?? null,
     session_id: texts.session_id ?? null,
@@ -136,6 +127,63 @@ export function parseInboxEvent(raw: string): InboxEvent | null {
     generation_id: texts.generation_id ?? null,
     by,
     agent,
+  };
+}
+
+function parseRecord(raw: string): Record<string, unknown> | null {
+  let data: unknown;
+  try {
+    data = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (typeof data !== "object" || data === null || Array.isArray(data)) return null;
+  const record = data as Record<string, unknown>;
+  return record.v === INBOX_EVENT_VERSION ? record : null;
+}
+
+/**
+ * One event, validated, or null.
+ *
+ * Total: a malformed file is dropped by the drain, never applied in part. Keys
+ * this build does not know are ignored, so a newer hook's extra fields do not
+ * cost the whole event.
+ */
+export function parseInboxEvent(raw: string): InboxEvent | null {
+  const record = parseRecord(raw);
+  if (!record || !isHarness(record.harness)) return null;
+  if (!isPid(record.server_pid) || !isPid(record.root_pid) || !isPid(record.owner_pid)) {
+    return null;
+  }
+  const body = parseBody(record);
+  if (!body) return null;
+  return {
+    v: INBOX_EVENT_VERSION,
+    ...body,
+    harness: record.harness,
+    server_pid: record.server_pid,
+    root_pid: record.root_pid,
+    owner_pid: record.owner_pid,
+  };
+}
+
+/** One remote-area event, validated, or null. Total, like `parseInboxEvent`. */
+export function parseRemoteEvent(raw: string): RemoteEvent | null {
+  const record = parseRecord(raw);
+  if (!record) return null;
+  if (typeof record.remote_key !== "string" || record.remote_key === "") return null;
+  const harness = record.harness ?? null;
+  if (harness !== null && !isHarness(harness)) return null;
+  const owner = record.owner_pid ?? null;
+  if (owner !== null && !isPid(owner)) return null;
+  const body = parseBody(record);
+  if (!body) return null;
+  return {
+    v: INBOX_EVENT_VERSION,
+    ...body,
+    remote_key: record.remote_key,
+    harness,
+    owner_pid: owner,
   };
 }
 

@@ -20,6 +20,7 @@ import {
   turnError,
   usageFromMessage,
 } from "./decide.js";
+import { type InboxModeEvent, inboxMode, installInboxMode } from "./inbox-mode.js";
 import type { StoreModule } from "./store-api.js";
 
 // Declared, not imported: murmur must not depend on pi to build, and this is the
@@ -55,6 +56,10 @@ type ExtensionAPI = {
   // with no boundary attached. Its handler may return a replacement message, so
   // this one must return nothing.
   on(event: "message_end", handler: (event: { message?: RuntimeMessage }) => void): void;
+  // The store-free mode's view of the same events, plus `input` and
+  // `ui_prompt_start` (extension/inbox-mode.ts). Last, so every handler above
+  // still resolves to its own, narrower signature.
+  on(event: InboxModeEvent, handler: (event: unknown, ctx: unknown) => void): void;
   getSessionName?(): string | undefined;
   // pi's in-process bus between extensions.
   events: { on(channel: string, handler: (data: unknown) => void): unknown };
@@ -100,6 +105,12 @@ function safeSessionName(pi: ExtensionAPI): string | null {
 }
 
 export default function murmurPi(pi: ExtensionAPI): void {
+  // mu runs this pi on its `hooks` channel: report through the inbox and leave
+  // the store, the claim and tmux alone entirely (D15).
+  if (inboxMode(process.env)) {
+    installInboxMode(pi);
+    return;
+  }
   const observedStartLocation = tmux.currentWindow();
   if (!observedStartLocation) return;
   const startLocation: Location = {

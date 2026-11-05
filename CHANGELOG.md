@@ -35,6 +35,27 @@ stops and detached children are dropped. It prints nothing and always exits 0.
 events (`continued`, an unconfirmed `interrupted`, remote state) into a pane's
 inbox, for the pane it runs in or one named with `--pane`.
 
+**`murmur hook cursor-agent` and `murmur hook muse`.** The Cursor CLI and
+Muse Code report through the inbox too. cursor-agent's turn text, which can
+arrive after its `stop`, joins the turn it belongs to, and the `error` stop it
+sends after an Escape is dropped rather than reported as a failure; its user
+email never reaches murmur. Muse's hooks run with a cleared environment, so
+its events are placed by the process chain alone, and its async `Interrupt`
+for a turn that already stopped is dropped rather than idling the next turn.
+`docs/setup.md` has both
+hook configurations; the Cursor CLI's `murmur notify` entry is superseded.
+
+**Remote workers stay off the remote node's dashboard.** A worker mu starts on
+a host for a pane elsewhere (its anchor or `MU_REMOTE_KEY` names the origin)
+writes its hook events to that host's remote area, never its inbox or store.
+`murmur pane --remote <key> --json` reads it there, applying and printing the
+waiting events once, and `murmur hook mu --remote <key>` lets mu record its own
+event for such a worker.
+
+**pi's store-free mode.** With `MU_PI_CHANNEL=hooks`, murmur's pi extension
+writes inbox events like a hook harness instead of opening the store, for a pi
+build that cannot load it. Without the variable pi behaves exactly as before.
+
 **`murmur pane <pane> --json`.** One local pane's state after draining the
 inbox, with the hook harness's `run_count`, `session_id` and last turn text.
 `murmur doctor` reports a pane inbox that has hit its 10,000-event cap.

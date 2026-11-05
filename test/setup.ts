@@ -76,6 +76,12 @@ const CLEARED = [
   "MU_ROLE",
   // Who a hook harness's event names, when no anchor does (src/hook.ts).
   "MU_AGENT_CLI",
+  // A remote worker's key, when no anchor names one: routes its hooks' events
+  // to the remote area instead of the inbox (src/hook.ts).
+  "MU_REMOTE_KEY",
+  // pi on mu's `hooks` channel: the extension's store-free mode
+  // (extension/inbox-mode.ts). Leaked in, it would silence every store test.
+  "MU_PI_CHANNEL",
   // Set in every Claude Code shell, so a suite run from one would inherit it.
   "CLAUDE_PID",
   "TMUX",

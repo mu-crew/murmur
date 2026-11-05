@@ -6,13 +6,14 @@ import type BetterSqlite3 from "better-sqlite3";
 import { ensureDir } from "./dirs.js";
 import type { NodeIdentity } from "./identity.js";
 import { asPaneId, asSessionId, asWindowId } from "./ids.js";
-import { capLastText, type InboxEvent } from "./inbox-event.js";
+import type { InboxEvent } from "./inbox-event.js";
 import { currentJumpCommand, defaultJumpCommand } from "./jump-command.js";
 import { pidAlive } from "./mux.js";
 import { dbPath } from "./paths.js";
 import { ancestry, outerHarness, readProcessTable, tmuxServerPid } from "./process-chain.js";
 import { settledState } from "./settle.js";
 import { parseSnapshot, parseUsage } from "./snapshot.js";
+import { GENERATION_ENDS, type GenerationEnd, stepTurn } from "./turn.js";
 import type {
   ActivityUpdate,
   AgentClaim,
@@ -83,6 +84,9 @@ const COMPATIBLE_SINCE = 10;
  * which would otherwise end the literal and change the statement's meaning.
  */
 const EFFORT_SQL_LIST = EFFORTS.map((effort) => `'${effort.replaceAll("'", "''")}'`).join(", ");
+
+/** The generation-end vocabulary as a SQL value list, from the one tuple, like EFFORTS. */
+const GENERATION_END_SQL_LIST = GENERATION_ENDS.map((end) => `'${end}'`).join(", ");
 
 type Database = BetterSqlite3.Database;
 type OpenOptions = { fileMustExist?: boolean; readonly?: boolean };
@@ -224,6 +228,11 @@ const SCHEMA = `
     -- 0 while the activity is mu's word (an interrupt it sent, \`idle?\`) and
     -- no harness event has confirmed it.
     confirmed    INTEGER NOT NULL DEFAULT 1 CHECK (confirmed IN (0, 1)),
+    -- The last ended turn's generation and how it ended, for a harness that
+    -- names its turns (cursor-agent): its late text and its echo stops pair
+    -- with the turn they belong to. See src/turn.ts.
+    generation_id  TEXT,
+    generation_end TEXT CHECK (generation_end IS NULL OR generation_end IN (${GENERATION_END_SQL_LIST})),
     claimed_at   INTEGER NOT NULL,
     updated_at   INTEGER NOT NULL,
     UNIQUE (server_kind, server_value, pane)
@@ -402,6 +411,8 @@ type AgentDbRow = {
   run_count: number | null;
   last_text: string | null;
   confirmed: number;
+  generation_id: string | null;
+  generation_end: GenerationEnd | null;
   claimed_at: number;
   updated_at: number;
 };
@@ -943,7 +954,8 @@ export function openStore(): Store {
        SET activity = @activity, session = @session, window = @window,
            session_name = @session_name, window_name = @window_name,
            session_id = @session_id, run_count = @run_count, last_text = @last_text,
-           confirmed = @confirmed, updated_at = @updated_at
+           confirmed = @confirmed, generation_id = @generation_id,
+           generation_end = @generation_end, updated_at = @updated_at
      WHERE agent_id = @agent_id AND owner_pid = @owner_pid AND source = 'inbox'
   `);
   const updateActivity = database.prepare(`
@@ -1301,24 +1313,27 @@ export function openStore(): Store {
         return false;
       }
 
-      // `blocked` lasts until the next event: the dialog it reported is
-      // answered or gone once the harness says anything else.
-      if (event.event !== "permission_requested") deleteAttentionKind.run(...key, "blocked");
-
-      const next = {
-        agent_id: row.agent_id,
-        owner_pid: row.owner_pid,
-        activity: row.activity,
-        session: location.session,
-        window: location.window,
-        session_name: location.session_name,
-        window_name: location.window_name,
-        session_id: row.session_id ?? event.session_id,
-        run_count: row.run_count ?? 0,
-        last_text: row.last_text,
-        confirmed: 1,
-        updated_at: event.at,
-      };
+      // The vocabulary's own transitions are shared with the remote fold.
+      const step = stepTurn(
+        {
+          activity: row.activity === "running" ? "running" : "stopped",
+          session_id: row.session_id,
+          run_count: row.run_count ?? 0,
+          last_text: row.last_text,
+          confirmed: row.confirmed === 1,
+          generation_id: row.generation_id,
+          generation_end: row.generation_end,
+        },
+        event,
+      );
+      if (step.kind === "ignore") return false;
+      for (const kind of step.clear) deleteAttentionKind.run(...key, kind);
+      if (step.release) {
+        // Released like pi's `session_shutdown`: the row goes, its attention
+        // stays, so a `done` outlives the process that raised it.
+        deleteAgentByPane.run(...key);
+        return true;
+      }
       const attention = (kind: "blocked" | "done" | "error", message: string): void => {
         upsertAttention.run({
           server_kind: location.server.kind,
@@ -1335,57 +1350,29 @@ export function openStore(): Store {
           requested_at: event.at,
         });
       };
-
-      switch (event.event) {
-        case "session_start":
-          // `compact` is the same session carrying on: no state change at all.
-          if (event.source === "compact") return true;
-          next.activity = "stopped";
-          next.session_id = event.session_id ?? row.session_id;
-          if (event.source !== "resume") {
-            // startup, clear, or a source this build does not know: a new session.
-            next.run_count = 0;
-            next.last_text = null;
-          }
-          break;
-        case "prompt_submitted":
-          next.activity = "running";
-          next.run_count += 1;
-          deleteAttentionKind.run(...key, "done");
-          break;
-        case "continued":
-          next.activity = "running";
-          break;
-        case "permission_requested":
-          attention("blocked", event.message ?? "");
-          break;
-        case "interrupted":
-          next.activity = "stopped";
-          // From the harness, an interrupt is a fact; from mu it is a request
-          // the next harness event confirms or replaces (`idle?`).
-          next.confirmed = event.by === "mu" ? 0 : 1;
-          break;
-        case "turn_stopped": {
-          next.activity = "stopped";
-          if (event.text !== null) next.last_text = capLastText(event.text);
-          const settled = settledState(delivery.focused, row.driver === "orchestrated");
-          if (settled !== null) attention(settled, "");
-          break;
-        }
-        case "turn_failed":
-          // The turn is over; a failure is not something it is still doing.
-          next.activity = "stopped";
-          attention("error", event.message ?? "");
-          break;
-        case "session_end":
-          // `/clear` ends one session and starts the next in the same process.
-          if (event.reason === "clear") return true;
-          // Released like pi's `session_shutdown`: the row goes, its attention
-          // stays, so a `done` outlives the process that raised it.
-          deleteAgentByPane.run(...key);
-          return true;
+      if (step.raise?.kind === "settled") {
+        const settled = settledState(delivery.focused, row.driver === "orchestrated");
+        if (settled !== null) attention(settled, "");
+      } else if (step.raise) {
+        attention(step.raise.kind, step.raise.message);
       }
-      updateInboxAgent.run(next);
+      if (!step.next) return true;
+      updateInboxAgent.run({
+        agent_id: row.agent_id,
+        owner_pid: row.owner_pid,
+        activity: step.next.activity,
+        session: location.session,
+        window: location.window,
+        session_name: location.session_name,
+        window_name: location.window_name,
+        session_id: step.next.session_id,
+        run_count: step.next.run_count,
+        last_text: step.next.last_text,
+        confirmed: step.next.confirmed ? 1 : 0,
+        generation_id: step.next.generation_id,
+        generation_end: step.next.generation_end,
+        updated_at: event.at,
+      });
       return true;
     },
   );

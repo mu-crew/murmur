@@ -352,6 +352,8 @@ CREATE TABLE agents (
   run_count    INTEGER,                        -- prompts this session; null for pi
   last_text    TEXT,                           -- last turn's text, at most 64 KB
   confirmed    INTEGER NOT NULL DEFAULT 1,     -- 0: activity is mu's word (`idle?`)
+  generation_id  TEXT,                         -- last ended turn's generation (cursor-agent, muse)
+  generation_end TEXT,                         -- how it ended: stopped, interrupted, failed
   claimed_at   INTEGER NOT NULL,
   updated_at   INTEGER NOT NULL,
   UNIQUE (server_kind, server_value, pane)
@@ -583,7 +585,26 @@ incumbent's are cleared, as before.
 | `turn_failed` | idle; attention `error` |
 | `session_end` (reason) | `clear`: keep the claim; otherwise release, keeping attention |
 
-`blocked` clears on the next event of any other kind.
+`blocked` clears on the next event of any other kind. The transitions are one
+pure function (`src/turn.ts`), shared by the drain and the remote area's fold,
+so a remote worker's state follows the same rules as a local pane's.
+
+**Generations.** cursor-agent names each turn with a `generation_id` and
+reports a turn's end in up to three events that run concurrently: its text
+(`afterAgentResponse`), its `stop`, and, after an abort, an `error` stop for
+the same generation. The row keeps the last ended turn's generation and how it
+ended. A turn ends once, on whichever of its text or its stop is applied
+first; a later `turn_stopped` for the same generation only fills in the text,
+and one without text changes nothing. A named turn's stop with no text leaves
+`last_text` null rather than the previous turn's, until its text arrives. A
+`turn_failed` for a generation that ended `interrupted` is dropped, and an
+`interrupted` applied after its own `turn_failed` clears that `error`. Muse
+names its turns too (`turn_id`, carried on `UserPromptSubmit`, `Stop` and
+`Interrupt`): its `Interrupt` hook is async and can land after its turn's
+`Stop`, even during the next turn, so an `interrupted` for a generation that
+ended `stopped` or `interrupted` is dropped, and a second `Stop` for one turn
+(a Stop hook's block continued it) only refreshes the text. Events without a
+generation (every other harness, and mu's) never touch these columns.
 
 **The hook rows.** `murmur hook <harness>` is the command a harness's hook
 runs, once per hooked event, with the payload on stdin. Each harness's row
@@ -592,16 +613,23 @@ rules; the process chain then places it (`src/hook.ts`). The command opens no
 store, takes no lock, calls no tmux, prints nothing and exits 0, whatever
 happens: claude reads exit 2 from a Stop hook as "block the stop".
 
-| Event | claude | codex |
-| --- | --- | --- |
-| `session_start` | `SessionStart` (`source`) | `SessionStart` (`source`) |
-| `prompt_submitted` | `UserPromptSubmit` | `UserPromptSubmit` |
-| `permission_requested` | `PermissionRequest` (`tool_name`); `Notification` of type `permission_prompt` | `PermissionRequest` |
-| `turn_stopped` | `Stop` (`last_assistant_message`) | `Stop` (`last_assistant_message`) |
-| `turn_failed` | `StopFailure` (`error`, `error_details`) | none seen |
-| `interrupted` | none: mu writes it | `Interrupt` |
-| `session_end` | `SessionEnd` (`reason`) | `SessionEnd` (`reason`) |
-| dropped | `SubagentStop`, any other event; chains that never reach tmux | every payload with `transcript_path: null` (the hidden title-generation session) |
+| Event | claude | codex | cursor-agent | muse |
+| --- | --- | --- | --- | --- |
+| `session_start` | `SessionStart` (`source`) | `SessionStart` (`source`) | `sessionStart` | `SessionStart` (`source`) |
+| `prompt_submitted` | `UserPromptSubmit` | `UserPromptSubmit` | `beforeSubmitPrompt` | `UserPromptSubmit` |
+| `permission_requested` | `PermissionRequest` (`tool_name`); `Notification` of type `permission_prompt` | `PermissionRequest` | none: no permission hook | `PermissionRequest` (`tool_name`) |
+| `turn_stopped` | `Stop` (`last_assistant_message`) | `Stop` (`last_assistant_message`) | `afterAgentResponse` (`text`); `stop` with `status: completed` | `Stop` (`last_assistant_message`) |
+| `turn_failed` | `StopFailure` (`error`, `error_details`) | none seen | `stop` with `status: error`, unless it echoes an abort | `StopFailure`, in claude's shape (not recorded) |
+| `interrupted` | none: mu writes it | `Interrupt` | `stop` with `status: aborted` | `Interrupt`, from Muse-format settings hooks only |
+| `session_end` | `SessionEnd` (`reason`) | `SessionEnd` (`reason`) | `sessionEnd` (`reason`) | `SessionEnd` (`reason`) |
+| dropped | `SubagentStop`, any other event; chains that never reach tmux | every payload with `transcript_path: null` (the hidden title-generation session) | any other event or status | `SubagentStop` (its reminder subagents), any other event |
+
+Every cursor-agent event carries its `generation_id` (see Generations above).
+Its `user_email`, and `CURSOR_USER_EMAIL` and `CURSOR_ASKPASS_SECRET` in its
+hooks' environment, never reach an event: a row copies only the fields it maps.
+Muse's hooks run with a cleared environment, so a Muse event is placed by its
+chain alone and named by mu's anchor; its payloads all carry `transcript_path:
+null`, which is why codex's title-session rule is codex's alone.
 
 The last assistant text comes from the payload, capped at 64 KB in the event
 file. Nothing reads a transcript: when the hook runs, the transcript can still
@@ -612,7 +640,8 @@ The agent's identity comes from mu's anchor when an ancestor has one, and is
 then crew; otherwise from `MU_AGENT_NAME`, `MU_WORKSTREAM`, `MU_ROLE`,
 `MU_AGENT_CLI` and `driverFromEnv`. A hook configured for one harness that
 runs under another writes nothing. An agent whose anchor has a remote key
-writes nothing here: its events belong to the origin node's remote area.
+(or, with no anchor in its chain, whose hook sees `MU_REMOTE_KEY`) writes
+nothing here: its events go to the remote area below.
 
 `murmur hook mu` is mu's way into the same inbox: one vocabulary event as JSON
 on stdin (`{"event": "continued"}`, plus any of `harness`, `session_id`,
@@ -648,6 +677,45 @@ nested owner.
 harness-side fields (`run_count`, `session_id`, `last_text`), for mu's send gate
 and acknowledgement. None of those fields reach the snapshot: `toAgent` picks
 its fields explicitly, and a test pins the document byte for byte.
+
+**The remote area.** A worker mu starts on this node for a pane on another
+(D11) carries a remote key, `<origin host>/<origin pane key>`, in its anchor or
+`MU_REMOTE_KEY`. Its hooks write to `remote/<key>/` (the key percent-encoded,
+dots included, into one file name; `remote/.tmp/` for the writes), whether or
+not their chain reaches a tmux server here -- under plain ssh it ends at
+`sshd`. Nothing on this node reads that area but `murmur pane --remote <key>`:
+the drain, the store and the snapshot never see a remote worker, so the origin
+stays the one writer of its pane's row. That read takes the key's lock
+(`remote/<key>.lock`), applies the waiting events in name order to the key's
+state with the same transitions as the store and the store's ownership rules
+for a key (the first harness event claims it, a different live owner is
+refused, another session's events are ignored), replaces `remote/<key>.json`
+by rename after each, and deletes the files. It prints the state in
+`murmur pane`'s words, plus the events it applied this time, which mu relays
+to the origin's ssh pane through `murmur hook mu --pane`. A released key keeps
+its last turn, so mu can collect a worker's final text after it exits.
+`murmur hook mu --remote <key>` writes one of mu's events (an interrupt it
+sent) into the area; it names no owner, applies to whoever holds the key, and
+cannot claim one. A crew worker's settled turn raises no `done` there: the
+origin's drain decides, focus included, when mu relays it.
+
+**pi's store-free mode.** With `MU_PI_CHANNEL=hooks`, mu drives a pi pane
+through the `hooks` channel, and murmur's pi extension reports like a hook
+harness (`extension/inbox-mode.ts`): one inbox event per pi event, harness
+`pi`, placed by the same walk starting at pi's own pid. It is for a pi build
+that breaks the store or its native module, so it never imports the store,
+never claims, publishes nothing and asks tmux nothing; the drain does the rest.
+The pane has one writer, so the drain's "a pi runs here" check does not apply
+to `pi` events. The mapping: one `session_start` (`resume`) when the extension
+loads, so the pane is claimed at once as the in-process mode claims it, without
+resetting the turn that a `/reload` (which loads a fresh extension instance
+before its own `session_start`) keeps; `session_start` (`startup`, `clear` after
+`/new`,
+`resume` after `/reload`), `input` to `prompt_submitted`, `agent_start` to
+`continued`, `ui_prompt_start` to `permission_requested`, `agent_settled` to
+`turn_stopped` with the last assistant message's text (or `turn_failed` with
+its error), and `session_shutdown` to `session_end`, keeping the claim for all
+but a quit.
 
 ## The snapshot
 
@@ -1530,9 +1598,10 @@ each was cheaper to accept than to solve:
 - **A host demanding a hardware-token touch per connection is unhandled.**
   `BatchMode` cannot detect the touch before the token blinks. `hasWarmSocket`
   exists for it and is not wired up, because no peer in use needs it.
-- **An inbox event's `generation_id` is carried but not read yet.**
-  cursor-agent's last text can arrive after its `stop`, and its `error` stop
-  that follows an `aborted` for the same generation must be dropped. Both need
-  the drain to pair events by `generation_id`, which lands with the
-  cursor-agent hook row, together with the event shape that row writes for a
-  late text. Until then nothing in the store keeps a generation.
+- **A cursor-agent text from an older generation is a new turn's end.** The
+  row keeps only the last ended generation, so a text that arrives after a
+  LATER turn has also ended reads as a turn of its own. U0 saw a text trail its
+  stop by milliseconds, never by a whole turn.
+- **pi's store-free mode reports no pending delegates.** The inbox has no
+  word for them, so a settle with delegates out raises `done` for a human-
+  driven pi, where the in-process extension would wait.

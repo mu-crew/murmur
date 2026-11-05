@@ -68,7 +68,10 @@ export {
   type InboxEventName,
   LAST_TEXT_MAX_BYTES,
   parseInboxEvent,
+  parseRemoteEvent,
+  type RemoteEvent,
 } from "./inbox-event.js";
+export { remoteDir, remoteKeyName, writeRemoteEvent } from "./inbox-file.js";
 export {
   ATTACH_PLACEHOLDER,
   defaultJumpCommand,
