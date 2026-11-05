@@ -107,9 +107,49 @@ and visibility settings.
 
 ## Harnesses other than pi
 
-pi reports in-process through the extension. Codex, opencode, and the Cursor CLI
-have no such hook — they run a command when something happens — so they use
-`murmur notify`, which records an attention request for the pane it runs in.
+pi reports in-process through the extension. Claude Code and Codex report
+through `murmur hook`, which gives them ownership of their pane, `running` and
+`idle`, `blocked`, and the last turn's text. The rest — opencode, the Cursor
+CLI, and Codex set up the older way — use `murmur notify`.
+
+### Claude Code and Codex: `murmur hook`
+
+Run `murmur hook claude` (or `murmur hook codex`) for each hooked event. The
+payload arrives on stdin and names its own event, so one command serves them
+all. Claude Code, in `~/.claude/settings.json`:
+
+```json
+{
+  "hooks": {
+    "SessionStart": [{ "hooks": [{ "type": "command", "command": "murmur hook claude" }] }],
+    "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "murmur hook claude" }] }],
+    "PermissionRequest": [{ "hooks": [{ "type": "command", "command": "murmur hook claude" }] }],
+    "Notification": [{ "hooks": [{ "type": "command", "command": "murmur hook claude" }] }],
+    "Stop": [{ "hooks": [{ "type": "command", "command": "murmur hook claude" }] }],
+    "StopFailure": [{ "hooks": [{ "type": "command", "command": "murmur hook claude" }] }],
+    "SessionEnd": [{ "hooks": [{ "type": "command", "command": "murmur hook claude" }] }]
+  }
+}
+```
+
+Codex takes the same shape in `~/.codex/hooks.json`, with `murmur hook codex`,
+for `SessionStart`, `UserPromptSubmit`, `PermissionRequest`, `Stop`,
+`Interrupt` and `SessionEnd`. Codex asks you to trust new or changed hooks
+once. Drop the `notify` line from `~/.codex/config.toml` when you add these,
+or a finished turn is reported twice.
+
+Do not hook `PreToolUse` or `PostToolUse`: they fire on every tool call and
+carry no state murmur uses. The hook prints nothing and always exits 0, so a
+murmur problem never blocks a turn. The agent must run in a tmux pane; a hook
+whose process chain does not reach a tmux server writes nothing. Events wait in
+a per-pane inbox until a reader (`murmur status`, the dash, `murmur pane`)
+applies them. An agent counts as crew when mu started it (its anchor file), or
+when the hook sees `MU_MANAGED_AGENT=1` or `MU_AGENT_NAME`.
+
+### `murmur notify`
+
+Harnesses with no hook murmur maps run a command when something happens, and
+`murmur notify` records an attention request for the pane it runs in.
 
 This path is attention only: no ownership, no `running`/`idle`, no crash
 detection. Unrecognised events become `blocked`, so a new harness still puts a

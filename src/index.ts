@@ -29,6 +29,15 @@ export {
 export { glance } from "./glance.js";
 export { HARNESSES, type Harness, harnessFromArgv } from "./harnesses.js";
 export {
+  type HookContext,
+  harnessHookEvent,
+  type MuHookInput,
+  type MuHookTarget,
+  muHookEvent,
+  parseMuHookInput,
+} from "./hook.js";
+export { HOOK_ROWS, type HookMapping, type HookPayload, mapHookPayload } from "./hook-rows.js";
+export {
   createIdentity,
   loadIdentity,
   type NodeIdentity,
@@ -72,6 +81,8 @@ export { configDir, dbPath, stateDir } from "./paths.js";
 export {
   type Placement,
   type ProcessRow,
+  paneHarness,
+  paneProgram,
   placeEvent,
   readProcessTable,
 } from "./process-chain.js";

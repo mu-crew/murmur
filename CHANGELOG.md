@@ -25,6 +25,16 @@ inside a live claude, codex, cursor-agent or muse is refused even before that
 harness's events are drained, and a crashed pi's row no longer hides the
 harness started in its pane next.
 
+**`murmur hook claude` and `murmur hook codex`.** The hook command those
+harnesses run on each event: it maps the payload to one inbox event, so a
+Claude Code or Codex pane shows `running`, `idle`, `blocked` and `error`, owns
+its pane, and keeps its last turn's text (from the payload, never the
+transcript). codex's hidden title-generation session and claude's subagent
+stops and detached children are dropped. It prints nothing and always exits 0.
+`docs/setup.md` has the hook entries. `murmur hook mu` lets mu write its own
+events (`continued`, an unconfirmed `interrupted`, remote state) into a pane's
+inbox, for the pane it runs in or one named with `--pane`.
+
 **`murmur pane <pane> --json`.** One local pane's state after draining the
 inbox, with the hook harness's `run_count`, `session_id` and last turn text.
 `murmur doctor` reports a pane inbox that has hit its 10,000-event cap.

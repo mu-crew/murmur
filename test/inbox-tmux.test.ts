@@ -222,3 +222,75 @@ test("a dead server's inbox is deleted by the real host", () => {
     store.close();
   }
 });
+
+test("murmur hook claude and murmur hook mu, from real process chains, drive one pane", async () => {
+  // Recorded claude payloads, fed on stdin to the built CLI by a fake claude
+  // (launcher plus binary, as recorded), then mu's `continued` from inside the
+  // same chain, as `mu hook stop` sends it from claude's Stop hook.
+  const recorded = readFileSync(join(import.meta.dirname, "fixtures", "u0-claude.jsonl"), "utf8")
+    .trim()
+    .split("\n")
+    .slice(0, 3)
+    .map((line) => JSON.parse(line).payload);
+  const steps = [
+    ...recorded.map((payload) => ({ payload, args: [CLI, "hook", "claude"] })),
+    { payload: { event: "continued" }, args: [CLI, "hook", "mu"] },
+  ];
+  const script = join(work, "steps.json");
+  const done = join(work, "steps.done");
+  writeFileSync(script, JSON.stringify(steps));
+  writeFileSync(
+    join(work, "feed.mjs"),
+    `import { spawnSync } from "node:child_process";
+     import { readFileSync, writeFileSync } from "node:fs";
+     const [script, done] = process.argv.slice(2);
+     const codes = JSON.parse(readFileSync(script, "utf8")).map(({ payload, args }) =>
+       spawnSync(${JSON.stringify(process.execPath)}, args, { input: JSON.stringify(payload) }).status);
+     writeFileSync(done, JSON.stringify(codes));
+     setTimeout(() => {}, 600000);`,
+  );
+  const pane = rig(
+    "new-window",
+    "-d",
+    "-P",
+    "-F",
+    "#{pane_id}",
+    // A crew worker by mu's variables (no anchor): crew raises no `done`, so
+    // the pane shows what `continued` did.
+    `MURMUR_STATE_DIR=${process.env.MURMUR_STATE_DIR} MU_MANAGED_AGENT=1 MU_AGENT_NAME=worker-1 ${join(work, "claude")} ${join(work, "launcher.mjs")} ${join(work, "claude")} ${join(work, "feed.mjs")} ${script} ${done}; sleep 600`,
+  );
+  expect(await until(() => existsSync(done))).toBe(true);
+  expect(JSON.parse(readFileSync(done, "utf8"))).toEqual([0, 0, 0, 0]);
+
+  const report = (): Record<string, unknown> =>
+    JSON.parse(
+      execFileSync(process.execPath, [CLI, "pane", pane, "--json", "-S", SOCKET], {
+        encoding: "utf8",
+        env: process.env,
+      }),
+    );
+  // The Stop's text arrived; mu's `continued` then put the turn back to work,
+  // which only lands if it found the same pane and the same owner.
+  expect(report()).toMatchObject({
+    pane,
+    state: "working",
+    agent: {
+      source: "inbox",
+      harness: "claude",
+      agent_name: "worker-1",
+      driver: "orchestrated",
+      session_id: recorded[0].session_id,
+      run_count: 1,
+      last_text: "OK",
+    },
+  });
+  expect(paneOption(pane, "@murmur_pane_state")).toBe("working");
+
+  // mu's interrupt for the pane, named from outside it: the owner gate passes,
+  // and the pane reads `idle?` until the harness speaks.
+  execFileSync(process.execPath, [CLI, "hook", "mu", "--pane", pane, "-S", SOCKET], {
+    input: JSON.stringify({ event: "interrupted" }),
+    env: process.env,
+  });
+  expect(report()).toMatchObject({ state: "idle?", agent: { run_count: 1 } });
+});
