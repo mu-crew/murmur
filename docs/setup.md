@@ -8,9 +8,13 @@ overview: [README](../README.md). Hard ssh cases: [SSH.md](../SSH.md).
 On every node that runs agents:
 
 ```bash
-murmur init                      # this node's identity
+murmur init                      # this node's identity, and hook entries
 pi install npm:@mu-crew/murmur   # the agent-side extension, as a pi package
 ```
+
+`murmur init` also writes the `murmur hook` entries for each hook harness set
+up on the node (see [below](#claude-code-codex-cursor-cli-and-muse-code-murmur-hook)).
+Run it again after an upgrade; a second run changes nothing.
 
 pi loads the extension from the package's `pi` manifest. The CLI and the
 extension are two installs of the same package, so upgrade them together:
@@ -115,9 +119,40 @@ way — use `murmur notify`.
 
 ### Claude Code, Codex, Cursor CLI and Muse Code: `murmur hook`
 
-Run `murmur hook claude` (or `murmur hook codex`) for each hooked event. The
-payload arrives on stdin and names its own event, so one command serves them
-all. Claude Code, in `~/.claude/settings.json`:
+`murmur init` writes these entries for you:
+
+```bash
+murmur init                          # every harness whose config directory exists
+murmur init --hooks cursor-agent     # also one not set up yet (or: all)
+murmur init --no-hooks               # identity only
+```
+
+It writes `~/.claude/settings.json`, `~/.codex/hooks.json`,
+`~/.cursor/hooks.json` and the `hooks` key of `~/.config/muse/settings.json`,
+for each harness whose directory (`~/.claude`, `~/.codex`, `~/.cursor`,
+`~/.config/muse`) exists. Those files are shared with mu, museum, muzzle and
+your own hooks, so murmur touches only handlers whose command starts with
+`murmur`: it adds the missing ones, sets Muse's `Interrupt` to `async`, and
+removes its own stale ones (a duplicate, a `murmur` handler under a filtering
+matcher or on an event it does not hook, the Cursor CLI's older
+`murmur notify` entry). Everything else stays where it was. A file already
+right is not rewritten, a symlinked file keeps its link, and a file that is
+not valid JSON is reported and left alone. A command that runs murmur by
+absolute path is yours, not murmur's: replace it with `murmur` on `PATH`, or
+`init` adds a second one.
+
+`murmur doctor` checks the same entries: drift (a missing event, a stray or
+non-async handler, an unreadable file) is a problem, and a harness set up with
+no murmur entries is an observation. Both name `murmur init` as the fix.
+
+Once codex has these hooks, an older `notify` line in `~/.codex/config.toml`
+that runs murmur reports every finished turn a second time. murmur does not
+edit that file: `init` warns and `doctor` reports a problem until you remove
+the line.
+
+By hand, run `murmur hook claude` (or `murmur hook codex`) for each hooked
+event. The payload arrives on stdin and names its own event, so one command
+serves them all. Claude Code, in `~/.claude/settings.json`:
 
 ```json
 {
@@ -136,7 +171,7 @@ all. Claude Code, in `~/.claude/settings.json`:
 Codex takes the same shape in `~/.codex/hooks.json`, with `murmur hook codex`,
 for `SessionStart`, `UserPromptSubmit`, `PermissionRequest`, `Stop`,
 `Interrupt` and `SessionEnd`. Codex asks you to trust new or changed hooks
-once. Drop the `notify` line from `~/.codex/config.toml` when you add these,
+once, including the ones `murmur init` writes. Drop the `notify` line from `~/.codex/config.toml` when you add these,
 or a finished turn is reported twice.
 
 The Cursor CLI, in `~/.cursor/hooks.json` (or a project's `.cursor/hooks.json`),
@@ -365,7 +400,8 @@ murmur doctor            # survey each peer over ssh
 murmur doctor --topology # also probe who can reach whom
 ```
 
-`peer list` is local. `doctor` dials out. Membership is per node: peering a
+`peer list` is local. `doctor` dials out, and also checks this node's own
+hook entries ([above](#claude-code-codex-cursor-cli-and-muse-code-murmur-hook)). Membership is per node: peering a
 machine does not mean it peers you — if it does not peer back, its list cannot
 see your agents. `doctor` writes nothing and repairs nothing; it prints the
 commands. Exit 0 for observations, 1 only for a real problem. Suggestions name

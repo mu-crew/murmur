@@ -1173,9 +1173,18 @@ naming drift as asymmetry and miss genuine duplicates.
 
 Asymmetry is *reported*, never called a fault, and exits 0. Flagging the normal
 case — the laptop and the NAT'd server above — would train the operator to ignore
-the command. Only a duplicate `host_id` and a snapshot-version mismatch are
-problems, because both are murmur behaving provably wrongly. Skew is not
-recomputed: `doctor` calls the same `versionCell` `peer list` uses.
+the command. Only a duplicate `host_id`, a snapshot-version mismatch, hook
+drift and a codex turn reported twice (hooked, and still on an older `notify`
+line naming murmur) are problems, because each is murmur behaving provably
+wrongly. Skew is not recomputed: `doctor` calls the same `versionCell` `peer
+list` uses.
+
+`doctor` also reads this node's hook harness configs, through the same plan
+`murmur init` writes from (`src/hook-install.ts`), so the two cannot disagree
+about what "right" is. Those files are shared with mu, museum, muzzle and the
+user: murmur owns exactly the handlers whose command starts with `murmur`.
+Drift in those is a problem; a harness set up with none of them is an
+observation, since only the operator knows whether that is deliberate.
 
 "Island" is scoped to one hop and says so: *no peer that this node surveyed peers
 this host*, not "no node in the fleet". `doctor` asks its own peers and stops —

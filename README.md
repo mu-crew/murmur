@@ -79,7 +79,7 @@ On every node that runs agents:
 
 ```bash
 npm install -g @mu-crew/murmur
-murmur init                      # this node's identity
+murmur init                      # this node's identity, and hook entries
 pi install npm:@mu-crew/murmur   # the agent-side extension, as a pi package
 ```
 
@@ -105,7 +105,7 @@ client comes back on its own. See
 
 ```bash
 murmur peer add devbox
-murmur doctor            # is peering mutual?
+murmur doctor            # is peering mutual? are the hooks right?
 bind -N "agent state picker" a display-popup -E -w 80% -h 60% "murmur pick"
 bind -N "toggle murmur dash" G run-shell -b "murmur dash --goto"
 bind -N "agent side panel" C-m run-shell "murmur sidepanel"

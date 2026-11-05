@@ -45,6 +45,19 @@ for a turn that already stopped is dropped rather than idling the next turn.
 `docs/setup.md` has both
 hook configurations; the Cursor CLI's `murmur notify` entry is superseded.
 
+**`murmur init` writes the hook entries; `murmur doctor` checks them.**
+`init` adds `murmur hook <harness>` to `~/.claude/settings.json`,
+`~/.codex/hooks.json`, `~/.cursor/hooks.json` and the `hooks` key of
+`~/.config/muse/settings.json`, for each harness set up on the node
+(`--hooks <list>` for others, `--no-hooks` for none). It touches only handlers
+whose command starts with `murmur`, so mu's, museum's, muzzle's and your own
+stay as they are; Muse's `Interrupt` is declared `async`, and the Cursor CLI's
+older `murmur notify` entry gives way. A second run changes nothing. `doctor`
+reports drift in those entries as a problem, and a set-up harness with none as
+an observation, even with no peers configured. Once codex is hooked, an older
+`notify` line in `~/.codex/config.toml` that runs murmur would report each
+finished turn twice: `init` warns and `doctor` reports it, and you remove it.
+
 **Remote workers stay off the remote node's dashboard.** A worker mu starts on
 a host for a pane elsewhere (its anchor or `MU_REMOTE_KEY` names the origin)
 writes its hook events to that host's remote area, never its inbox or store.

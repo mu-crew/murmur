@@ -36,6 +36,19 @@ export {
   muHookEvent,
   parseMuHookInput,
 } from "./hook.js";
+export {
+  checkHooks,
+  HOOK_HARNESSES,
+  HOOK_TARGETS,
+  type HookCheck,
+  type HookCheckState,
+  type HookHarness,
+  type HookInstallResult,
+  type HookInstallState,
+  hookCommand,
+  installHooks,
+  isMurmurCommand,
+} from "./hook-install.js";
 export { HOOK_ROWS, type HookMapping, type HookPayload, mapHookPayload } from "./hook-rows.js";
 export {
   createIdentity,
