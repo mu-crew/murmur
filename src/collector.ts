@@ -371,7 +371,7 @@ export function needsInteractiveAuth(message: string): boolean {
  * Whether a failure means "the connection is fine, its session slot was taken".
  *
  * The fourth category, and it masquerades as the third. A host may cap session
- * channels per connection -- `MaxSessions 1` on the devvm this was found on,
+ * channels per connection -- `MaxSessions 1` on the dev host this was found on,
  * set in every `Match` block that applies to us while the global stays 512 --
  * so a second concurrent command over one master is refused. ssh then SILENTLY
  * RETRIES on a fresh connection, which hits `AuthenticationMethods publickey,

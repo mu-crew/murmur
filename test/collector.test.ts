@@ -859,9 +859,9 @@ test("an auth refusal is distinguished from an unreachable host", () => {
 });
 
 test("a busy session channel is retryable, not an auth wall", () => {
-  // Captured verbatim from devvm5639 with a FULLY AUTHENTICATED master already
+  // Captured verbatim from a dev host with a FULLY AUTHENTICATED master already
   // running: hold the one session channel open, run a second command, and ssh
-  // prints both of these lines. The devvm's sshd sets `MaxSessions 1` in every
+  // prints both of these lines. The host's sshd sets `MaxSessions 1` in every
   // Match block that applies to us (global is 512; `Match Group users Address
   // ... LocalPort 22` overrides it), so one connection carries exactly one
   // session channel and a concurrent collect is refused.
@@ -874,7 +874,7 @@ test("a busy session channel is retryable, not an auth wall", () => {
   // it tells them to open is already up.
   const busy =
     "mux_client_request_session: session request failed: Session open refused by peer\n" +
-    "mtrojer@devvm5639.dkl0.facebook.com: Permission denied (keyboard-interactive).";
+    "user@host1.example.com: Permission denied (keyboard-interactive).";
 
   expect(sessionChannelBusy(busy)).toBe(true);
   // The whole point: contention must not be filed under "a human must

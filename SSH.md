@@ -96,7 +96,7 @@ auth wall, and it exposes no multiplexing socket to attach to. That is exactly
 why the pairing works: **once connected it holds no ssh session**, so the capped
 slot stays free.
 
-Verified on a `MaxSessions 1` devvm: an interactive `ssh` starved every collect
+Verified on a `MaxSessions 1` dev host: an interactive `ssh` starved every collect
 for as long as it stayed open, while an ET session on the same host did not.
 
 Run ET for yourself and one `ssh -MNf` master for murmur, and the two do not
