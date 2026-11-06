@@ -482,6 +482,8 @@ export type HarnessState = {
   /** Prompts submitted in this session; null for a pi row, which does not count them. */
   run_count: number | null;
   last_text: string | null;
+  /** The run whose turn wrote `last_text` (see `TurnState`); null when none has. */
+  last_text_run: number | null;
   /**
    * False while the activity is mu's assertion rather than the harness's: an
    * interrupt mu sent and no harness event has confirmed yet (`idle?`).

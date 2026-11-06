@@ -213,6 +213,14 @@ export type MuHookInput = EventFields & {
    * environment. The store fixes a row's identity when it claims the pane.
    */
   agent: InboxAgent | null;
+  /**
+   * Whose event it is. `mu` for mu's own (an interrupt it sent is unconfirmed,
+   * `idle?`, until the harness speaks); `harness` for one the harness itself
+   * reported that mu relays from a remote node (`--by harness`), so a codex,
+   * muse or cursor-agent interrupt it read there is confirmed here as it was
+   * there.
+   */
+  by: InboxEvent["by"];
 };
 
 function optionalText(value: unknown): string | null | undefined {
@@ -220,8 +228,11 @@ function optionalText(value: unknown): string | null | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
-/** mu's payload, validated, or the reason it is refused. */
-export function parseMuHookInput(payload: HookPayload): MuHookInput | string {
+/** mu's payload, validated, or the reason it is refused. `by` comes from the command line. */
+export function parseMuHookInput(
+  payload: HookPayload,
+  by: InboxEvent["by"] = "mu",
+): MuHookInput | string {
   const event = payload.event;
   if (typeof event !== "string" || !(INBOX_EVENTS as readonly string[]).includes(event)) {
     return `unknown event: ${typeof event === "string" ? event : JSON.stringify(event ?? null)}`;
@@ -256,6 +267,7 @@ export function parseMuHookInput(payload: HookPayload): MuHookInput | string {
     text: text === null ? null : capLastText(text),
     generation_id: fields.generation_id ?? null,
     agent,
+    by,
   };
 }
 
@@ -294,7 +306,7 @@ export function muHookEvent(
   context: HookContext,
   target: MuHookTarget | null = null,
 ): InboxEvent | string {
-  const { harness: named, agent: given, ...fields } = input;
+  const { harness: named, agent: given, by, ...fields } = input;
   if (!target) {
     const placement = placeEvent(context.table, context.self, placeOptions(context));
     if (placement.kind === "remote") return "a remote agent's pane is on its origin node";
@@ -312,7 +324,7 @@ export function muHookEvent(
         tmux: context.env.TMUX ?? null,
         tmux_pane: context.env.TMUX_PANE ?? null,
       },
-      "mu",
+      by,
       placement.anchor || !given ? hookAgent(placement.anchor, context.env) : given,
       context.now,
     );
@@ -341,7 +353,7 @@ export function muHookEvent(
       tmux: target.tmux,
       tmux_pane: target.tmux_pane,
     },
-    "mu",
+    by,
     anchor || !given ? hookAgent(anchor, {}) : given,
     context.now,
   );
@@ -354,7 +366,7 @@ export function muHookEvent(
  * the key, and only once some harness event has claimed it.
  */
 export function muRemoteEvent(input: MuHookInput, key: string, now: number): RemoteEvent {
-  const { harness, agent, ...fields } = input;
+  const { harness, agent, by, ...fields } = input;
   return {
     v: INBOX_EVENT_VERSION,
     ...fields,
@@ -364,7 +376,7 @@ export function muRemoteEvent(input: MuHookInput, key: string, now: number): Rem
     tmux: null,
     tmux_pane: null,
     at: now,
-    by: "mu",
+    by,
     agent: agent ?? hookAgent(null, {}),
   };
 }

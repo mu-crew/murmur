@@ -24,6 +24,16 @@ export type TurnState = {
   session_id: string | null;
   run_count: number;
   last_text: string | null;
+  /**
+   * The run whose turn wrote `last_text`: the `run_count` its `turn_stopped`
+   * was applied at, or for a named turn's late text the run that turn ended
+   * in. Null when no turn of this session has written it. A turn that ends
+   * with no text (an interrupt, a failure, an unnamed stop without text)
+   * leaves both as they were, so a reader can tell the previous turn's text
+   * from its own. A named turn's stop without text writes a null text at its
+   * own run, until its text arrives.
+   */
+  last_text_run: number | null;
   /** False while the activity is mu's word (an interrupt it sent) and no harness event confirmed it. */
   confirmed: boolean;
   /**
@@ -33,6 +43,8 @@ export type TurnState = {
    */
   generation_id: string | null;
   generation_end: GenerationEnd | null;
+  /** The run that generation ended in, for its late text's `last_text_run`. */
+  generation_run: number | null;
 };
 
 export type TurnEvent = Pick<
@@ -64,9 +76,11 @@ export function initialTurn(session_id: string | null): TurnState {
     session_id,
     run_count: 0,
     last_text: null,
+    last_text_run: null,
     confirmed: true,
     generation_id: null,
     generation_end: null,
+    generation_run: null,
   };
 }
 
@@ -90,7 +104,11 @@ export function stepTurn(state: TurnState, event: TurnEvent): TurnStep {
     if (event.text === null) return IGNORE;
     return {
       kind: "apply",
-      next: { ...state, last_text: capLastText(event.text) },
+      next: {
+        ...state,
+        last_text: capLastText(event.text),
+        last_text_run: state.generation_run ?? state.run_count,
+      },
       release: false,
       clear: [],
       raise: null,
@@ -117,6 +135,7 @@ export function stepTurn(state: TurnState, event: TurnEvent): TurnStep {
     if (generation === null) return;
     next.generation_id = generation;
     next.generation_end = how;
+    next.generation_run = next.run_count;
   };
 
   switch (event.event) {
@@ -131,14 +150,18 @@ export function stepTurn(state: TurnState, event: TurnEvent): TurnStep {
         // startup, clear, or a source this build does not know: a new session.
         next.run_count = 0;
         next.last_text = null;
+        next.last_text_run = null;
         next.generation_id = null;
         next.generation_end = null;
+        next.generation_run = null;
       }
       break;
     case "prompt_submitted":
       next.activity = "running";
       next.run_count += 1;
-      clear.push("done");
+      // A new prompt answers the last turn's outcome, a failure as much as a
+      // finish: the error it leaves would otherwise outlive every later turn.
+      clear.push("done", "error");
       break;
     case "continued":
       next.activity = "running";
@@ -161,9 +184,11 @@ export function stepTurn(state: TurnState, event: TurnEvent): TurnStep {
         // A named turn's text may still be on its way (cursor-agent sends it
         // separately): no text yet is no text, never the previous turn's.
         next.last_text = event.text === null ? null : capLastText(event.text);
+        next.last_text_run = next.run_count;
         end("stopped");
       } else if (event.text !== null) {
         next.last_text = capLastText(event.text);
+        next.last_text_run = next.run_count;
       }
       raise = { kind: "settled" };
       break;

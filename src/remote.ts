@@ -96,6 +96,8 @@ export type RemoteReport = {
     session_id: string | null;
     run_count: number;
     last_text: string | null;
+    /** The run whose turn wrote `last_text`, as `murmur pane` reports it. */
+    last_text_run: number | null;
     confirmed: boolean;
     claimed: boolean;
     claimed_at: number | null;
@@ -129,6 +131,10 @@ function nullableNumber(value: unknown): value is number | null {
   return value === null || (typeof value === "number" && Number.isFinite(value));
 }
 
+function nullableRun(value: unknown): value is number | null {
+  return value === null || (typeof value === "number" && Number.isInteger(value) && value >= 0);
+}
+
 function parseTurn(value: unknown): TurnState | null {
   if (typeof value !== "object" || value === null) return null;
   const turn = value as Record<string, unknown>;
@@ -138,14 +144,20 @@ function parseTurn(value: unknown): TurnState | null {
   if (typeof turn.confirmed !== "boolean" || !nullableText(turn.generation_id)) return null;
   const end = turn.generation_end;
   if (end !== null && !(GENERATION_ENDS as readonly unknown[]).includes(end)) return null;
+  // Absent from a state an earlier build stored: unknown, not a refusal.
+  const textRun = turn.last_text_run ?? null;
+  const generationRun = turn.generation_run ?? null;
+  if (!nullableRun(textRun) || !nullableRun(generationRun)) return null;
   return {
     activity: turn.activity,
     session_id: turn.session_id,
     run_count: turn.run_count,
     last_text: turn.last_text,
+    last_text_run: textRun,
     confirmed: turn.confirmed,
     generation_id: turn.generation_id,
     generation_end: end as TurnState["generation_end"],
+    generation_run: generationRun,
   };
 }
 
@@ -295,6 +307,7 @@ export function remoteReport(state: RemoteState, events: RemoteEventReport[]): R
             session_id: state.turn.session_id,
             run_count: state.turn.run_count,
             last_text: state.turn.last_text,
+            last_text_run: state.turn.last_text_run,
             confirmed: state.turn.confirmed,
             claimed: state.claimed,
             claimed_at: state.claimed_at,

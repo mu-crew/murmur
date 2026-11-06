@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { type Harness, harnessFromArgv } from "./harnesses.js";
+import { type Harness, harnessFromArgv, runMode } from "./harnesses.js";
 
 /**
  * Where a hook event belongs, read from the process table rather than the
@@ -147,6 +147,10 @@ const MAX_DEPTH = 64;
  *   between, is ONE harness: a launcher and the binary it starts.
  * - A second, separate harness before the server means the event comes from a
  *   nested agent, and it is dropped. So is a chain with no harness in it.
+ * - A one-shot run (`codex exec`, `claude -p`; see `runMode`) with an
+ *   interactive member of the same harness above it is a nested agent too,
+ *   though no shell separates them: the run splits where it turns one-shot.
+ *   A member whose arguments cannot tell either way never splits a run.
  * - An anchor with a remote key routes the event to the remote area, never the
  *   inbox, whether or not the chain reaches a tmux server: that pane belongs to
  *   the origin node. With no anchor in the chain, `$MU_REMOTE_KEY` does the
@@ -170,6 +174,8 @@ export function placeEvent(
   let owner: { pid: number; harness: Harness } | null = null;
   // The harness of the run the walk is in, or null when the last process was not one.
   let run: Harness | null = null;
+  // Whether the owner's run has met a one-shot member (`codex exec`) yet.
+  let oneShot = false;
   let anchor: AgentAnchor | null = null;
   let child: ProcessRow | null = null;
 
@@ -195,8 +201,13 @@ export function placeEvent(
     const harness =
       current.pid === self ? (options.selfHarness ?? null) : harnessFromArgv(current.args);
     if (harness !== null) {
+      const mode = runMode(harness, current.args);
       if (owner === null) owner = { pid: current.pid, harness };
       else if (run !== harness) return { kind: "drop", reason: "nested" };
+      // An interactive member above a one-shot one: the one-shot run is a
+      // second harness the first started, with no shell between them.
+      else if (oneShot && mode === "interactive") return { kind: "drop", reason: "nested" };
+      if (mode === "one-shot") oneShot = true;
     }
     run = harness;
     if (anchor === null && options.anchor) anchor = options.anchor(current);
@@ -297,7 +308,8 @@ export function treeRuns(
  *
  * Null when no harness runs in the pane. A tie at the shallowest depth reads
  * the lowest pid, and a run stops where it forks into two same-harness
- * children.
+ * children, or where a one-shot child follows an interactive member of the
+ * run (its nested `codex exec`).
  */
 export function paneHarness(
   table: ProcessTable,
@@ -314,12 +326,26 @@ export function paneHarness(
       .find((entry) => entry.harness !== null);
     if (found?.harness) {
       let pid = found.pid;
+      // The run's lowest interactive member so far (see `placeEvent`).
+      let interactive =
+        runMode(found.harness, (table.get(pid) as ProcessRow).args) === "interactive" ? pid : null;
       for (let step = 0; step < MAX_DEPTH; step += 1) {
         const same = (children.get(pid) ?? []).filter(
           (child) => harnessFromArgv(table.get(child)?.args ?? "") === found.harness,
         );
         if (same.length !== 1) break;
-        pid = same[0] as number;
+        const child = same[0] as number;
+        // A one-shot child below an interactive member is a nested run, not
+        // the next member of this one (see `placeEvent`). Unreadable members
+        // between the two belong to the nested run, so the outer run ends at
+        // its last interactive member.
+        const mode = runMode(found.harness, table.get(child)?.args ?? "");
+        if (mode === "one-shot" && interactive !== null) {
+          pid = interactive;
+          break;
+        }
+        if (mode === "interactive") interactive = child;
+        pid = child;
       }
       return { pid, harness: found.harness, top: found.pid };
     }

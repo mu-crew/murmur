@@ -174,6 +174,8 @@ test("a cursor-agent text that lands during the next turn changes only the text"
   // The next prompt is in, then the previous turn's text arrives.
   apply(s, cursor(18, { generation_id: "0f0f0f0f-next-turn" }), cursor(20));
   expect(view(s, true)).toBe('working runs=2 session=2947a49f text="OK"');
+  // The text is the first turn's, and says so, though the second is running.
+  expect(report(s).agent).toMatchObject({ run_count: 2, last_text_run: 1 });
 });
 
 test("an error stop drained before its abort is cleared by the abort", () => {
@@ -252,14 +254,14 @@ test("every recorded Muse call maps as the muse row says", () => {
     17: "prompt_submitted",
     18: "row",
     // `muse exec` from the agent's shell tool, exec'd with no shell between:
-    // one muse run, placed, then refused at the drain by the live owner.
-    19: "session_start",
-    20: "prompt_submitted",
-    21: "turn_stopped",
+    // a one-shot muse under the interactive one is a second harness, dropped.
+    19: "nested",
+    20: "nested",
+    21: "nested",
     22: "row",
     23: "row",
     24: "row",
-    25: "session_end",
+    25: "nested",
     26: "row",
     27: "permission_requested",
     28: "row",
@@ -320,14 +322,14 @@ test("a recorded Muse session drives the pane from the chain alone", () => {
     16: "- -> done runs=4 session=01a1ab61",
     17: "prompt_submitted -> working runs=5 session=01a1ab61",
     18: "- -> working runs=5 session=01a1ab61",
-    // `muse exec`: the live outer muse owns the pane, so its nested run is refused.
-    19: "session_start (refused) -> working runs=5 session=01a1ab61",
-    20: "prompt_submitted (refused) -> working runs=5 session=01a1ab61",
-    21: "turn_stopped (refused) -> working runs=5 session=01a1ab61",
+    // `muse exec`: a nested run, dropped at the hook, never reaches the pane.
+    19: "- -> working runs=5 session=01a1ab61",
+    20: "- -> working runs=5 session=01a1ab61",
+    21: "- -> working runs=5 session=01a1ab61",
     22: "- -> working runs=5 session=01a1ab61",
     23: "- -> working runs=5 session=01a1ab61",
     24: "- -> working runs=5 session=01a1ab61",
-    25: "session_end (refused) -> working runs=5 session=01a1ab61",
+    25: "- -> working runs=5 session=01a1ab61",
     26: "- -> working runs=5 session=01a1ab61",
     27: "permission_requested -> blocked runs=5 session=01a1ab61",
     28: "- -> blocked runs=5 session=01a1ab61",

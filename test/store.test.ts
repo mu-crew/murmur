@@ -1108,6 +1108,22 @@ test("a newer store whose compat stamp still includes this build is opened, not 
   after.close();
 });
 
+test("schema 11 only adds columns: it keeps the schema-10 stamp, so a schema-10 build opens it", () => {
+  // `last_text_run` and `generation_run` are nullable additions (D8): the
+  // version moves, the "compatible since" stamp does not.
+  store().close();
+  const database = new Database(dbPath(), { readonly: true });
+  expect(database.pragma("user_version", { simple: true })).toBe(11);
+  expect(database.prepare("SELECT compatible_since FROM compat").all()).toEqual([
+    { compatible_since: 10 },
+  ]);
+  const columns = (database.prepare("PRAGMA table_info(agents)").all() as { name: string }[]).map(
+    (column) => column.name,
+  );
+  expect(columns).toEqual(expect.arrayContaining(["last_text_run", "generation_run"]));
+  database.close();
+});
+
 test("a store from before the compat stamp is reset once, keeping peers", () => {
   // Schema 9 had no stamp and no inbox columns. The one upgrade cost of the
   // inbox release is this reset: agent and attention rows go, and the next

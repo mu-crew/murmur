@@ -14,7 +14,8 @@ import { renderState } from "../view.js";
  * arrives.
  *
  * Local only. Nothing here reaches a snapshot, so the harness-side fields
- * (`run_count`, `session_id`, `last_text`, ...) cost no wire change.
+ * (`run_count`, `session_id`, `last_text`, `last_text_run`, ...) cost no wire
+ * change.
  */
 export type PaneReport = {
   pane: PaneId;
@@ -37,6 +38,12 @@ export type PaneReport = {
     session_id: string | null;
     run_count: number | null;
     last_text: string | null;
+    /**
+     * The `run_count` of the turn that wrote `last_text`: equal to `run_count`
+     * when the last turn wrote it, lower when that turn ended without text and
+     * left an earlier turn's. Null when no turn of this session has.
+     */
+    last_text_run: number | null;
     confirmed: boolean;
     claimed_at: number;
     updated_at: number;
@@ -81,6 +88,7 @@ export function paneReport(
             session_id: harness.session_id,
             run_count: harness.run_count,
             last_text: harness.last_text,
+            last_text_run: harness.last_text_run,
             confirmed: harness.confirmed,
             claimed_at: local.agent.claimed_at,
             updated_at: local.agent.updated_at,

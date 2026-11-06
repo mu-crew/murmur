@@ -3,6 +3,8 @@ import { publishAgentStates } from "../agent-state.js";
 import { asPaneId } from "../ids.js";
 import { type Mux, tmux } from "../mux.js";
 import { openStore, type Store } from "../store.js";
+import type { TmuxServer } from "../types.js";
+import { paneServer } from "./pane.js";
 
 /**
  * Acknowledge every attention request on one pane, then republish its window.
@@ -14,12 +16,31 @@ import { openStore, type Store } from "../store.js";
  *
  * Best effort, silent and total: this runs inside the tmux server.
  */
-export function clearPane(raw: string, mux: Mux = tmux): void {
+export function clearPane(raw: string, mux: Mux = tmux, named?: TmuxServer): void {
   let store: Store | undefined;
   try {
     if (!raw) return;
     // argv is the boundary: the pane id arrives as a bare string from the hook.
     const pane = asPaneId(raw);
+    if (named) {
+      // A server named outright (`-L`/`-S`): mu acknowledging a pane of a
+      // server it is not running inside. The caller's own view says nothing
+      // about that server, so it is not read.
+      const window = mux.windowForPane(pane, named);
+      try {
+        store = openStore();
+        if (window) store.acknowledgePane({ server: named, pane });
+      } catch {
+        // As below: no evidence, no clear.
+      }
+      if (!window || !store) return;
+      try {
+        publishAgentStates(window, mux, store, named);
+      } catch {
+        // As below: leave the badge.
+      }
+      return;
+    }
     // The badge is a tmux option, not murmur state, so resolving it needs no
     // murmur knowledge -- and a pane murmur has never seen can still carry an
     // orphan badge nothing else will clear.
@@ -83,5 +104,21 @@ export function registerClear(program: Command): void {
     .command("clear")
     .description("Acknowledge attention for a pane")
     .option("--pane <pane-id>", "focused tmux pane id")
-    .action((options: { pane?: string }) => clearPane(options.pane ?? ""));
+    .option("-L, --socket-name <name>", "tmux server socket name of the pane")
+    .option("-S, --socket-path <path>", "tmux server socket path of the pane")
+    .action((options: { pane?: string; socketName?: string; socketPath?: string }) =>
+      clearPane(options.pane ?? "", tmux, namedServer(options)),
+    );
+}
+
+/**
+ * The server `-L`/`-S` name, or undefined for neither. Only a server named
+ * outright: without one, the focus hook's path is unchanged, finding the
+ * server from the caller's own tmux.
+ */
+export function namedServer(options: {
+  socketName?: string;
+  socketPath?: string;
+}): TmuxServer | undefined {
+  return options.socketName || options.socketPath ? paneServer(options, {}) : undefined;
 }
