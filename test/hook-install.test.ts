@@ -692,3 +692,110 @@ describe("the CLI", () => {
     expect(readFileSync(file(CLAUDE), "utf8")).toBe("{ not json");
   });
 });
+
+describe("CLAUDE_CONFIG_DIR and CODEX_HOME", () => {
+  // Claude Code and codex read their config from these when set, and so do
+  // muzzle and museum when they write their hooks; murmur's entries must land
+  // in the same files or the harness never runs them.
+  function moved(): { claude: string; codex: string; env: NodeJS.ProcessEnv } {
+    const claude = join(home, "alt", "claude");
+    const codex = join(home, "alt", "codex");
+    return { claude, codex, env: { CLAUDE_CONFIG_DIR: claude, CODEX_HOME: codex } };
+  }
+
+  test("init writes into the moved directories, and nothing under the home's", () => {
+    const { claude, codex, env } = moved();
+    mkdirSync(claude, { recursive: true });
+    mkdirSync(codex, { recursive: true });
+    // A home-directory install that is NOT the one in use: left alone.
+    mkdirSync(join(home, ".claude"));
+
+    const results = installHooks({ home, env });
+    expect(results.find((r) => r.harness === "claude")).toMatchObject({
+      state: "written",
+      path: join(claude, "settings.json"),
+    });
+    expect(results.find((r) => r.harness === "codex")).toMatchObject({
+      state: "written",
+      path: join(codex, "hooks.json"),
+    });
+    expect(
+      JSON.parse(readFileSync(join(claude, "settings.json"), "utf8")).hooks.Stop,
+    ).toBeDefined();
+    expect(existsSync(file(CLAUDE))).toBe(false);
+    expect(existsSync(file(CODEX))).toBe(false);
+  });
+
+  test("without the directory there, nothing is written unless asked", () => {
+    const { claude, env } = moved();
+    expect(installHooks({ home, env }).find((r) => r.harness === "claude")?.state).toBe("skipped");
+    installHooks({ home, env, harnesses: ["claude"] });
+    expect(existsSync(join(claude, "settings.json"))).toBe(true);
+  });
+
+  test("an empty variable is unset, as for the harness", () => {
+    mkdirSync(join(home, ".claude"));
+    const result = installHooks({ home, env: { CLAUDE_CONFIG_DIR: "" } }).find(
+      (r) => r.harness === "claude",
+    );
+    expect(result?.path).toBe(file(CLAUDE));
+  });
+
+  test("doctor's check reads the moved files, codex's notify line included", () => {
+    const { claude, codex, env } = moved();
+    mkdirSync(claude, { recursive: true });
+    mkdirSync(codex, { recursive: true });
+    writeFileSync(join(codex, "config.toml"), 'notify = ["murmur", "notify"]\n');
+    expect(checkHooks({ home, env }).map((c) => [c.harness, c.state, c.path])).toEqual([
+      ["claude", "unhooked", join(claude, "settings.json")],
+      ["codex", "unhooked", join(codex, "hooks.json")],
+    ]);
+    installHooks({ home, env });
+    const checks = checkHooks({ home, env });
+    expect(checks.map((c) => c.state)).toEqual(["ok", "ok"]);
+    expect(checks.find((c) => c.harness === "codex")?.notifyConfig).toBe(
+      join(codex, "config.toml"),
+    );
+    expect(codexNotifyRunsMurmur(home, env)).toBe(join(codex, "config.toml"));
+    expect(codexNotifyRunsMurmur(home, {})).toBeNull();
+  });
+
+  test("the built init and doctor honour them from the environment", () => {
+    const { claude, codex } = moved();
+    mkdirSync(claude, { recursive: true });
+    mkdirSync(codex, { recursive: true });
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      HOME: home,
+      CLAUDE_CONFIG_DIR: claude,
+      CODEX_HOME: codex,
+    };
+    delete env.MURMUR_HOOK_HOME;
+    const run = (args: string[]) =>
+      spawnSync(process.execPath, [builtArtifact("cli.js"), ...args], {
+        env,
+        encoding: "utf8",
+        timeout: 30_000,
+      });
+
+    const init = run(["init"]);
+    expect(init.status, init.stderr).toBe(0);
+    expect(init.stdout).toContain(`hooks claude: added`);
+    expect(init.stdout).toContain(join(claude, "settings.json"));
+    expect(init.stdout).toContain(join(codex, "hooks.json"));
+    expect(existsSync(file(CLAUDE))).toBe(false);
+
+    const settings = JSON.parse(readFileSync(join(claude, "settings.json"), "utf8"));
+    delete settings.hooks.Stop;
+    writeFileSync(join(claude, "settings.json"), JSON.stringify(settings));
+    const doctor = run(["doctor", "--json"]);
+    expect(doctor.status).toBe(1);
+    expect(JSON.parse(doctor.stdout).findings).toContainEqual(
+      expect.objectContaining({
+        kind: "hook-drift",
+        subject: "claude",
+        message: expect.stringContaining(join(claude, "settings.json")),
+      }),
+    );
+  });
+});

@@ -74,7 +74,7 @@ export type EventFields = Pick<
 
 type Where = Pick<
   InboxEvent,
-  "harness" | "server_pid" | "root_pid" | "owner_pid" | "tmux" | "tmux_pane"
+  "harness" | "server_pid" | "root_pid" | "owner_pid" | "tmux" | "tmux_pane" | "server_socket"
 >;
 
 function inboxEvent(
@@ -191,6 +191,7 @@ function placedWrite(
         owner_pid: placement.owner_pid,
         tmux,
         tmux_pane,
+        server_socket: placement.server_socket,
       },
       by,
       agent,
@@ -323,6 +324,7 @@ export function muHookEvent(
         owner_pid: placement.owner_pid,
         tmux: context.env.TMUX ?? null,
         tmux_pane: context.env.TMUX_PANE ?? null,
+        server_socket: placement.server_socket,
       },
       by,
       placement.anchor || !given ? hookAgent(placement.anchor, context.env) : given,
@@ -352,6 +354,8 @@ export function muHookEvent(
       owner_pid: owner,
       tmux: target.tmux,
       tmux_pane: target.tmux_pane,
+      // tmux named the socket outright, in `tmux`.
+      server_socket: null,
     },
     by,
     anchor || !given ? hookAgent(anchor, {}) : given,

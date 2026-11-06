@@ -21,7 +21,7 @@ import {
   inboxKey,
   writeInboxEvent,
 } from "../src/inbox.js";
-import { type InboxEvent, LAST_TEXT_MAX_BYTES } from "../src/inbox-event.js";
+import { type InboxEvent, LAST_TEXT_MAX_BYTES, parseServerSocket } from "../src/inbox-event.js";
 import type { PublishPlan } from "../src/mux.js";
 import { openStore, type Store } from "../src/store.js";
 import type { InboxDelivery, Location } from "../src/types.js";
@@ -528,4 +528,77 @@ test("within one drain, files are handed to the store sorted by name", () => {
   drain(watched);
   expect(seen).toEqual(["t1", "t2", "t3"]);
   expect(report(s).agent?.last_text).toBe("t3");
+});
+
+test("the drain hands the host the hook's hints: its $TMUX and its server's socket", () => {
+  const s = store();
+  write({ tmux: "/tmp/tmux-501/default,4242,0", server_socket: { kind: "label", value: "mule" } });
+  const asked: unknown[] = [];
+  let done = 0;
+  const h = host();
+  expect(
+    drain(s, {
+      ...h,
+      serverFor: (pid, hints) => {
+        asked.push([pid, hints]);
+        return { kind: "default" };
+      },
+      done: () => {
+        done += 1;
+      },
+    }),
+  ).toMatchObject({ applied: 1 });
+  expect(asked).toEqual([
+    [SERVER, { tmux: "/tmp/tmux-501/default,4242,0", socket: { kind: "label", value: "mule" } }],
+  ]);
+  expect(done).toBe(1);
+});
+
+test("a drain limited to some keys leaves every other inbox alone, unlocated", () => {
+  const s = store();
+  write({ event: "prompt_submitted" });
+  const other = event({ server_pid: SERVER + 1, root_pid: 99 });
+  expect(writeInboxEvent(other)).toBe(true);
+  const asked: number[] = [];
+  const h = host();
+  const summary = drainInbox(s, {
+    host: {
+      ...h,
+      serverFor: (pid, hints) => {
+        asked.push(pid);
+        return h.serverFor(pid, hints);
+      },
+    },
+    mux: fakeMux({ panesInWindow: () => [asPaneId("%1")] }),
+    keys: [inboxKey(SERVER, ROOT)],
+  });
+  expect(summary).toMatchObject({ applied: 1, removed: 0 });
+  // Only the asked-for inbox was located: the other's server was never looked for.
+  expect(asked).toEqual([SERVER]);
+  expect(readdirSync(join(inboxDir(), inboxKey(SERVER + 1, 99)))).toHaveLength(1);
+  // A key with no inbox drains nothing and asks nothing.
+  expect(drainInbox(s, { host: h, keys: ["0".repeat(32)] })).toMatchObject({ applied: 0 });
+});
+
+test("an event's socket hint is validated, and a bad one costs only the hint", () => {
+  expect(parseServerSocket({ kind: "default" })).toEqual({ kind: "default" });
+  expect(parseServerSocket({ kind: "label", value: "mule" })).toEqual({
+    kind: "label",
+    value: "mule",
+  });
+  expect(parseServerSocket({ kind: "path", value: "/tmp/rig/s" })).toEqual({
+    kind: "path",
+    value: "/tmp/rig/s",
+  });
+  // A label is a name in the reader's socket directory, never a way out of it.
+  expect(parseServerSocket({ kind: "label", value: "../../etc/x" })).toBeNull();
+  expect(parseServerSocket({ kind: "path", value: "relative/s" })).toBeNull();
+  expect(parseServerSocket({ kind: "label", value: "" })).toBeNull();
+  expect(parseServerSocket({ kind: "socket", value: "/x" })).toBeNull();
+  expect(parseServerSocket("default")).toBeNull();
+  expect(parseServerSocket(undefined)).toBeNull();
+
+  const s = store();
+  write({ server_socket: { kind: "label", value: "../x" } });
+  expect(drain(s)).toMatchObject({ applied: 1, malformed: 0 });
 });

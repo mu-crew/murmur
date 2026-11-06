@@ -1,11 +1,21 @@
-import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { type ChildProcess, execFileSync, spawn } from "node:child_process";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, expect, test } from "vitest";
 import { asPaneId } from "../src/ids.js";
-import { drainInbox, tmuxInboxHost, writeInboxEvent } from "../src/inbox.js";
+import { drainInbox, inboxDir, inboxKey, tmuxInboxHost, writeInboxEvent } from "../src/inbox.js";
 import type { InboxEvent } from "../src/inbox-event.js";
+import { loadSocketCache } from "../src/socket-cache.js";
 import { openStore } from "../src/store.js";
 import { builtArtifact } from "./helpers/built.js";
 
@@ -134,6 +144,8 @@ test("a launcher-plus-binary chain counts as one harness, and the drain sets @mu
   expect(await until(() => existsSync(out))).toBe(true);
   const placement = JSON.parse(readFileSync(out, "utf8"));
   expect(placement).toMatchObject({ kind: "local", harness: "claude", server_pid: serverPid });
+  // Read from the server's own argv (`tmux -S <socket> ... new-session`).
+  expect(placement.server_socket).toEqual({ kind: "path", value: SOCKET });
   expect(Number(rig("display-message", "-t", pane, "-p", "#{pane_pid}"))).toBe(placement.root_pid);
 
   const store = openStore();
@@ -293,4 +305,123 @@ test("murmur hook claude and murmur hook mu, from real process chains, drive one
     env: process.env,
   });
   expect(report()).toMatchObject({ state: "idle?", agent: { run_count: 1 } });
+});
+
+/**
+ * Sockets that accept a connection and never answer, as a stopped or wedged
+ * tmux server's do: each one costs a tmux client its full timeout. In a
+ * directory of their own laid out as tmux's (`<TMUX_TMPDIR>/tmux-<uid>`), under
+ * /tmp to keep socket paths short.
+ */
+const HOLES_ROOT = realpathSync(mkdtempSync("/tmp/murmur-holes-"));
+const HOLES = join(HOLES_ROOT, `tmux-${process.getuid?.()}`);
+const HOLE_COUNT = 8;
+let holes: ChildProcess | null = null;
+
+beforeAll(async () => {
+  mkdirSync(HOLES, { recursive: true });
+  const script = join(work, "holes.mjs");
+  writeFileSync(
+    script,
+    `import net from "node:net";
+     const held = [];
+     for (const path of process.argv.slice(2)) net.createServer((c) => held.push(c)).listen(path);
+     setInterval(() => {}, 1e6);`,
+  );
+  const paths = Array.from({ length: HOLE_COUNT }, (_, index) => join(HOLES, `hole-${index}`));
+  holes = spawn(process.execPath, [script, ...paths], { stdio: "ignore" });
+  expect(await until(() => paths.every((path) => existsSync(path)))).toBe(true);
+});
+
+afterAll(() => {
+  holes?.kill("SIGKILL");
+  rmSync(HOLES_ROOT, { recursive: true, force: true });
+});
+
+function newPane(): { pane: string; root: number } {
+  const pane = rig("new-window", "-d", "-P", "-F", "#{pane_id}", "sleep 600");
+  return { pane, root: Number(rig("display-message", "-t", pane, "-p", "#{pane_pid}")) };
+}
+
+test("murmur pane drains only the pane it was asked about, fast, past silent sockets", () => {
+  const { pane, root } = newPane();
+  // As a hook with a cleared environment wrote it before the socket hint: no
+  // `$TMUX`, nothing that names the server but its pid.
+  expect(writeInboxEvent(event({ root_pid: root, owner_pid: root }))).toBe(true);
+  // An inbox no drain can locate: its server pid is alive, and no socket in
+  // tmux's directory answers for it. A full drain would ask all eight holes.
+  const holesPid = holes?.pid as number;
+  expect(writeInboxEvent(event({ server_pid: holesPid, root_pid: 7, owner_pid: 7 }))).toBe(true);
+  const stranded = join(inboxDir(), inboxKey(holesPid, 7));
+
+  const started = Date.now();
+  const report = JSON.parse(
+    execFileSync(process.execPath, [CLI, "pane", pane, "--json", "-S", SOCKET], {
+      encoding: "utf8",
+      env: { ...process.env, TMUX_TMPDIR: HOLES_ROOT },
+      timeout: 60_000,
+    }),
+  );
+  const elapsed = Date.now() - started;
+  expect(report).toMatchObject({ pane, state: "working", agent: { harness: "claude" } });
+  // One silent socket alone costs a tmux client 3 s, and mu gives up after 5.
+  expect(elapsed).toBeLessThan(4000);
+  // The other inbox is a later full drain's business.
+  expect(existsSync(stranded)).toBe(true);
+  rmSync(stranded, { recursive: true, force: true });
+});
+
+test("the drain finds a server by the hook's socket hint, then by the cache, never scanning", () => {
+  const cache = join(work, "tmux-sockets.json");
+  // Every scan would meet the holes first; `own` empty, so only a hint or the
+  // cache can find the rig's server without one.
+  const host = () =>
+    tmuxInboxHost({ socketDirectory: HOLES, own: [], cache: loadSocketCache(cache) });
+  const store = openStore();
+  try {
+    const first = newPane();
+    writeInboxEvent(
+      event({
+        root_pid: first.root,
+        owner_pid: first.root,
+        server_socket: { kind: "path", value: SOCKET },
+      }),
+    );
+    let started = Date.now();
+    expect(drainInbox(store, { host: host() })).toMatchObject({ applied: 1, malformed: 0 });
+    expect(Date.now() - started).toBeLessThan(2500);
+    expect(paneOption(first.pane, "@murmur_pane_state")).toBe("working");
+    expect(JSON.parse(readFileSync(cache, "utf8")).servers[String(serverPid)]).toMatchObject({
+      socket: SOCKET,
+    });
+
+    // An event with no hint at all, in a new process's host: the cache answers.
+    const second = newPane();
+    writeInboxEvent(event({ root_pid: second.root, owner_pid: second.root }));
+    started = Date.now();
+    expect(drainInbox(store, { host: host() })).toMatchObject({ applied: 1, malformed: 0 });
+    expect(Date.now() - started).toBeLessThan(2500);
+    expect(paneOption(second.pane, "@murmur_pane_state")).toBe("working");
+  } finally {
+    store.close();
+  }
+});
+
+test("with no hint and no cache, the reader's own server is asked before any scan", () => {
+  const store = openStore();
+  try {
+    const { pane, root } = newPane();
+    writeInboxEvent(event({ root_pid: root, owner_pid: root }));
+    const started = Date.now();
+    const host = tmuxInboxHost({
+      socketDirectory: HOLES,
+      own: [{ kind: "path", value: SOCKET }],
+      cache: null,
+    });
+    expect(drainInbox(store, { host })).toMatchObject({ applied: 1 });
+    expect(Date.now() - started).toBeLessThan(2500);
+    expect(paneOption(pane, "@murmur_pane_state")).toBe("working");
+  } finally {
+    store.close();
+  }
 });

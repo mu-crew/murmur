@@ -24,13 +24,26 @@ npm i -g @mu-crew/murmur@latest
 pi update npm:@mu-crew/murmur    # then /reload running agents
 ```
 
-Both share one store. When the schema changes, the newer side rebuilds the store
-and the older side refuses it rather than rebuilding it back: a CLI verb prints
-`written by a newer murmur` and exits 4 (`notify` and `clear`, which run from
-hooks, stay silent), the dash shows the message, and an older extension records
-nothing until it is upgraded. An extension that already had the store open when a newer
-CLI rebuilt it goes stale (its agent drops out of the view) until it reloads.
-CLIs from 1.4.0 and earlier lack the refusal, so upgrade the CLI first.
+Both share one store, in `~/.local/state/murmur2` (`$XDG_STATE_HOME/murmur2`
+when that is set; `MURMUR_STATE_DIR` moves it). When the schema changes, the
+newer side rebuilds the store and the older side refuses it rather than
+rebuilding it back: a CLI verb prints `written by a newer murmur` and exits 4
+(`notify` and `clear`, which run from hooks, stay silent), the dash shows the
+message, and an older extension records nothing until it is upgraded. An
+extension that already had the store open when a newer CLI rebuilt it goes
+stale (its agent drops out of the view) until it reloads. 1.x builds keep their
+own directory (below).
+
+### Coming from murmur 1.x
+
+2.x keeps its state in `~/.local/state/murmur2`, not 1.x's
+`~/.local/state/murmur`: 1.x refuses the store the hook harnesses need, so the
+two cannot share one. The first 2.x command copies the node's `identity.json`
+(the same `host_id`, so peers still know it) and the old store's peers. It
+never writes to the old directory, so a 1.x murmur keeps working there, but
+the two do not see each other's agents: upgrade the CLI and the pi package
+together, then `/reload` running pi agents. Nothing is migrated under
+`MURMUR_STATE_DIR`. Once nothing runs 1.x, remove `~/.local/state/murmur`.
 
 ### Coming from `murmur link pi`
 
@@ -145,7 +158,11 @@ matcher or on an event it does not hook, the Cursor CLI's older
 right is not rewritten, a symlinked file keeps its link, and a file that is
 not valid JSON is reported and left alone. A command that runs murmur by
 absolute path is yours, not murmur's: replace it with `murmur` on `PATH`, or
-`init` adds a second one.
+`init` adds a second one. `CLAUDE_CONFIG_DIR` and `CODEX_HOME`, when set, move
+Claude Code's and codex's files (`$CLAUDE_CONFIG_DIR/settings.json`,
+`$CODEX_HOME/hooks.json` and `config.toml`) for `init` and `doctor` as they do
+for the harnesses, muzzle and museum. Muse's and the Cursor CLI's stay under
+the home directory.
 
 `murmur doctor` checks the same entries: drift (a missing event, a stray or
 non-async handler, an unreadable file) is a problem, and a harness set up with
@@ -228,9 +245,11 @@ Do not hook `PreToolUse` or `PostToolUse`: they fire on every tool call and
 carry no state murmur uses. The hook prints nothing and always exits 0, so a
 murmur problem never blocks a turn. The agent must run in a tmux pane; a hook
 whose process chain does not reach a tmux server writes nothing. Events wait in
-a per-pane inbox until a reader (`murmur status`, the dash, `murmur pane`)
-applies them. An agent counts as crew when mu started it (its anchor file), or
-when the hook sees `MU_MANAGED_AGENT=1` or `MU_AGENT_NAME`.
+a per-pane inbox under `~/.local/state/murmur2/inbox` (the home path whatever
+`XDG_STATE_HOME` says, since Muse's hooks never see it) until a reader
+(`murmur status`, the dash, `murmur pane`) applies them. An agent counts as
+crew when mu started it (its anchor file), or when the hook sees
+`MU_MANAGED_AGENT=1` or `MU_AGENT_NAME`.
 
 A worker mu starts on a remote host for a pane on this one carries a remote
 key (in its anchor, or `MU_REMOTE_KEY`). Its hooks write to that host's remote

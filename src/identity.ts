@@ -3,7 +3,8 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { join } from "node:path";
 import { ensureDir } from "./dirs.js";
-import { stateDir } from "./paths.js";
+import { migrateLegacyIdentity } from "./legacy-state.js";
+import { legacyStateDir, stateDir } from "./paths.js";
 
 export type NodeIdentity = {
   host_id: string;
@@ -31,10 +32,15 @@ let cache: { path: string; identity: NodeIdentity | null } | null = null;
  * host_id fails with "murmur is not initialised on this node; run: murmur init"
  * rather than bringing a node into existence as a side effect of a status-bar
  * tick.
+ *
+ * Copying a 1.x murmur's identity is not minting: on the first read that finds
+ * none, the old directory's `identity.json` is copied in, so the host keeps
+ * the `host_id` its peers know it by (`migrateLegacyIdentity`).
  */
 export function loadIdentity(): NodeIdentity | null {
   const path = identityPath();
   if (cache?.path === path) return cache.identity;
+  if (!existsSync(path)) migrateLegacyIdentity(legacyStateDir(), stateDir());
   const identity = existsSync(path)
     ? (JSON.parse(readFileSync(path, "utf8")) as NodeIdentity)
     : null;

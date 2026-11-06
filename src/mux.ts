@@ -168,6 +168,27 @@ export function deriveTmuxServer(
   return label === "default" ? { kind: "default" } : { kind: "label", value: label };
 }
 
+/** One pane as its server describes it: the server's pid, the pane's root pid, the socket. */
+export type PaneAddress = { server_pid: number; root_pid: number; socket: string };
+
+/**
+ * Where pane `pane` of `server` lives, from one `display-message`, or null when
+ * that server has no such pane or cannot answer. The pair of pids is exactly
+ * what a hook in that pane records, so it names the pane's inbox (`inboxKey`).
+ */
+export function paneAddress(pane: string, server: TmuxServer): PaneAddress | null {
+  const out = runTmux(
+    ["display-message", "-p", "-t", pane, "#{pid}\t#{pane_pid}\t#{socket_path}"],
+    server,
+  );
+  if (out === null) return null;
+  const [serverPid, rootPid, socket] = out.split("\t");
+  const server_pid = Number(serverPid);
+  const root_pid = Number(rootPid);
+  if (!(server_pid > 0) || !(root_pid > 0) || !socket) return null;
+  return { server_pid, root_pid, socket };
+}
+
 /**
  * Whether tmux's stderr says there is no server to ask -- a definite "zero
  * panes", unlike a timeout or a permission error, which say nothing. tmux words

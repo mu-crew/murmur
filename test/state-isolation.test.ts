@@ -2,8 +2,9 @@ import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { expect, test, vi } from "vitest";
+import { inboxDir, remoteDir } from "../src/inbox-file.js";
 import { tmux } from "../src/mux.js";
-import { configDir, dbPath, stateDir } from "../src/paths.js";
+import { configDir, dbPath, homeStateDir, stateDir } from "../src/paths.js";
 import { builtArtifact } from "./helpers/built.js";
 import { CLEARED } from "./setup.js";
 
@@ -40,6 +41,15 @@ test("a test that sets nothing still resolves state under a temp dir", () => {
   expect(underTmp(stateDir()), `stateDir() escaped the sandbox: ${stateDir()}`).toBe(true);
   expect(underTmp(configDir()), `configDir() escaped the sandbox: ${configDir()}`).toBe(true);
   expect(underTmp(dbPath()), `dbPath() escaped the sandbox: ${dbPath()}`).toBe(true);
+  // The inbox and the remote area ignore XDG_STATE_HOME and fall back to HOME,
+  // so the XDG redirect does not cover them: only MURMUR_STATE_DIR does.
+  for (const [name, path] of [
+    ["homeStateDir()", homeStateDir()],
+    ["inboxDir()", inboxDir()],
+    ["remoteDir()", remoteDir()],
+  ] as const) {
+    expect(underTmp(path), `${name} escaped the sandbox: ${path}`).toBe(true);
+  }
 });
 
 test("a subprocess inheriting the test environment resolves the same sandbox", () => {

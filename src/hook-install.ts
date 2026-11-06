@@ -50,6 +50,12 @@ type HookTarget = {
    * it exists, so a machine with no Cursor CLI grows no `~/.cursor`.
    */
   readonly dir: readonly string[];
+  /**
+   * The variable that moves `dir` out of the home directory, as it does for
+   * the harness itself: `CLAUDE_CONFIG_DIR` for Claude Code, `CODEX_HOME` for
+   * codex. The file keeps its name inside the moved directory.
+   */
+  readonly envDir?: string;
   readonly shape: Shape;
   /** The hooked events, in the order new entries are appended. */
   readonly events: readonly string[];
@@ -71,6 +77,7 @@ export const HOOK_TARGETS: readonly HookTarget[] = Object.freeze([
     harness: "claude",
     file: [".claude", "settings.json"],
     dir: [".claude"],
+    envDir: "CLAUDE_CONFIG_DIR",
     shape: "grouped",
     events: [
       "SessionStart",
@@ -87,6 +94,7 @@ export const HOOK_TARGETS: readonly HookTarget[] = Object.freeze([
     harness: "codex",
     file: [".codex", "hooks.json"],
     dir: [".codex"],
+    envDir: "CODEX_HOME",
     shape: "grouped",
     events: [
       "SessionStart",
@@ -393,8 +401,11 @@ function writeConfig(path: string, root: Json, readFrom: string | null): void {
  * `/bin/sh -lc "exec murmur notify ..."` wrapper; a commented-out line does
  * not count.
  */
-export function codexNotifyRunsMurmur(home: string = hookHome()): string | null {
-  const path = join(home, ".codex", "config.toml");
+export function codexNotifyRunsMurmur(
+  home: string = hookHome(),
+  env: NodeJS.ProcessEnv = process.env,
+): string | null {
+  const path = join(movedDir(env, "CODEX_HOME") ?? join(home, ".codex"), "config.toml");
   let text: string;
   try {
     text = readFileSync(path, "utf8");
@@ -432,7 +443,26 @@ export type HookInstallResult = {
   notifyConfig?: string;
 };
 
-function targetPaths(target: HookTarget, home: string): { path: string; dir: string } {
+/** A harness's config directory as its variable sets it, or null when unset or empty. */
+function movedDir(env: NodeJS.ProcessEnv, name: string): string | null {
+  const value = env[name];
+  return value ? resolve(value) : null;
+}
+
+/**
+ * One target's config file and directory: under `home`, unless its variable
+ * (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`) moves the directory, as muzzle and
+ * museum read them too. Muse Code's and the Cursor CLI's stay under `home`.
+ */
+function targetPaths(
+  target: HookTarget,
+  home: string,
+  env: NodeJS.ProcessEnv = process.env,
+): { path: string; dir: string } {
+  const moved = target.envDir ? movedDir(env, target.envDir) : null;
+  if (moved !== null) {
+    return { path: join(moved, ...target.file.slice(target.dir.length)), dir: moved };
+  }
   return { path: join(home, ...target.file), dir: join(home, ...target.dir) };
 }
 
@@ -444,11 +474,12 @@ function targetPaths(target: HookTarget, home: string): { path: string; dir: str
  * One harness's failure never stops the others.
  */
 export function installHooks(
-  opts: { home?: string; harnesses?: readonly HookHarness[] } = {},
+  opts: { home?: string; harnesses?: readonly HookHarness[]; env?: NodeJS.ProcessEnv } = {},
 ): HookInstallResult[] {
   const home = opts.home ?? hookHome();
+  const env = opts.env ?? process.env;
   return HOOK_TARGETS.map((target) => {
-    const { path, dir } = targetPaths(target, home);
+    const { path, dir } = targetPaths(target, home, env);
     const result: HookInstallResult = {
       harness: target.harness,
       path,
@@ -469,7 +500,7 @@ export function installHooks(
       return result;
     }
     if (target.harness === "codex") {
-      const notify = codexNotifyRunsMurmur(home);
+      const notify = codexNotifyRunsMurmur(home, env);
       if (notify !== null) result.notifyConfig = notify;
     }
     return result;
@@ -529,11 +560,12 @@ export type HookCheck = {
  * Read-only. A harness whose config directory and file are both absent is
  * not set up here and is not reported.
  */
-export function checkHooks(opts: { home?: string } = {}): HookCheck[] {
+export function checkHooks(opts: { home?: string; env?: NodeJS.ProcessEnv } = {}): HookCheck[] {
   const home = opts.home ?? hookHome();
+  const env = opts.env ?? process.env;
   const checks: HookCheck[] = [];
   for (const target of HOOK_TARGETS) {
-    const { path, dir } = targetPaths(target, home);
+    const { path, dir } = targetPaths(target, home, env);
     if (!existsSync(dir) && !existsSync(path)) continue;
     const check: HookCheck = {
       harness: target.harness,
@@ -550,7 +582,7 @@ export function checkHooks(opts: { home?: string } = {}): HookCheck[] {
       // Only once codex runs murmur's hooks: before that, `notify` is how its
       // turns are reported at all.
       if (target.harness === "codex" && check.state !== "unhooked") {
-        const notify = codexNotifyRunsMurmur(home);
+        const notify = codexNotifyRunsMurmur(home, env);
         if (notify !== null) check.notifyConfig = notify;
       }
     } catch (error) {
