@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { type Harness, harnessFromArgv, runMode } from "./harnesses.js";
+import type { TmuxServer } from "./types.js";
 
 /**
  * Where a hook event belongs, read from the process table rather than the
@@ -68,6 +69,33 @@ export function readProcessTable(): Map<number, ProcessRow> | null {
 }
 
 /**
+ * The start times of `pids`, in seconds since the epoch, from one `ps`. A pid
+ * that is gone, or whose start time cannot be read, is absent.
+ */
+export function processStartTimes(pids: readonly number[]): Map<number, number> {
+  const times = new Map<number, number>();
+  const wanted = [...new Set(pids)].filter((pid) => Number.isSafeInteger(pid) && pid > 0);
+  if (wanted.length === 0) return times;
+  let output: string;
+  try {
+    output = execFileSync("ps", ["-o", "pid=,ppid=,lstart=,args=", "-p", wanted.join(",")], {
+      encoding: "utf8",
+      timeout: 3000,
+      stdio: ["ignore", "pipe", "ignore"],
+      env: { ...process.env, LC_ALL: "C" },
+    });
+  } catch (error) {
+    // `ps -p` exits 1 when a pid is gone, still listing the live ones.
+    const stdout = (error as { stdout?: unknown }).stdout;
+    output = typeof stdout === "string" ? stdout : "";
+  }
+  for (const row of parseProcessTable(output).values()) {
+    if (row.started !== null) times.set(row.pid, row.started);
+  }
+  return times;
+}
+
+/**
  * Whether a process is a tmux server, by argv. The server keeps the argv of
  * the client that started it (`tmux new-session -d …`) on macOS, and procps
  * shows `tmux: server (…)` on Linux. A tmux CLIENT never has pane processes
@@ -77,6 +105,52 @@ export function isTmuxServerArgs(args: string): boolean {
   const first = args.trim().split(/\s+/)[0] ?? "";
   const base = first.slice(first.lastIndexOf("/") + 1);
   return base === "tmux" || base === "tmux:";
+}
+
+/** tmux's options that take a value (`tmux -h`): the getopt string's `c:f:L:S:T:`. */
+const TMUX_VALUE_OPTIONS = new Set(["c", "f", "L", "S", "T"]);
+
+/**
+ * The socket a tmux server listens on, read from its argv, or null when the
+ * argv cannot say.
+ *
+ * procps titles a server `tmux: server (<socket path>)` on Linux. On macOS the
+ * server keeps the argv of the client that started it, so its `-S <path>` or
+ * `-L <name>` is there, and neither means the default socket. A label is kept
+ * a label rather than a path: the server's `TMUX_TMPDIR` is not the hook's
+ * to know (Muse drops it), so the reader resolves it in its own directory and
+ * checks the pid behind it. A relative `-S` path names nothing without the
+ * starting client's directory, and reads as null.
+ */
+export function serverSocketFromArgs(args: string): TmuxServer | null {
+  const title = /^tmux: server \((\/.*)\)\s*$/.exec(args.trim());
+  if (title?.[1]) return { kind: "path", value: title[1] };
+  if (!isTmuxServerArgs(args)) return null;
+  const argv = args.trim().split(/\s+/).slice(1);
+  let label: string | null = null;
+  let path: string | null = null;
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index] as string;
+    if (arg === "--" || !arg.startsWith("-") || arg === "-") break;
+    for (let at = 1; at < arg.length; at += 1) {
+      const flag = arg[at] as string;
+      if (!TMUX_VALUE_OPTIONS.has(flag)) continue;
+      let value: string | undefined = arg.slice(at + 1);
+      if (value === "") {
+        index += 1;
+        value = argv[index];
+      }
+      if (value === undefined) return null;
+      if (flag === "L") label = value;
+      if (flag === "S") path = value;
+      break;
+    }
+  }
+  // tmux's own precedence: `-S` wins over `-L` in either order.
+  if (path !== null) return path.startsWith("/") ? { kind: "path", value: path } : null;
+  if (label === null || label === "default") return { kind: "default" };
+  if (label.includes("/")) return null;
+  return { kind: "label", value: label };
 }
 
 /** The server pid named by `$TMUX` (`socket,pid,session`), or null. */
@@ -102,6 +176,8 @@ export type Placement =
       kind: "local";
       server_pid: number;
       root_pid: number;
+      /** The server's socket, from its argv (`serverSocketFromArgs`), or null. */
+      server_socket: TmuxServer | null;
       /** The harness process: the run's member nearest the hook. */
       owner_pid: number;
       harness: Harness;
@@ -191,6 +267,7 @@ export function placeEvent(
         kind: "local",
         server_pid: current.pid,
         root_pid: child.pid,
+        server_socket: serverSocketFromArgs(current.args),
         owner_pid: owner.pid,
         harness: owner.harness,
         anchor,

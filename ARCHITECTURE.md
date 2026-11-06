@@ -111,7 +111,9 @@ overrides that row's driver.
 Identity and address are separated:
 
 - **node identity** — `identity.json`, `{host_id, display_name}`. Created only
-  by `murmur init`, and only by it. Survives a store wipe.
+  by `murmur init`, and only by it. Survives a store wipe. A 1.x node's identity
+  is copied, never minted, on the first run of 2.x (see
+  [State directory](#state-directory)).
 - **agent identity** — a random UUID minted per *process instance* when it
   claims a pane. It is not derived from the pane, so a new process in the same
   pane is a different agent, and a late write from a replaced owner matches no
@@ -281,7 +283,9 @@ a core.
 | `collector` | Fetch each peer, validate, replace its cache whole | `channel`, `store` |
 | `mux` | Seam: window/pane queries, tmux state options, attach. One impl: tmux | OS |
 | `process-chain` | **Pure** over a `ps` table: place a hook's event by walking to its tmux server | OS (`ps`) |
-| `inbox` | Write one event file; drain every pane inbox into the store and publish pane options | `store`, `mux`, `process-chain` |
+| `inbox` | Write one event file; drain every pane inbox into the store and publish pane options | `store`, `mux`, `process-chain`, `socket-cache` |
+| `socket-cache` | Remember each tmux server's socket across processes, keyed by pid and start time | state dir, `process-chain` |
+| `legacy-state` | Copy a 1.x node's identity, and a private copy of its store for the peers, on the first run | the 1.x state dir, read only |
 
 `view` and `snapshot` being pure and `store` being the only SQL is the boundary
 that carries the design. All three are testable without a machine, a network or
@@ -322,6 +326,31 @@ caller delivers events, the store decides what each means under its ownership
 rules, and an applied event is deleted. There is no replay, no retention and no
 history. Its read side, `harnessState`, is local-only like `owner_pid`: none of
 it reaches a snapshot.
+
+## State directory
+
+Everything murmur keeps lives in `$XDG_STATE_HOME/murmur2` (by default
+`~/.local/state/murmur2`): `state.db`, `identity.json`, the compile cache and
+the tmux socket cache. The inbox and the remote area are the exception, fixed
+at `~/.local/state/murmur2/{inbox,remote}` whatever `XDG_STATE_HOME` says (see
+[The inbox](#the-inbox)). `MURMUR_STATE_DIR` moves all of it.
+
+The directory is versioned by breaking change, not by release. 1.x used
+`murmur`, and its schema-9 store refuses any store from schema 10 up, so the
+hook-harness store (schema 11) could not share it without breaking a 1.x
+install still running beside it (an older pi extension, say). An additive
+change stays in the current directory; the next breaking one moves to
+`murmur3`.
+
+The first run of 2.x migrates from the 1.x directory (`$XDG_STATE_HOME/murmur`,
+else `~/.local/state/murmur`), never under `MURMUR_STATE_DIR`
+(`src/legacy-state.ts`). The first identity read that finds none, or the first
+open that creates `state.db`, copies `identity.json`, so the host keeps its
+`host_id`; that open also takes the old store's peer names, targets and jump
+commands, from a private copy of the file and its `-wal` and only when its
+schema is one this build reads. Nothing in the old directory is written, moved
+or deleted, not even a `-shm`, so 1.x keeps working there; agents and attention
+are not carried, and reappear on their next event.
 
 ## The data model
 
@@ -475,14 +504,16 @@ keep `last_text_run` in step with `last_text`, which is the cost the stamp
 accepts for an additive column.
 
 **Identity is never minted by the store.** `openStore()` takes no arguments and
-does not read `identity.json`. `createIdentity` is called only by `murmur init`;
-`setDisplayName` backs `murmur init --name` on an existing node and keeps its
-`host_id`. Every command that needs a `host_id` — `export`, `collect`, `status`,
-`pick`, `doctor` — calls `loadIdentity()` and fails with `murmur is not
-initialised on this node; run: murmur init`. A node that came into existence as a
-side effect of a status-bar tick has an identity nobody chose. `peer` reads
-identity opportunistically instead: `peer add` uses it only to refuse adding this
-node to itself, so an uninitialised node can still configure peers and that
+creates no identity; the one file it touches is a 1.x node's `identity.json`,
+copied when it creates the store for the first time (migration, not minting; see
+[State directory](#state-directory)). `createIdentity` is called only by `murmur
+init`; `setDisplayName` backs `murmur init --name` on an existing node and keeps
+its `host_id`. Every command that needs a `host_id` — `export`, `collect`,
+`status`, `pick`, `doctor` — calls `loadIdentity()` and fails with `murmur is
+not initialised on this node; run: murmur init`. A node that came into existence
+as a side effect of a status-bar tick has an identity nobody chose. `peer` reads
+identity opportunistically instead: `peer add` uses it only to refuse adding
+this node to itself, so an uninitialised node can still configure peers and that
 refusal is best effort.
 
 `notify` and `clear` are absent from that list as a consequence of the model
@@ -525,7 +556,11 @@ murmur status / pane / dash / export ─► drain the inbox into the store under
 ```
 
 **One event, one file.** A hook maps one payload to a canonical event, writes it
-under `inbox/tmp/` and links it to `inbox/<pane key>/<ns timestamp>-<pid>.json`.
+under `inbox/tmp/` and links it to `inbox/<pane key>/<ns timestamp>-<pid>.json`,
+in `~/.local/state/murmur2/inbox` whatever `XDG_STATE_HOME` says: Muse's hooks
+keep `HOME` and lose `XDG_STATE_HOME`, so writers and readers agree on the home
+path (`homeStateDir`; `MURMUR_STATE_DIR` still moves it). The remote area sits
+beside it for the same reason.
 A reader never sees a partial event, whatever its size. The hook opens no
 database, takes no lock, calls no tmux and prints nothing, and stops writing for
 a pane past 10,000 waiting files (`doctor` reports it).
@@ -534,30 +569,42 @@ a pane past 10,000 waiting files (`doctor` reports it).
 its hooks' environment, so a hook reads the process table once and walks its
 parents to the tmux server (field 2 of `$TMUX` when set, else the tmux argv).
 The pane root is the ancestor right below the server, and the pane key is a hash
-of the server pid and the root pid. Harnesses are matched by argv
-(`src/harnesses.ts`), and an adjacent run of one harness -- a launcher and the
-binary it starts -- is one harness. A second, separate harness before the server
-means a nested agent, and nothing is written; so does a chain that never reaches
-a tmux server. A one-shot run (`codex exec`, `muse exec`, `claude -p`/`--print`,
-`cursor-agent -p`/`--print`, read from the harness's own arguments by `runMode`;
-`codex e` and `codex review` count too) with an interactive member of the same
-harness above it is a nested agent too, though no shell separates them: the run
-splits where it turns one-shot. A member whose arguments cannot tell -- a
-launcher option murmur does not know, before a bare argument that may be its
-value -- never splits a run. A one-shot run on its own in a pane is that pane's
-harness. An anchor file mu wrote for an ancestor supplies the agent's identity.
-Anchors are read from `~/.local/state/mu-next/anchors/<pid>.json` first,
-whatever the environment says, then from `$XDG_STATE_HOME/mu-next/anchors` when
-that is another directory: Muse's hooks keep `HOME` and lose `XDG_STATE_HOME`,
-so the home path is the one place every hook can find. An anchor counts only
-when its `start_time` matches the process's; a stale file at home does not hide
-a live one in the fallback.
+of the server pid and the root pid. The event also records the server's socket
+as the server's argv names it (`server_socket`: `-S <path>`, `-L <name>`, the
+default, or procps's `tmux: server (<path>)` title on Linux), because a hook
+with no `$TMUX` otherwise leaves the drain only a pid to find the server by.
+Harnesses are matched by argv (`src/harnesses.ts`), and an adjacent run of one
+harness -- a launcher and the binary it starts -- is one harness. A second,
+separate harness before the server means a nested agent, and nothing is written;
+so does a chain that never reaches a tmux server. A one-shot run (`codex exec`,
+`muse exec`, `claude -p`/`--print`, `cursor-agent -p`/`--print`, read from the
+harness's own arguments by `runMode`; `codex e` and `codex review` count too)
+with an interactive member of the same harness above it is a nested agent too,
+though no shell separates them: the run splits where it turns one-shot. A member
+whose arguments cannot tell -- a launcher option murmur does not know, before a
+bare argument that may be its value -- never splits a run. A one-shot run on its
+own in a pane is that pane's harness. An anchor file mu wrote for an ancestor
+supplies the agent's identity. Anchors are read from
+`~/.local/state/mu-next/anchors/<pid>.json` first, whatever the environment
+says, then from `$XDG_STATE_HOME/mu-next/anchors` when that is another
+directory: Muse's hooks keep `HOME` and lose `XDG_STATE_HOME`, so the home path
+is the one place every hook can find. An anchor counts only when its
+`start_time` matches the process's; a stale file at home does not hide a live
+one in the fallback.
 
 **Readers drain.** Under the store's write lock (`ingestInbox`, `IMMEDIATE`), a
 reader lists each pane's inbox in name order, applies each event and deletes the
 file. Before that, outside the lock, it maps each inbox's server pid to a tmux
 server and its root pid to a pane (`list-panes -F '#{pane_pid} #{pane_id}'`),
-and deletes the inbox of a dead server or a gone pane. An inbox whose server pid
+and deletes the inbox of a dead server or a gone pane. A server pid is located
+cheapest first: the socket cache (`tmux-sockets.json` in the state directory,
+which outlives the process and counts an entry only while the pid's start time
+matches), then the event's `$TMUX`, then its `server_socket`, then the reader's
+own server (`$TMUX`), each checked by asking that socket for its pid, and only
+then by asking each socket in tmux's directory, skipping the ones the cache
+says belong to another live server or answered nothing in the last ten minutes.
+Asking a socket that accepts and never answers costs a tmux client its full
+3 s, which is what the cache and the order are for. An inbox whose server pid
 is alive but answers on no socket the drain can find waits for a later drain,
 until its oldest event is an hour old. A drained inbox's emptied directory is
 removed (non-recursively, so a hook that just linked an event keeps it; a hook
@@ -715,9 +762,13 @@ nested one.
 
 `murmur pane <pane> --json` drains first and prints one pane's state with the
 harness-side fields (`run_count`, `session_id`, `last_text`, `last_text_run`),
-for mu's send gate and acknowledgement. `murmur pane --remote` reports
-`last_text_run` the same way. None of those fields reach the snapshot: `toAgent`
-picks its fields explicitly, and a test pins the document byte for byte.
+for mu's send gate and acknowledgement. It drains that pane's inbox and no
+other: one `display-message` on the server it reads against (`-L`/`-S`, else
+`$TMUX`) gives the server and root pids that name the inbox, so it never looks
+for another inbox's server, and a slow one costs a later `status`, not mu's
+send gate. `murmur pane --remote` reports `last_text_run` the same way. None of
+those fields reach the snapshot: `toAgent` picks its fields explicitly, and a
+test pins the document byte for byte.
 
 **The remote area.** A worker mu starts on this node for a pane on another
 (D11) carries a remote key, `<origin host>/<origin pane key>`, in its anchor or
@@ -1547,7 +1598,9 @@ each was cheaper to accept than to solve:
    dash's pane glance is a live `capture-pane`, not a replay.
 2. **No compatibility with older nodes.** A pre-rewrite `events.db` is not
    migrated, and any `state.db` from a different `user_version` is rebuilt with
-   only peer names and targets salvaged. A node serving the old event format is
+   only peer names and targets salvaged. A change that breaks a released
+   build's store moves to a new state directory instead (see
+   [State directory](#state-directory)). A node serving the old event format is
    reported as reachable-but-broken, which is the honest description: the two
    cannot federate.
 3. **No incremental sync.** Every collect transfers each peer's whole snapshot,

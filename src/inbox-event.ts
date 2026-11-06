@@ -1,5 +1,5 @@
 import { type Harness, isHarness } from "./harnesses.js";
-import type { Driver } from "./types.js";
+import type { Driver, TmuxServer } from "./types.js";
 
 /**
  * The canonical inbox event: what `murmur hook <harness>` writes for one hook
@@ -53,6 +53,13 @@ export type InboxEvent = {
   /** `$TMUX` and `$TMUX_PANE` when the hook had them, as a cross-check. */
   tmux: string | null;
   tmux_pane: string | null;
+  /**
+   * The server's socket as its argv names it (`serverSocketFromArgs`), so a
+   * drain finds the server of a hook that had no `$TMUX` without asking every
+   * socket. A hint: the drain checks the pid behind it. Absent from older
+   * hooks' events.
+   */
+  server_socket?: TmuxServer | null;
   session_id: string | null;
   /** `session_start`'s source: `startup`, `resume`, `clear` or `compact`. */
   source: string | null;
@@ -87,13 +94,19 @@ function optionalText(value: unknown): string | null | undefined {
  * and pane root. mu's own remote events (`murmur hook mu --remote`) name no
  * owner and may name no harness: they apply to whoever holds the key.
  */
-export type RemoteEvent = Omit<InboxEvent, "harness" | "server_pid" | "root_pid" | "owner_pid"> & {
+export type RemoteEvent = Omit<
+  InboxEvent,
+  "harness" | "server_pid" | "root_pid" | "owner_pid" | "server_socket"
+> & {
   remote_key: string;
   harness: Harness | null;
   owner_pid: number | null;
 };
 
-type EventBody = Omit<InboxEvent, "v" | "harness" | "server_pid" | "root_pid" | "owner_pid">;
+type EventBody = Omit<
+  InboxEvent,
+  "v" | "harness" | "server_pid" | "root_pid" | "owner_pid" | "server_socket"
+>;
 
 /** The fields every event shares, validated, or null. */
 function parseBody(record: Record<string, unknown>): EventBody | null {
@@ -164,7 +177,27 @@ export function parseInboxEvent(raw: string): InboxEvent | null {
     server_pid: record.server_pid,
     root_pid: record.root_pid,
     owner_pid: record.owner_pid,
+    server_socket: parseServerSocket(record.server_socket),
   };
+}
+
+/**
+ * An event's `server_socket`, or null. Only a hint, so a malformed one reads
+ * as none rather than costing the event.
+ */
+export function parseServerSocket(value: unknown): TmuxServer | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  if (record.kind === "default") return { kind: "default" };
+  if ((record.kind !== "label" && record.kind !== "path") || typeof record.value !== "string") {
+    return null;
+  }
+  // A label is a name in the reader's socket directory, never a path out of it.
+  if (record.value === "") return null;
+  if (record.kind === "path" ? !record.value.startsWith("/") : record.value.includes("/")) {
+    return null;
+  }
+  return { kind: record.kind, value: record.value };
 }
 
 /** One remote-area event, validated, or null. Total, like `parseInboxEvent`. */

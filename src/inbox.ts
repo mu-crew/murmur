@@ -15,6 +15,7 @@ import {
   tmuxArgs,
 } from "./mux.js";
 import { type ProcessTable, readProcessTable, treeRuns } from "./process-chain.js";
+import { loadSocketCache, type SocketCache, type SocketStat } from "./socket-cache.js";
 import type { Store } from "./store.js";
 import type { InboxDelivery, IngestSummary, LiveCheck, Location, TmuxServer } from "./types.js";
 
@@ -40,6 +41,13 @@ export { INBOX_PANE_CAP, inboxDir, inboxKey, writeInboxEvent } from "./inbox-fil
 export type InboxPane = { location: Location; focused: boolean };
 
 /**
+ * What a hook recorded about its tmux server, beyond the pid: `$TMUX` when it
+ * had one, and the socket the server's argv names. Both are hints the host
+ * checks against the pid.
+ */
+export type ServerHints = { tmux: string | null; socket: TmuxServer | null };
+
+/**
  * What the drain asks of tmux and the process table. A seam so tests need
  * neither, and so the real one can cache within a drain.
  */
@@ -48,9 +56,9 @@ export interface InboxHost {
   /**
    * The tmux server whose pid is `serverPid`, mapped the way the collector maps
    * one (`deriveTmuxServer` over its socket path), or null when no server
-   * answers to it. `tmuxEnv` is the `$TMUX` the hook saw, when it had one.
+   * answers to it.
    */
-  serverFor(serverPid: number, tmuxEnv: string | null): TmuxServer | null;
+  serverFor(serverPid: number, hints: ServerHints): TmuxServer | null;
   /** That server's panes by pane pid. Null when tmux could not answer. */
   panes(server: TmuxServer): ReadonlyMap<number, InboxPane> | null;
   /**
@@ -59,6 +67,8 @@ export interface InboxHost {
    * not the pane's owner.
    */
   piRunsUnder(rootPid: number, except: number): boolean;
+  /** Called once when the drain is done with the host: the real one saves its socket cache. */
+  done?(): void;
 }
 
 function runTmux(server: TmuxServer | undefined, args: string[]): string | null {
@@ -79,53 +89,127 @@ function serverPidAt(socket: string): number | null {
   return Number.isInteger(pid) && pid > 0 ? pid : null;
 }
 
+function socketStat(socket: string): SocketStat | null {
+  try {
+    const stat = statSync(socket);
+    return { ino: stat.ino, mtime: stat.mtimeMs };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The server a reader runs inside or was pointed at: `$TMUX`'s socket. The
+ * drain asks it first, since a hook's pane is most often on the reader's own
+ * server.
+ */
+export function ownServers(env: NodeJS.ProcessEnv = process.env): TmuxServer[] {
+  const socket = env.TMUX?.split(",")[0];
+  return socket ? [{ kind: "path", value: socket }] : [];
+}
+
+export type TmuxInboxHostOptions = {
+  /**
+   * Where a server named by label, and a server with no hint at all, is looked
+   * for: tmux's own directory unless a test points it at a private one.
+   */
+  socketDirectory?: string;
+  /** The reader's own servers (`-L`/`-S`, else `$TMUX`), asked before any scan. */
+  own?: readonly TmuxServer[];
+  /** Servers already known by pid, which need no lookup at all. */
+  known?: ReadonlyMap<number, TmuxServer>;
+  /** The pid-to-socket cache that outlives this process; null for none. */
+  cache?: SocketCache | null;
+};
+
 /**
  * The real host: tmux and `ps`, each asked at most once per server per drain.
  *
- * `socketDirectory` is where a server with no `$TMUX` hint is looked for:
- * tmux's own directory unless a test points it at a private one.
+ * A server pid is located, cheapest first, by: a server already known; the
+ * socket cache, when the pid's start time still matches; the socket the hook's
+ * `$TMUX` named; the socket its server's argv named; the reader's own servers;
+ * and only then by asking each socket in tmux's directory that the cache does
+ * not rule out. Every candidate is checked by asking it for its pid, and every
+ * answer goes into the cache.
  */
-export function tmuxInboxHost(options: { socketDirectory?: string } = {}): InboxHost {
-  const servers = new Map<number, TmuxServer | null>();
+export function tmuxInboxHost(options: TmuxInboxHostOptions = {}): InboxHost {
+  const servers = new Map<number, TmuxServer | null>(options.known ?? []);
   const panes = new Map<string, ReadonlyMap<number, InboxPane> | null>();
   let table: ProcessTable | null | undefined;
   const piUnder = new Map<string, boolean>();
+  const cache = options.cache === undefined ? loadSocketCache() : options.cache;
+  let directory: string | null | undefined;
+  const socketDirectory = (): string | null => {
+    if (directory !== undefined) return directory;
+    try {
+      directory = options.socketDirectory ?? conventionalTmuxDirectory();
+    } catch {
+      directory = null;
+    }
+    return directory;
+  };
+  const socketOf = (server: TmuxServer): string | null => {
+    if (server.kind === "path") return server.value;
+    const dir = socketDirectory();
+    return dir === null ? null : join(dir, server.kind === "label" ? server.value : "default");
+  };
+  const own = options.own ?? ownServers();
   return {
     isAlive: pidAlive,
-    serverFor(serverPid, tmuxEnv) {
+    serverFor(serverPid, hints) {
       const known = servers.get(serverPid);
       if (known !== undefined) return known;
-      let found: TmuxServer | null = null;
-      // `$TMUX` names the socket outright; confirm the pid behind it, since a
-      // restarted server can reuse the path.
-      const hinted = tmuxEnv?.split(",")[0];
-      if (hinted && serverPidAt(hinted) === serverPid) {
-        found = deriveTmuxServer(hinted);
-      } else {
-        // No `$TMUX` (a harness that clears its hooks' environment): ask each
-        // socket in tmux's own directory which server it is.
-        let directory: string | null = options.socketDirectory ?? null;
-        try {
-          directory ??= conventionalTmuxDirectory();
-        } catch {
-          directory = null;
-        }
-        let entries: string[] = [];
-        try {
-          entries = directory ? readdirSync(directory) : [];
-        } catch {
-          entries = [];
-        }
-        for (const entry of entries) {
-          const socket = join(directory as string, entry);
-          if (serverPidAt(socket) === serverPid) {
-            found = deriveTmuxServer(socket);
-            break;
+      let found: string | null = cache?.server(serverPid) ?? null;
+      if (found === null) {
+        const asked = new Set<string>();
+        const ask = (socket: string | null): boolean => {
+          if (socket === null || asked.has(socket)) return false;
+          asked.add(socket);
+          const pid = serverPidAt(socket);
+          cache?.record(socket, socketStat(socket), pid);
+          return pid === serverPid;
+        };
+        // `$TMUX` names the socket outright; the pid behind it is still
+        // confirmed, since a restarted server can reuse the path.
+        const hinted = [
+          hints.tmux?.split(",")[0] || null,
+          hints.socket ? socketOf(hints.socket) : null,
+          ...own.map(socketOf),
+        ];
+        found = hinted.find(ask) ?? null;
+        if (found === null) {
+          // No hint answered (an older hook's event, a server on a socket of
+          // its own): ask each socket in tmux's own directory the cache does
+          // not rule out.
+          const dir = socketDirectory();
+          let entries: string[] = [];
+          try {
+            entries = dir ? readdirSync(dir).sort() : [];
+          } catch {
+            entries = [];
+          }
+          for (const entry of entries) {
+            const socket = join(dir as string, entry);
+            if (asked.has(socket)) continue;
+            const stat = socketStat(socket);
+            if (stat && cache?.skip(socket, stat, serverPid, pidAlive)) continue;
+            if (ask(socket)) {
+              found = socket;
+              break;
+            }
           }
         }
       }
-      servers.set(serverPid, found);
-      return found;
+      let server: TmuxServer | null = null;
+      if (found !== null) {
+        try {
+          server = deriveTmuxServer(found);
+        } catch {
+          server = { kind: "path", value: found };
+        }
+      }
+      servers.set(serverPid, server);
+      return server;
     },
     panes(server) {
       const key = `${server.kind}\0${"value" in server ? server.value : ""}`;
@@ -171,6 +255,9 @@ export function tmuxInboxHost(options: { socketDirectory?: string } = {}): Inbox
       piUnder.set(key, runs);
       return runs;
     },
+    done() {
+      cache?.save(pidAlive);
+    },
   };
 }
 
@@ -178,6 +265,12 @@ export type DrainOptions = {
   host?: InboxHost;
   mux?: Mux;
   dir?: string;
+  /**
+   * Drain only these pane inboxes (`inboxKey`), leaving every other one for a
+   * later reader: `murmur pane` drains the pane it was asked about and no
+   * other, so it never waits on another inbox's server.
+   */
+  keys?: readonly string[];
 };
 
 export type DrainSummary = IngestSummary & {
@@ -296,7 +389,30 @@ export function drainInbox(store: Store, options: DrainOptions = {}): DrainSumma
   } catch {
     return EMPTY;
   }
+  if (options.keys) {
+    const keys = new Set(options.keys);
+    entries = entries.filter((entry) => keys.has(entry));
+    if (entries.length === 0) return EMPTY;
+  }
   const host = options.host ?? tmuxInboxHost();
+  try {
+    return drainWith(store, host, dir, entries, options);
+  } finally {
+    try {
+      host.done?.();
+    } catch {
+      // A cache not saved is a cache rebuilt by the next drain.
+    }
+  }
+}
+
+function drainWith(
+  store: Store,
+  host: InboxHost,
+  dir: string,
+  entries: readonly string[],
+  options: DrainOptions,
+): DrainSummary {
   sweepTemporaries(join(dir, "tmp"));
   let removed = 0;
   const located: { paneDir: string; server_pid: number; root_pid: number; pane: InboxPane }[] = [];
@@ -326,7 +442,10 @@ export function drainInbox(store: Store, options: DrainOptions = {}): DrainSumma
       if (removeDir(paneDir)) removed += 1;
       continue;
     }
-    const server = host.serverFor(first.server_pid, first.tmux);
+    const server = host.serverFor(first.server_pid, {
+      tmux: first.tmux,
+      socket: first.server_socket ?? null,
+    });
     if (!server) {
       // Left for a later drain, but not forever: an inbox no drain can locate
       // would otherwise grow to the cap and be searched for on every drain.

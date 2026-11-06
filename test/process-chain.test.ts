@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -11,7 +12,9 @@ import {
   paneHarness,
   parseProcessTable,
   placeEvent,
+  processStartTimes,
   readProcessTable,
+  serverSocketFromArgs,
   treeRuns,
 } from "../src/process-chain.js";
 import { fixture, ROOT, tableOf } from "./helpers/u0.js";
@@ -55,6 +58,8 @@ test("a launcher and the binary it starts count as one harness", () => {
     kind: "local",
     server_pid: claude.pids[4],
     root_pid: claude.pids[3],
+    // No -L or -S in the server's argv: the default socket.
+    server_socket: { kind: "default" },
     // The run's member nearest the hook: the binary, which is what CLAUDE_PID names.
     owner_pid: claude.pids[1],
     harness: "claude",
@@ -477,4 +482,67 @@ test("outerHarness finds the live hook harness a pi runs inside, below the serve
 
   // A walk that never meets the named server cannot tell, and reads as not nested.
   expect(outerHarness(nested.table, nested.pids[0] as number, 99_999)).toBeNull();
+});
+
+test("the server's socket is read from its argv: -S, -L, the default, procps's title", () => {
+  // macOS keeps the argv of the client that started the server.
+  expect(serverSocketFromArgs("tmux -S /tmp/rig/s -f /dev/null new-session -d")).toEqual({
+    kind: "path",
+    value: "/tmp/rig/s",
+  });
+  expect(serverSocketFromArgs("/opt/homebrew/bin/tmux -L mule new -d")).toEqual({
+    kind: "label",
+    value: "mule",
+  });
+  expect(serverSocketFromArgs("tmux -Lmule new -d")).toEqual({ kind: "label", value: "mule" });
+  expect(serverSocketFromArgs("tmux -2u -S/tmp/x/s attach")).toEqual({
+    kind: "path",
+    value: "/tmp/x/s",
+  });
+  // tmux's precedence: -S wins over -L in either order.
+  expect(serverSocketFromArgs("tmux -S /tmp/x/s -L other new")).toEqual({
+    kind: "path",
+    value: "/tmp/x/s",
+  });
+  expect(serverSocketFromArgs(SERVER_ARGS)).toEqual({ kind: "default" });
+  expect(serverSocketFromArgs("tmux -L default new")).toEqual({ kind: "default" });
+  // An option value that looks like -L is a value: -f takes the next word.
+  expect(serverSocketFromArgs("tmux -f -L new")).toEqual({ kind: "default" });
+  // Options stop at the command: a `-L` after it is the command's.
+  expect(serverSocketFromArgs("tmux new-session -L x")).toEqual({ kind: "default" });
+  // Linux: procps shows the title tmux sets, with the absolute socket path.
+  expect(serverSocketFromArgs("tmux: server (/tmp/tmux-1000/default)")).toEqual({
+    kind: "path",
+    value: "/tmp/tmux-1000/default",
+  });
+  // A relative -S names nothing without the client's directory.
+  expect(serverSocketFromArgs("tmux -S rel/s new")).toBeNull();
+  expect(serverSocketFromArgs("tmux -L")).toBeNull();
+  expect(serverSocketFromArgs("bash -l")).toBeNull();
+});
+
+test("a placement records the server's socket from its argv, $TMUX or not", () => {
+  const rig = chain(HOOK, "/opt/claude/bin/claude", "-zsh", "tmux -L mule new-session -d");
+  const placement = placeEvent(rig.table, rig.pids[0] as number);
+  expect(placement).toMatchObject({
+    kind: "local",
+    server_pid: rig.pids[3],
+    server_socket: { kind: "label", value: "mule" },
+  });
+  const hinted = placeEvent(rig.table, rig.pids[0] as number, {
+    tmuxEnv: `/tmp/tmux-501/mule,${rig.pids[3]},0`,
+  });
+  expect(hinted).toMatchObject({ server_socket: { kind: "label", value: "mule" } });
+});
+
+test("processStartTimes reads live pids and leaves out gone ones", () => {
+  const gone = Number(
+    execFileSync(process.execPath, ["-e", "process.stdout.write(String(process.pid))"], {
+      encoding: "utf8",
+    }),
+  );
+  const times = processStartTimes([process.pid, gone]);
+  expect(times.get(process.pid)).toBeGreaterThan(1_600_000_000);
+  expect(times.has(gone)).toBe(false);
+  expect(processStartTimes([]).size).toBe(0);
 });

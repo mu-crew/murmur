@@ -1,7 +1,7 @@
 import type { Command } from "commander";
 import { asPaneId, type PaneId } from "../ids.js";
-import { type DrainOptions, drainInbox } from "../inbox.js";
-import { deriveTmuxServer, tmuxAgentState } from "../mux.js";
+import { type DrainOptions, drainInbox, inboxKey, tmuxInboxHost } from "../inbox.js";
+import { deriveTmuxServer, paneAddress, tmuxAgentState } from "../mux.js";
 import { drainRemote } from "../remote.js";
 import { openStore, type Store } from "../store.js";
 import type { SnapshotAttention, TmuxServer } from "../types.js";
@@ -99,6 +99,32 @@ export function paneReport(
 }
 
 /**
+ * The drain `murmur pane` runs: the requested pane's inbox and no other.
+ *
+ * The pane's server and root pid come from one `display-message` on the
+ * server it is read against, and they name its inbox outright (`inboxKey`),
+ * so the drain asks no other server and never waits on another pane's inbox:
+ * an inbox whose server is hard to find (a hook with no `$TMUX`, a socket that
+ * accepts and never answers) is a later `status`'s cost, not mu's send gate's.
+ * False -- nothing to drain -- when that server has no such pane: no inbox
+ * can hold an event for it.
+ */
+export function paneDrain(pane: PaneId, server: TmuxServer): DrainOptions | false {
+  const address = paneAddress(pane, server);
+  if (address === null) return false;
+  let located: TmuxServer;
+  try {
+    located = deriveTmuxServer(address.socket);
+  } catch {
+    located = { kind: "path", value: address.socket };
+  }
+  return {
+    keys: [inboxKey(address.server_pid, address.root_pid)],
+    host: tmuxInboxHost({ known: new Map([[address.server_pid, located]]), cache: null }),
+  };
+}
+
+/**
  * The server a pane id is read against: `-L`/`-S` when given, else the server
  * this command runs inside (`$TMUX`), else the default one.
  */
@@ -160,7 +186,9 @@ export function registerPane(program: Command): void {
         }
         const store = openStore();
         try {
-          const report = paneReport(store, asPaneId(raw), paneServer(options));
+          const pane = asPaneId(raw);
+          const server = paneServer(options);
+          const report = paneReport(store, pane, server, paneDrain(pane, server));
           process.stdout.write(
             options.json
               ? `${JSON.stringify(report, null, 2)}\n`

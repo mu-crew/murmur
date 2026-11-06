@@ -5,14 +5,21 @@ so it says what changed for a user rather than listing every commit.
 
 ## Unreleased
 
-**Store reset, once: upgrade the CLI and the pi package together.** The store
-moves to schema 11 for the hook-harness inbox. The first open by the new build
-resets it, keeping peers; running pi agents reappear on their next event, or
-on `/new`. An older build refuses the new store and goes silent until it is
-upgraded. The store is also stamped "compatible since 10", so a later release
-that only adds columns will not force another reset; schema 11 is itself such
-an addition over schema 10 (`last_text_run`, below). No snapshot change: nodes
-still federate across versions.
+**State moves to `~/.local/state/murmur2`: upgrade the CLI and the pi package
+together.** The hook-harness inbox needs a new store (schema 11), and murmur
+1.5.2 refuses any store from schema 10 up, so sharing 1.x's
+`~/.local/state/murmur` would break a 1.x murmur still running beside it (an
+older pi extension, say). Everything murmur keeps -- store, identity, inbox,
+remote area, compile cache -- now lives in `murmur2` (`$XDG_STATE_HOME/murmur2`
+when set; the inbox and remote area always under the home directory, since
+Muse's hooks drop `XDG_STATE_HOME`; `MURMUR_STATE_DIR` still moves it all).
+The first command copies the node's identity, so peers still know its
+`host_id`, and the old store's peers; it never writes to the old directory, so
+1.x keeps working there. Agents and attention are not carried: running pi
+agents reappear on their next event, or on `/new`, once their extension is the
+new one. A 1.x and a 2.x murmur do not see each other's agents. The store is
+stamped "compatible since 10", so a later release that only adds columns will
+not move again. No snapshot change: nodes still federate across versions.
 
 **The pane inbox.** Hook harnesses (claude, codex, cursor-agent, muse) get
 a per-pane inbox of event files that every reader -- `status`, the dash, the
@@ -72,7 +79,24 @@ build that cannot load it. Without the variable pi behaves exactly as before.
 
 **`murmur pane <pane> --json`.** One local pane's state after draining the
 inbox, with the hook harness's `run_count`, `session_id` and last turn text.
-`murmur doctor` reports a pane inbox that has hit its 10,000-event cap.
+It drains only that pane's inbox, found from one tmux call on the server it
+reads against, so it stays fast however many other inboxes wait or sockets sit
+in tmux's directory. `murmur doctor` reports a pane inbox that has hit its
+10,000-event cap.
+
+**Finding a hook's tmux server without `$TMUX`.** Muse's hooks run with no
+`$TMUX`, and the drain used to find their server by asking every socket in
+tmux's directory in turn, 3 s for each one that never answered, in every
+process. A hook now records the server's socket from the server's own argv,
+the drain asks the reader's own server next, and a cache in the state
+directory (`tmux-sockets.json`, checked against each server's start time)
+remembers every answer across processes, so a scan happens once, not on every
+read.
+
+**`CLAUDE_CONFIG_DIR` and `CODEX_HOME`.** `murmur init` writes, and
+`murmur doctor` checks, Claude Code's and codex's hook files in the directories
+those variables name when set, as the harnesses themselves, muzzle and museum
+do, instead of always under `~/.claude` and `~/.codex`.
 
 **`last_text_run`: which turn wrote the last text.** `murmur pane --json` and
 `murmur pane --remote --json` report `last_text_run`, the `run_count` of the

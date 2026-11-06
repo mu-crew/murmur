@@ -33,6 +33,16 @@ npm run lint:fix   # biome check --write: fixes lint AND formatting
 - `git commit --no-verify` exists for WIP on a branch. Do not use it to land
   work on `main`.
 
+## State directories
+
+A change that breaks on-disk state compatibility with the released version
+gets a new versioned directory under `~/.local/state` (`<tool><major>`, e.g.
+`mu5`, `murmur2`), never a `<tool>-next` name; additive changes stay in the
+current directory. Never run a development build against the real state
+directory: tests and manual runs use the tool's state-dir override
+(`MURMUR_STATE_DIR`, plus a temp `HOME` for the 1.x migration) and a private
+tmux socket.
+
 ## npm registry proxy
 
 The dev shell can set `HTTPS_PROXY` and `https_proxy` to an unavailable local

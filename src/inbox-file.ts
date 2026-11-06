@@ -3,7 +3,7 @@ import { linkSync, mkdirSync, readdirSync, renameSync, unlinkSync, writeFileSync
 import { join } from "node:path";
 import { ensureDir } from "./dirs.js";
 import type { InboxEvent, RemoteEvent } from "./inbox-event.js";
-import { stateDir } from "./paths.js";
+import { homeStateDir } from "./paths.js";
 
 /**
  * The write side of the pane inbox and the remote area: one event, one file,
@@ -17,8 +17,13 @@ import { stateDir } from "./paths.js";
 /** Past this many waiting files a pane's hook stops writing. `doctor` reports it. */
 export const INBOX_PANE_CAP = 10_000;
 
+/**
+ * `~/.local/state/murmur2/inbox`, under the home directory whatever
+ * `XDG_STATE_HOME` says (see `homeStateDir`): Muse's hooks never see that
+ * variable, and every writer and reader must name the same directory.
+ */
 export function inboxDir(): string {
-  return join(stateDir(), "inbox");
+  return join(homeStateDir(), "inbox");
 }
 
 /**
@@ -57,7 +62,7 @@ export function writeInboxEvent(
  * remote worker, so the origin node stays the one writer of that pane's row.
  */
 export function remoteDir(): string {
-  return join(stateDir(), "remote");
+  return join(homeStateDir(), "remote");
 }
 
 /** Where a writer that died between write and link leaves its file. Dot-named: no key encodes to it. */

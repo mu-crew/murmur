@@ -1,4 +1,3 @@
-import { execFileSync } from "node:child_process";
 import type { Command } from "commander";
 import { anchorLookup } from "../anchors.js";
 import {
@@ -13,7 +12,7 @@ import {
 import { type HookPayload, hasHookRow } from "../hook-rows.js";
 import type { InboxEvent } from "../inbox-event.js";
 import { remoteKeyName, writeInboxEvent, writeRemoteEvent } from "../inbox-file.js";
-import { tmuxArgs } from "../mux.js";
+import { paneAddress } from "../mux.js";
 import { readProcessTable } from "../process-chain.js";
 import type { TmuxServer } from "../types.js";
 import { parsePayload } from "./notify.js";
@@ -67,26 +66,9 @@ export function runHarnessHook(name: string, payload: HookPayload): boolean {
 
 /** The server pid, pane root pid and socket of one pane, from tmux. */
 function resolvePane(pane: string, server: TmuxServer): MuHookTarget | string {
-  let out: string;
-  try {
-    out = execFileSync(
-      "tmux",
-      tmuxArgs(server, [
-        "display-message",
-        "-p",
-        "-t",
-        pane,
-        "#{pid}\t#{pane_pid}\t#{socket_path}",
-      ]),
-      { encoding: "utf8", timeout: 3000, stdio: ["ignore", "pipe", "ignore"] },
-    ).trim();
-  } catch {
-    return `no such pane: ${pane}`;
-  }
-  const [serverPid, rootPid, socket] = out.split("\t");
-  const server_pid = Number(serverPid);
-  const root_pid = Number(rootPid);
-  if (!(server_pid > 0) || !(root_pid > 0) || !socket) return `tmux did not describe ${pane}`;
+  const address = paneAddress(pane, server);
+  if (address === null) return `no such pane: ${pane}`;
+  const { server_pid, root_pid, socket } = address;
   return { server_pid, root_pid, tmux: `${socket},${server_pid},0`, tmux_pane: pane };
 }
 

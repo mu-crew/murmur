@@ -84,6 +84,12 @@ const CLEARED = [
   "MU_PI_CHANNEL",
   // Set in every Claude Code shell, so a suite run from one would inherit it.
   "CLAUDE_PID",
+  // Move Claude Code's and codex's config directories, and with them the hook
+  // files `init` writes and `doctor` reads (src/hook-install.ts). Left in, a
+  // suite run from such a shell would read or rewrite the real files instead
+  // of the MURMUR_HOOK_HOME sandbox.
+  "CLAUDE_CONFIG_DIR",
+  "CODEX_HOME",
   "TMUX",
   "TMUX_PANE",
   "TMUX_TMPDIR",
@@ -99,17 +105,21 @@ const CLEARED = [
  *
  * This is the part a plain delete gets wrong, and it is why the first isolation
  * pass did not stop the damage. `stateDir()` falls back to
- * `$XDG_STATE_HOME/murmur`, else `~/.local/state/murmur` -- the developer's
- * real database. Unsetting MURMUR_STATE_DIR therefore aims the suite at
- * PRODUCTION, and the two states are indistinguishable from inside a test.
+ * `$XDG_STATE_HOME/murmur2`, else `~/.local/state/murmur2` -- the developer's
+ * real database -- and `homeStateDir()` (the inbox and the remote area) falls
+ * back to `~/.local/state/murmur2` whatever XDG says. Unsetting
+ * MURMUR_STATE_DIR therefore aims the suite at PRODUCTION, and the two states
+ * are indistinguishable from inside a test.
  *
  * So the fallbacks are moved instead: XDG_STATE_HOME and XDG_CONFIG_HOME so
  * the last resort is a temp dir, MURMUR_PI_HOME so `pi migrate` cannot move files in
  * the real `~/.pi/agent`, MURMUR_HOOK_HOME so `init` and `doctor` cannot read
  * or rewrite the real `~/.claude`, `~/.codex`, `~/.cursor` or Muse settings,
  * and MURMUR_STATE_DIR/MURMUR_CONFIG_DIR so a test that sets neither still gets
- * a sandbox. Any test that wants its own
- * directory overrides these exactly as before.
+ * a sandbox. MURMUR_STATE_DIR is the only guard on the home-based inbox and
+ * remote area, which ignore XDG_STATE_HOME: a test that deletes it must point
+ * HOME at a temp dir too (test/legacy-state.test.ts does). Any test that wants
+ * its own directory overrides these exactly as before.
  *
  * One directory per test FILE (a setup file runs once per file), created here
  * rather than per test, because a child spawned by a test inherits the

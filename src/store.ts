@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { closeSync, openSync, rmSync } from "node:fs";
+import { closeSync, existsSync, openSync, rmSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname } from "node:path";
 import type BetterSqlite3 from "better-sqlite3";
@@ -8,8 +8,9 @@ import type { NodeIdentity } from "./identity.js";
 import { asPaneId, asSessionId, asWindowId } from "./ids.js";
 import type { InboxEvent } from "./inbox-event.js";
 import { currentJumpCommand, defaultJumpCommand } from "./jump-command.js";
+import { migrateLegacyIdentity, withLegacyStoreCopy } from "./legacy-state.js";
 import { pidAlive } from "./mux.js";
-import { dbPath } from "./paths.js";
+import { dbPath, legacyStateDir, stateDir } from "./paths.js";
 import { ancestry, outerHarness, readProcessTable, tmuxServerPid } from "./process-chain.js";
 import { settledState } from "./settle.js";
 import { parseSnapshot, parseUsage } from "./snapshot.js";
@@ -504,20 +505,23 @@ function withResetLock<T>(path: string, work: () => T): T {
   }
 }
 
+type SalvagedPeer = { name: string; target: string; jump_command?: string };
+
+/** The human-authored fields of every peer in `database`, whatever its schema. */
+function peerRows(database: Database): SalvagedPeer[] {
+  const columns = database.prepare("PRAGMA table_info(peers)").all() as { name: string }[];
+  const jump = columns.some((column) => column.name === "jump_command") ? ", jump_command" : "";
+  return database.prepare(`SELECT name, target${jump} FROM peers`).all() as SalvagedPeer[];
+}
+
 /** Human-authored peer fields, and the only state worth salvaging. */
-function salvagePeers(path: string): { name: string; target: string; jump_command?: string }[] {
+function salvagePeers(path: string): SalvagedPeer[] {
   try {
     const existing = openDatabase(path, { fileMustExist: true });
     try {
       const version = (existing.pragma("user_version", { simple: true }) as number) ?? 0;
       if (usable(existing, version)) return [];
-      const columns = existing.prepare("PRAGMA table_info(peers)").all() as { name: string }[];
-      const jump = columns.some((column) => column.name === "jump_command") ? ", jump_command" : "";
-      return existing.prepare(`SELECT name, target${jump} FROM peers`).all() as {
-        name: string;
-        target: string;
-        jump_command?: string;
-      }[];
+      return peerRows(existing);
     } catch {
       // Too old to have the table, or unreadable. Nothing to save.
       return [];
@@ -527,6 +531,58 @@ function salvagePeers(path: string): { name: string; target: string; jump_comman
   } catch {
     // No database yet, or one too broken to open.
     return [];
+  }
+}
+
+/**
+ * The peers of a 1.x murmur's store, for a store this build is creating for
+ * the first time (see `src/legacy-state.ts`). Read from a private copy, so the
+ * old directory is never written, and only from a schema this build can read:
+ * its own or older, or a newer one whose `compat` stamp admits it.
+ */
+function legacyPeers(from: string | null): SalvagedPeer[] {
+  return withLegacyStoreCopy(
+    from,
+    (copy) => {
+      const existing = openDatabase(copy, { fileMustExist: true });
+      try {
+        const version = (existing.pragma("user_version", { simple: true }) as number) ?? 0;
+        if (version > SCHEMA_USER_VERSION && !usable(existing, version)) return [];
+        return peerRows(existing);
+      } catch {
+        // No peers table (too old), or a copy taken mid-write. Nothing to bring.
+        return [];
+      } finally {
+        existing.close();
+      }
+    },
+    [],
+  );
+}
+
+/**
+ * Whether `path` holds a murmur store of any version: false for no file, and
+ * for the empty one a first open leaves when it dies before its schema commits
+ * (`user_version` 0, no `peers` table). True for a file it cannot read, which
+ * the reset path deals with.
+ */
+function holdsMurmurStore(path: string): boolean {
+  if (!existsSync(path)) return false;
+  try {
+    const existing = openDatabase(path, { fileMustExist: true });
+    try {
+      const version = (existing.pragma("user_version", { simple: true }) as number) ?? 0;
+      if (version !== 0) return true;
+      return (
+        existing
+          .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'peers'")
+          .get() !== undefined
+      );
+    } finally {
+      existing.close();
+    }
+  } catch {
+    return true;
   }
 }
 
@@ -775,9 +831,11 @@ function processNesting(pid: number): NestCheck {
 /**
  * Open the store. Takes no arguments and mints no identity.
  *
- * `openStore` deliberately does NOT read or create `identity.json`: identity is
- * created only by `murmur init`, so a read path — a status-bar tick, a focus
- * hook — cannot bring a node into existence as a side effect.
+ * `openStore` deliberately never mints an `identity.json`: identity is created
+ * only by `murmur init`, so a read path — a status-bar tick, a focus hook —
+ * cannot bring a node into existence as a side effect. The one exception is
+ * migration, not minting: when it creates the store for the first time it
+ * copies a 1.x node's existing `identity.json` across (`src/legacy-state.ts`).
  */
 export function openStore(): Store {
   const path = dbPath();
@@ -818,7 +876,21 @@ export function openStore(): Store {
   const database = withResetLock(path, () => {
     const condition = storeCondition(path);
     if (condition instanceof StoreTooNewError) throw condition;
-    const salvaged = salvagePeers(path);
+    // A store created for the first time starts with a 1.x murmur's peers,
+    // read from its directory without touching it, and takes its identity
+    // along: the first command after an upgrade may never read identity.
+    //
+    // "For the first time" is decided by what the file holds, not by whether it
+    // exists: the file appears at the first `openDatabase` below, before the
+    // schema transaction commits, so an open killed or failed in between would
+    // otherwise leave an empty file that hid the 1.x peers for good.
+    let salvaged: SalvagedPeer[];
+    if (holdsMurmurStore(path)) salvaged = salvagePeers(path);
+    else {
+      const legacy = legacyStateDir();
+      migrateLegacyIdentity(legacy, stateDir());
+      salvaged = legacyPeers(legacy);
+    }
     if (condition === "reset") {
       // SAY WHAT IS BEING THROWN AWAY, on stderr, once.
       //
