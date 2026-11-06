@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { xdgStateHome } from "./paths.js";
 import type { AgentAnchor, AnchorLookup, ProcessRow } from "./process-chain.js";
 
 /**
@@ -30,7 +31,8 @@ import type { AgentAnchor, AnchorLookup, ProcessRow } from "./process-chain.js";
  */
 export function anchorDirs(env: NodeJS.ProcessEnv = process.env, home = homedir()): string[] {
   const primary = join(home, ".local", "state", "mu-next", "anchors");
-  const xdg = env.XDG_STATE_HOME ? join(env.XDG_STATE_HOME, "mu-next", "anchors") : primary;
+  const xdgHome = xdgStateHome(env);
+  const xdg = xdgHome ? join(xdgHome, "mu-next", "anchors") : primary;
   return xdg === primary ? [primary] : [primary, xdg];
 }
 

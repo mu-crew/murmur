@@ -8,7 +8,7 @@ import { afterEach, beforeEach, expect, test } from "vitest";
 import { loadIdentity } from "../src/identity.js";
 import type { InboxEvent } from "../src/inbox-event.js";
 import { inboxDir, inboxKey, remoteDir, writeInboxEvent } from "../src/inbox-file.js";
-import { homeStateDir, legacyStateDir, stateDir } from "../src/paths.js";
+import { configDir, homeStateDir, legacyStateDir, stateDir } from "../src/paths.js";
 import { openStore } from "../src/store.js";
 import { builtArtifact } from "./helpers/built.js";
 
@@ -107,6 +107,26 @@ test("the state lives in murmur2; the inbox and remote area under HOME whatever 
   expect(stateDir(pinned, "/home/u")).toBe("/pinned");
   expect(homeStateDir(pinned, "/home/u")).toBe("/pinned");
   expect(legacyStateDir(pinned, "/home/u")).toBeNull();
+});
+
+test("an empty or relative XDG_STATE_HOME and an empty MURMUR_STATE_DIR count as unset", () => {
+  // The XDG spec ignores a relative XDG_STATE_HOME, and so do mu and muzzle;
+  // honoured, it would put the store under whatever directory murmur ran in.
+  for (const XDG_STATE_HOME of ["", "state", "./xdg"]) {
+    const env = { XDG_STATE_HOME };
+    expect(stateDir(env, "/home/u")).toBe("/home/u/.local/state/murmur2");
+    expect(legacyStateDir(env, "/home/u")).toBe("/home/u/.local/state/murmur");
+  }
+  // `MURMUR_STATE_DIR=` is not a directory named "": it moves nothing, and the
+  // first-run migration still runs.
+  const empty = { MURMUR_STATE_DIR: "", XDG_STATE_HOME: "/xdg" };
+  expect(stateDir(empty, "/home/u")).toBe("/xdg/murmur2");
+  expect(homeStateDir(empty, "/home/u")).toBe("/home/u/.local/state/murmur2");
+  expect(legacyStateDir(empty, "/home/u")).toBe("/xdg/murmur");
+  // The config directory follows the same rules.
+  expect(configDir({ XDG_CONFIG_HOME: "conf", MURMUR_CONFIG_DIR: "" }, "/home/u")).toBe(
+    "/home/u/.config/murmur",
+  );
 });
 
 test("the inbox and the remote area stay under HOME when XDG_STATE_HOME points elsewhere", () => {

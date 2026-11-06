@@ -355,6 +355,12 @@ test("anchors are read from the home path first, then XDG_STATE_HOME's when it d
     "/home/u/.local/state/mu-next/anchors",
     "/xdg/mu-next/anchors",
   ]);
+  // As mu reads it: an empty or relative XDG_STATE_HOME is no XDG_STATE_HOME.
+  for (const value of ["", "xdg", "./state"]) {
+    expect(anchorDirs({ XDG_STATE_HOME: value }, home)).toEqual([
+      "/home/u/.local/state/mu-next/anchors",
+    ]);
+  }
 
   const primary = mkdtempSync(join(tmpdir(), "murmur-anchors-home-"));
   const xdg = mkdtempSync(join(tmpdir(), "murmur-anchors-xdg-"));

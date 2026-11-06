@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { readdirSync, readFileSync, rmdirSync, rmSync, statSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { publishAgentStates } from "./agent-state.js";
@@ -83,10 +83,84 @@ function runTmux(server: TmuxServer | undefined, args: string[]): string | null 
   }
 }
 
-function serverPidAt(socket: string): number | null {
-  const out = runTmux({ kind: "path", value: socket }, ["list-sessions", "-F", "#{pid}"]);
-  const pid = Number(out?.split("\n")[0]);
-  return Number.isInteger(pid) && pid > 0 ? pid : null;
+/**
+ * What a full drain spends, in all, asking sockets which server answers on
+ * them. A socket that accepts and never answers (a stopped or wedged server)
+ * holds a tmux client until it is killed, and the drain runs on a status-bar
+ * tick: past this, an inbox whose server is still unfound waits for the next
+ * drain rather than holding up this one. 1.5 s, so that a whole `murmur
+ * status`, process start included, stays near 2 s.
+ */
+export const SOCKET_PROBE_BUDGET_MS = 1500;
+
+/**
+ * Starts one `tmux list-sessions` per socket at once, all writing to one pipe
+ * (each line tagged with its socket's index, so a socket path is never put in
+ * a tmux format), and SIGKILLs whichever is still running when the budget
+ * ends. Each client's exit status follows as `<index> exit <status>`: a client
+ * tmux could not connect exits 1 at once, a killed one 137. The killer's own
+ * output goes to /dev/null, so the pipe closes as soon as the last client
+ * exits; it is stopped, with its `sleep`, once they all have.
+ */
+const PROBE_SCRIPT = `budget=$1; shift
+i=0; pids=
+for s do
+  tmux -S "$s" list-sessions -F "$i #{pid}" </dev/null 2>/dev/null &
+  pids="$pids $!"; i=$((i + 1))
+done
+( trap 'kill $nap 2>/dev/null; exit 0' TERM
+  sleep "$budget" & nap=$!
+  wait $nap && kill -9 $pids ) </dev/null >/dev/null 2>&1 &
+killer=$!
+i=0
+for p in $pids; do wait "$p"; echo "$i exit $?"; i=$((i + 1)); done
+kill $killer 2>/dev/null
+exit 0`;
+
+/**
+ * Which server pid answers on each socket, asked of them all in parallel
+ * within `budgetMs`. A socket with no server (nothing listening, or no such
+ * file) maps to null. A socket whose probe was killed at the budget, or never
+ * reported, is left out: unknown, which is not the same as silent, since a
+ * live server under load can be slow. Never throws.
+ */
+export function probeSockets(
+  sockets: readonly string[],
+  budgetMs: number,
+): Map<string, number | null> {
+  const answers = new Map<string, number | null>();
+  if (sockets.length === 0) return answers;
+  const seconds = (Math.max(budgetMs, 1) / 1000).toFixed(3);
+  let out = "";
+  try {
+    // The outer timeout is a backstop for a shell that never gets to wait.
+    const result = spawnSync("/bin/sh", ["-c", PROBE_SCRIPT, "sh", seconds, ...sockets], {
+      encoding: "utf8",
+      timeout: budgetMs + 1000,
+      killSignal: "SIGKILL",
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    out = typeof result.stdout === "string" ? result.stdout : "";
+  } catch {
+    out = "";
+  }
+  const exits = new Map<string, number>();
+  for (const line of out.split("\n")) {
+    const match = /^(\d+) (exit )?(\d+)$/.exec(line.trim());
+    if (!match) continue;
+    const socket = sockets[Number(match[1])];
+    const value = Number(match[3]);
+    if (socket === undefined) continue;
+    if (match[2]) exits.set(socket, value);
+    // A server's first session names it; its other sessions say the same.
+    else if (value > 0 && !answers.has(socket)) answers.set(socket, value);
+  }
+  // A client that exited by itself without a pid found no server (or a server
+  // with no sessions to name it by); one killed by a signal learnt nothing.
+  for (const [socket, status] of exits) {
+    if (!answers.has(socket) && status < 128) answers.set(socket, null);
+  }
+  return answers;
 }
 
 function socketStat(socket: string): SocketStat | null {
@@ -120,7 +194,24 @@ export type TmuxInboxHostOptions = {
   known?: ReadonlyMap<number, TmuxServer>;
   /** The pid-to-socket cache that outlives this process; null for none. */
   cache?: SocketCache | null;
+  /** What the whole drain may spend probing sockets; `SOCKET_PROBE_BUDGET_MS` by default. */
+  probeBudgetMs?: number;
+  /**
+   * Asks sockets which server pid answers on each: `probeSockets`, unless a
+   * test replaces it. A socket left out of the answer is unknown.
+   */
+  probe?: (sockets: readonly string[], budgetMs: number) => ReadonlyMap<string, number | null>;
 };
+
+/** Less budget than this left is no budget: not worth starting a probe for. */
+const MIN_PROBE_MS = 50;
+
+/**
+ * The share of what is left of a drain's budget that one lookup's hints may
+ * spend, so a hinted socket that never answers cannot starve the directory
+ * scan that comes after it.
+ */
+const HINT_SHARE = 0.5;
 
 /**
  * The real host: tmux and `ps`, each asked at most once per server per drain.
@@ -130,7 +221,12 @@ export type TmuxInboxHostOptions = {
  * `$TMUX` named; the socket its server's argv named; the reader's own servers;
  * and only then by asking each socket in tmux's directory that the cache does
  * not rule out. Every candidate is checked by asking it for its pid, and every
- * answer goes into the cache.
+ * answer goes into the cache. Candidates are asked in parallel, and all the
+ * asking in one drain shares `SOCKET_PROBE_BUDGET_MS`, of which a lookup's
+ * hints get at most half of what is left: a server not found by then is null
+ * this drain, and its inbox waits for the next. A probe killed at the budget
+ * is not an answer: it is neither cached nor asked again this drain, and the
+ * next drain asks it afresh.
  */
 export function tmuxInboxHost(options: TmuxInboxHostOptions = {}): InboxHost {
   const servers = new Map<number, TmuxServer | null>(options.known ?? []);
@@ -154,52 +250,82 @@ export function tmuxInboxHost(options: TmuxInboxHostOptions = {}): InboxHost {
     return dir === null ? null : join(dir, server.kind === "label" ? server.value : "default");
   };
   const own = options.own ?? ownServers();
+  const probe = options.probe ?? probeSockets;
+  const probeBudgetMs = options.probeBudgetMs ?? SOCKET_PROBE_BUDGET_MS;
+  // What each socket answered this drain, the sockets asked that did not
+  // answer in time, and when the drain's probe budget runs out, from the
+  // first probe on.
+  const answers = new Map<string, number | null>();
+  const unanswered = new Set<string>();
+  let deadline: number | undefined;
+  const asked = (socket: string): boolean => answers.has(socket) || unanswered.has(socket);
+  // Asks every candidate not yet asked this drain, in parallel, in `share` of
+  // what is left of the drain's budget. Out of budget, the rest stay unasked;
+  // like a probe killed at the budget, they are neither cached nor taken for
+  // silent.
+  const ask = (candidates: readonly (string | null)[], share = 1): void => {
+    const fresh = [...new Set(candidates)].filter(
+      (socket): socket is string => socket !== null && !asked(socket),
+    );
+    if (fresh.length === 0) return;
+    deadline ??= Date.now() + probeBudgetMs;
+    const left = deadline - Date.now();
+    if (left < MIN_PROBE_MS) return;
+    const result = probe(fresh, Math.max(MIN_PROBE_MS, Math.floor(left * share)));
+    for (const socket of fresh) {
+      const pid = result.get(socket);
+      if (pid === undefined) {
+        unanswered.add(socket);
+        continue;
+      }
+      answers.set(socket, pid);
+      cache?.record(socket, socketStat(socket), pid);
+    }
+  };
+  /** The socket some probe this drain heard `serverPid` answer on. */
+  const heard = (serverPid: number): string | null =>
+    [...answers].find(([, pid]) => pid === serverPid)?.[0] ?? null;
+  const locate = (serverPid: number, hints: ServerHints): string | null => {
+    // `$TMUX` names the socket outright; the pid behind it is still
+    // confirmed, since a restarted server can reuse the path.
+    ask(
+      [
+        hints.tmux?.split(",")[0] || null,
+        hints.socket ? socketOf(hints.socket) : null,
+        ...own.map(socketOf),
+      ],
+      HINT_SHARE,
+    );
+    const hinted = heard(serverPid);
+    if (hinted !== null) return hinted;
+    // No hint answered (an older hook's event, a server on a socket of its
+    // own): ask each socket in tmux's own directory the cache does not rule
+    // out, all at once.
+    const dir = socketDirectory();
+    let entries: string[] = [];
+    try {
+      entries = dir ? readdirSync(dir).sort() : [];
+    } catch {
+      entries = [];
+    }
+    const candidates: string[] = [];
+    for (const entry of entries) {
+      const socket = join(dir as string, entry);
+      if (asked(socket)) continue;
+      const stat = socketStat(socket);
+      if (stat && cache?.skip(socket, stat, serverPid, pidAlive)) continue;
+      candidates.push(socket);
+    }
+    ask(candidates);
+    return heard(serverPid);
+  };
   return {
     isAlive: pidAlive,
     serverFor(serverPid, hints) {
       const known = servers.get(serverPid);
       if (known !== undefined) return known;
       let found: string | null = cache?.server(serverPid) ?? null;
-      if (found === null) {
-        const asked = new Set<string>();
-        const ask = (socket: string | null): boolean => {
-          if (socket === null || asked.has(socket)) return false;
-          asked.add(socket);
-          const pid = serverPidAt(socket);
-          cache?.record(socket, socketStat(socket), pid);
-          return pid === serverPid;
-        };
-        // `$TMUX` names the socket outright; the pid behind it is still
-        // confirmed, since a restarted server can reuse the path.
-        const hinted = [
-          hints.tmux?.split(",")[0] || null,
-          hints.socket ? socketOf(hints.socket) : null,
-          ...own.map(socketOf),
-        ];
-        found = hinted.find(ask) ?? null;
-        if (found === null) {
-          // No hint answered (an older hook's event, a server on a socket of
-          // its own): ask each socket in tmux's own directory the cache does
-          // not rule out.
-          const dir = socketDirectory();
-          let entries: string[] = [];
-          try {
-            entries = dir ? readdirSync(dir).sort() : [];
-          } catch {
-            entries = [];
-          }
-          for (const entry of entries) {
-            const socket = join(dir as string, entry);
-            if (asked.has(socket)) continue;
-            const stat = socketStat(socket);
-            if (stat && cache?.skip(socket, stat, serverPid, pidAlive)) continue;
-            if (ask(socket)) {
-              found = socket;
-              break;
-            }
-          }
-        }
-      }
+      if (found === null) found = locate(serverPid, hints);
       let server: TmuxServer | null = null;
       if (found !== null) {
         try {

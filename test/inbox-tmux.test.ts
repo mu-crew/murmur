@@ -1,4 +1,5 @@
 import { type ChildProcess, execFileSync, spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import {
   existsSync,
   mkdirSync,
@@ -13,7 +14,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, expect, test } from "vitest";
 import { asPaneId } from "../src/ids.js";
-import { drainInbox, inboxDir, inboxKey, tmuxInboxHost, writeInboxEvent } from "../src/inbox.js";
+import {
+  drainInbox,
+  inboxDir,
+  inboxKey,
+  probeSockets,
+  tmuxInboxHost,
+  writeInboxEvent,
+} from "../src/inbox.js";
 import type { InboxEvent } from "../src/inbox-event.js";
 import { loadSocketCache } from "../src/socket-cache.js";
 import { openStore } from "../src/store.js";
@@ -369,6 +377,61 @@ test("murmur pane drains only the pane it was asked about, fast, past silent soc
   // The other inbox is a later full drain's business.
   expect(existsSync(stranded)).toBe(true);
   rmSync(stranded, { recursive: true, force: true });
+});
+
+function holePaths(): string[] {
+  return Array.from({ length: HOLE_COUNT }, (_, index) => join(HOLES, `hole-${index}`));
+}
+
+/** Whether any process still has one of the holes in its argv: a probe left running. */
+function probesLeft(): boolean {
+  const ps = execFileSync("ps", ["-axo", "command"], { encoding: "utf8" });
+  return ps.split("\n").some((line) => line.includes(HOLES) && line.includes("list-sessions"));
+}
+
+test("probeSockets asks every socket at once and kills what has not answered by the budget", async () => {
+  const started = Date.now();
+  const answers = probeSockets([...holePaths(), SOCKET, join(HOLES, "absent")], 1000);
+  const elapsed = Date.now() - started;
+  expect(answers.get(SOCKET)).toBe(serverPid);
+  // Killed at the budget: unknown, not silent, since a slow server looks the same.
+  for (const hole of holePaths()) expect(answers.has(hole)).toBe(false);
+  // No such socket: tmux says so at once.
+  expect(answers.get(join(HOLES, "absent"))).toBeNull();
+  // Eight silent sockets one after another would cost eight budgets.
+  expect(elapsed).toBeGreaterThanOrEqual(900);
+  expect(elapsed).toBeLessThan(1800);
+  expect(await until(() => !probesLeft(), 2000)).toBe(true);
+});
+
+test("murmur status --json stays fast past silent sockets with no cache, and defers what it cannot place", () => {
+  // A fresh state directory: no socket cache to skip the holes with.
+  const state = join(work, "state-status");
+  mkdirSync(state, { recursive: true });
+  writeFileSync(
+    join(state, "identity.json"),
+    JSON.stringify({ host_id: randomUUID(), display_name: "here" }),
+  );
+  const holesPid = holes?.pid as number;
+  const stranded = event({ server_pid: holesPid, root_pid: 7, owner_pid: 7 });
+  expect(writeInboxEvent(stranded, join(state, "inbox"))).toBe(true);
+
+  const started = Date.now();
+  execFileSync(process.execPath, [CLI, "status", "--json"], {
+    encoding: "utf8",
+    env: { ...process.env, MURMUR_STATE_DIR: state, TMUX_TMPDIR: HOLES_ROOT },
+    timeout: 60_000,
+  });
+  const elapsed = Date.now() - started;
+  // Eight silent sockets used to cost 3 s each, one after another.
+  expect(elapsed).toBeLessThan(2500);
+  // Not located, so left for a later drain rather than dropped.
+  expect(existsSync(join(state, "inbox", inboxKey(holesPid, 7)))).toBe(true);
+  // And the holes, killed at the budget, are not remembered as silent: a live
+  // server that was only slow is asked again by the next drain.
+  const cachePath = join(state, "tmux-sockets.json");
+  const cache = existsSync(cachePath) ? JSON.parse(readFileSync(cachePath, "utf8")) : {};
+  for (const hole of holePaths()) expect(cache.sockets?.[hole]).toBeUndefined();
 });
 
 test("the drain finds a server by the hook's socket hint, then by the cache, never scanning", () => {
