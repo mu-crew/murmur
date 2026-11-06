@@ -2,17 +2,19 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "vitest";
-import { anchorLookup } from "../src/anchors.js";
-import { harnessFromArgv } from "../src/harnesses.js";
+import { anchorDirs, anchorLookup } from "../src/anchors.js";
+import { harnessFromArgv, runMode } from "../src/harnesses.js";
 import {
   ancestry,
   outerHarness,
   type ProcessRow,
+  paneHarness,
   parseProcessTable,
   placeEvent,
   readProcessTable,
   treeRuns,
 } from "../src/process-chain.js";
+import { fixture, ROOT, tableOf } from "./helpers/u0.js";
 
 /**
  * Placing a hook event by its process chain, over the chain shapes recorded
@@ -122,6 +124,151 @@ test("a nested run of the same harness behind a shell is a second harness", () =
   });
 });
 
+test("a one-shot run directly under an interactive run of its harness is nested", () => {
+  // As recorded: the agent's shell tool exec'd `codex exec` / `muse exec`, so
+  // no shell separates the nested run from the outer one.
+  for (const [name, line] of [
+    ["codex", 11],
+    ["muse", 19],
+  ] as const) {
+    const recorded = fixture(name).find((entry) => entry.u0_line === line);
+    if (!recorded) throw new Error(`${name} line ${line}`);
+    const table = tableOf(recorded.chain);
+    const self = recorded.chain[0]?.pid as number;
+    expect({ name, placed: placeEvent(table, self) }).toEqual({
+      name,
+      placed: { kind: "drop", reason: "nested" },
+    });
+    // From the pane root down, the owner is the outer run's member, never the nested one.
+    const outer = recorded.chain.find((entry, index) => index > 2 && !/ exec /.test(entry.args));
+    expect(paneHarness(table, ROOT)).toMatchObject({ harness: name, pid: outer?.pid });
+  }
+
+  // claude and cursor-agent's one-shot flag, exec'd with no shell between.
+  const claude = chain(
+    HOOK,
+    "/opt/claude/native/claude --settings {} -p NESTED",
+    "/opt/claude/bin/claude -p NESTED",
+    "/opt/claude/native/claude --settings {}",
+    "/opt/claude/bin/claude",
+    "-zsh",
+    SERVER_ARGS,
+  );
+  expect(placeEvent(claude.table, claude.pids[0] as number)).toEqual({
+    kind: "drop",
+    reason: "nested",
+  });
+  const cursor = chain(
+    "node /usr/local/bin/murmur hook cursor-agent",
+    "/opt/cursor-agent/bin/cursor-agent --use-system-ca /opt/cursor-agent/index.js --print hi",
+    "/opt/cursor-agent/bin/cursor-agent --use-system-ca /opt/cursor-agent/index.js",
+    "-zsh",
+    SERVER_ARGS,
+  );
+  expect(placeEvent(cursor.table, cursor.pids[0] as number)).toEqual({
+    kind: "drop",
+    reason: "nested",
+  });
+});
+
+test("a one-shot run of its own in a pane is that pane's harness", () => {
+  // `codex exec` typed at a prompt: one-shot all the way up, nothing above it.
+  const codex = chain(
+    "python3 hook.py",
+    "/opt/codex/libexec/codex.real exec hi",
+    "codex exec hi",
+    "-zsh",
+    SERVER_ARGS,
+  );
+  expect(placeEvent(codex.table, codex.pids[0] as number)).toMatchObject({
+    kind: "local",
+    harness: "codex",
+    owner_pid: codex.pids[1],
+  });
+  // A launcher whose own argv shows no subcommand still sits below the one-shot.
+  const wrapped = chain(
+    "python3 hook.py",
+    "/opt/codex/libexec/codex.real -c x=1",
+    "/opt/codex/bin/codex --foreground-session /opt/codex/libexec/codex.real",
+    "codex exec hi",
+    "-zsh",
+    SERVER_ARGS,
+  );
+  expect(placeEvent(wrapped.table, wrapped.pids[0] as number)).toMatchObject({
+    kind: "local",
+    owner_pid: wrapped.pids[1],
+  });
+  expect(paneHarness(wrapped.table, wrapped.pids[4] as number)).toMatchObject({
+    pid: wrapped.pids[1],
+  });
+});
+
+test("a one-shot run is not split from a launcher whose arguments cannot tell", () => {
+  // The binary shows `exec`; the launcher puts an option murmur does not know,
+  // with its value, before it. The launcher is unreadable, not interactive.
+  const muse = chain(
+    "python3 hook.py",
+    "/opt/muse/libexec/muse.real exec --disable-sandbox hi",
+    "muse --unknown-opt v exec hi",
+    "-zsh",
+    SERVER_ARGS,
+  );
+  expect(placeEvent(muse.table, muse.pids[0] as number)).toMatchObject({
+    kind: "local",
+    harness: "muse",
+    owner_pid: muse.pids[1],
+  });
+  expect(paneHarness(muse.table, muse.pids[3] as number)).toMatchObject({
+    pid: muse.pids[1],
+  });
+  // An unreadable member between a one-shot run and an interactive one does
+  // not hide the split.
+  const nested = chain(
+    "python3 hook.py",
+    "/opt/codex/libexec/codex.real exec hi",
+    "/opt/codex/bin/codex --foreground-session /opt/codex/libexec/codex.real",
+    "/opt/codex/libexec/codex.real -c model=x",
+    "codex",
+    "-zsh",
+    SERVER_ARGS,
+  );
+  expect(placeEvent(nested.table, nested.pids[0] as number)).toEqual({
+    kind: "drop",
+    reason: "nested",
+  });
+  expect(paneHarness(nested.table, nested.pids[5] as number)).toMatchObject({
+    pid: nested.pids[3],
+  });
+});
+
+test("one-shot runs are read from the harness's own arguments", () => {
+  expect(runMode("codex", "codex exec Reply")).toBe("one-shot");
+  expect(runMode("codex", "codex e Reply")).toBe("one-shot");
+  expect(runMode("codex", "codex review")).toBe("one-shot");
+  expect(runMode("codex", "/opt/codex/libexec/codex.real -c model=x exec hi")).toBe("one-shot");
+  expect(runMode("codex", "codex --remote ws://h exec hi")).toBe("one-shot");
+  expect(runMode("muse", "/opt/muse/libexec/muse.real exec --disable-sandbox hi")).toBe("one-shot");
+  expect(runMode("claude", "/opt/claude/bin/claude -p hi")).toBe("one-shot");
+  expect(runMode("claude", "/opt/claude/bin/claude --print")).toBe("one-shot");
+  expect(runMode("cursor-agent", "node /opt/cursor-agent/index.js -p hi")).toBe("one-shot");
+  // An option's value is not the subcommand, and a prompt that says exec is not one.
+  expect(runMode("codex", "codex -m exec")).toBe("interactive");
+  expect(runMode("codex", "codex --remote ws://h")).toBe("interactive");
+  expect(runMode("codex", "codex fix the exec path")).toBe("interactive");
+  expect(runMode("codex", "codex -- exec")).toBe("interactive");
+  expect(runMode("muse", "/opt/muse/libexec/muse.real --disable-sandbox")).toBe("interactive");
+  expect(runMode("claude", "/opt/claude/native/claude --settings {}")).toBe("interactive");
+  // After an option murmur does not know, a bare argument may be its value.
+  expect(runMode("codex", "codex --foreground-session /opt/codex/libexec/codex.real")).toBeNull();
+  expect(runMode("muse", "muse --unknown-opt v")).toBeNull();
+  expect(runMode("muse", "muse --unknown-opt v exec hi")).toBeNull();
+  expect(runMode("muse", "muse --unknown-flag exec hi")).toBe("one-shot");
+  // The interpreter's own flags are not the harness's.
+  expect(runMode("cursor-agent", "node -p /opt/cursor-agent/index.js")).toBe("interactive");
+  // pi places its own events; nothing about it changes.
+  expect(runMode("pi", "pi -p hi")).toBe("interactive");
+});
+
 test("a chain that never reaches a tmux server is dropped, even with $TMUX set", () => {
   // claude's detached `plugin update`, reparented to launchd, fires SessionEnd
   // with the pane's $TMUX still in its environment.
@@ -191,6 +338,51 @@ test("the anchor names the agent, only when its start time matches", () => {
   expect(
     placeEvent(claude.table, claude.pids[0] as number, { anchor: anchorLookup(dir) }),
   ).toMatchObject({ kind: "local", anchor: null });
+});
+
+test("anchors are read from the home path first, then XDG_STATE_HOME's when it differs", () => {
+  const home = "/home/u";
+  expect(anchorDirs({}, home)).toEqual(["/home/u/.local/state/mu-next/anchors"]);
+  expect(anchorDirs({ XDG_STATE_HOME: "/home/u/.local/state" }, home)).toEqual([
+    "/home/u/.local/state/mu-next/anchors",
+  ]);
+  expect(anchorDirs({ XDG_STATE_HOME: "/xdg" }, home)).toEqual([
+    "/home/u/.local/state/mu-next/anchors",
+    "/xdg/mu-next/anchors",
+  ]);
+
+  const primary = mkdtempSync(join(tmpdir(), "murmur-anchors-home-"));
+  const xdg = mkdtempSync(join(tmpdir(), "murmur-anchors-xdg-"));
+  const claude = chain(HOOK, "/opt/claude/bin/claude", "-zsh", SERVER_ARGS);
+  const harness = claude.table.get(claude.pids[1] as number) as ProcessRow;
+  const write = (dir: string, fields: Record<string, unknown>) =>
+    writeFileSync(join(dir, `${harness.pid}.json`), JSON.stringify(fields));
+  const lookup = anchorLookup([primary, xdg]);
+
+  // Only the fallback has it: found there.
+  write(xdg, { start_time: harness.started, agent_name: "from-xdg" });
+  expect(lookup(harness)).toMatchObject({ agent_name: "from-xdg" });
+  // Both have it: the home path wins.
+  write(primary, {
+    start_time: harness.started,
+    agent_name: "from-home",
+    workstream: "ws",
+    role: "worker",
+    cli: "claude",
+    orchestrator: true,
+    remote_key: null,
+  });
+  expect(lookup(harness)).toEqual({
+    agent_name: "from-home",
+    workstream: "ws",
+    role: "worker",
+    cli: "claude",
+    orchestrator: true,
+    remote_key: null,
+  });
+  // A stale file at home (a reused pid) does not hide a live one in the fallback.
+  write(primary, { start_time: (harness.started ?? 0) - 3600, agent_name: "stranger" });
+  expect(lookup(harness)).toMatchObject({ agent_name: "from-xdg" });
 });
 
 test("an anchor's remote key routes the event away from the inbox", () => {

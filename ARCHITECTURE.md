@@ -325,7 +325,7 @@ it reaches a snapshot.
 
 ## The data model
 
-Five tables in `state.db`, all `STRICT`, `user_version = 10`. `agents` and
+Five tables in `state.db`, all `STRICT`, `user_version = 11`. `agents` and
 `attention` are local truth; `peers` is a cache of other nodes; `compat` holds
 the one-row "compatible since" stamp (see Versioning below); `alerted`
 remembers which attention events the `on-attention` hook has run for (see
@@ -351,9 +351,11 @@ CREATE TABLE agents (
   session_id   TEXT,                           -- the hook harness's session
   run_count    INTEGER,                        -- prompts this session; null for pi
   last_text    TEXT,                           -- last turn's text, at most 64 KB
+  last_text_run  INTEGER,                      -- run_count of the turn that wrote last_text
   confirmed    INTEGER NOT NULL DEFAULT 1,     -- 0: activity is mu's word (`idle?`)
   generation_id  TEXT,                         -- last ended turn's generation (cursor-agent, muse)
   generation_end TEXT,                         -- how it ended: stopped, interrupted, failed
+  generation_run INTEGER,                      -- run_count that generation ended in
   claimed_at   INTEGER NOT NULL,
   updated_at   INTEGER NOT NULL,
   UNIQUE (server_kind, server_value, pane)
@@ -429,7 +431,7 @@ three surfaces carried machinery for it:
 | attention `blocked` | `murmur notify` | any other outside-in call, including an event murmur does not recognise |
 | attention `crashed` | `reconcileLocal` | pane alive, owner pid gone, activity was `running` |
 | (row removed) | `releaseAgent` | `session_shutdown` |
-| (attention removed) | `acknowledgePane` | `murmur clear`, i.e. tmux focus, or `i` in the dash (over ssh for a remote pane) |
+| (attention removed) | `acknowledgePane` | `murmur clear`, i.e. tmux focus, `i` in the dash (over ssh for a remote pane), or mu's `murmur clear -L/-S` before a retry |
 | activity, `run_count`, `last_text`, attention `done`/`blocked`/`error` | the inbox drain | a hook harness's events; see [The inbox](#the-inbox) |
 
 Nothing writes `crashed` from inside an agent, for the obvious reason.
@@ -446,12 +448,12 @@ the settle after that run raises the real `done`. The channel name is a
 string on both sides, so neither package imports the other.
 
 **Versioning is one strategy, not two.** On open, if `user_version` is older
-than 10, murmur salvages `SELECT name, target FROM peers` — the two fields a
-human typed — deletes the database and its `-wal`/`-shm` sidecars, recreates the
-schema, and re-inserts those peers with every observed column `NULL`. There is
-no `ALTER TABLE` in this build. Any change to any table bumps the version, which
-is affordable precisely because nothing here is history: everything in the file
-is either current state or a cache.
+than this build's, murmur salvages `SELECT name, target FROM peers` — the two
+fields a human typed — deletes the database and its `-wal`/`-shm` sidecars,
+recreates the schema, and re-inserts those peers with every observed column
+`NULL`. There is no `ALTER TABLE` in this build. Any change to any table bumps
+the version, which is affordable precisely because nothing here is history:
+everything in the file is either current state or a cache.
 
 The rebuild only runs upward. A `user_version` above this build's is refused
 (`StoreTooNewError`, exit 4 from the CLI; the extension goes silent) and the
@@ -466,6 +468,11 @@ open.
 refusing it: every INSERT here names its columns, and a column it does not know
 takes its default. Schema 10 is the one reset the stamp cannot spare, because
 older builds have no stamp; the CLI and the pi package upgrade together for it.
+Schema 11 is the first to use the stamp: it adds the nullable `last_text_run`
+and `generation_run` and keeps `compatible_since = 10`, so a schema-10 build
+opens a schema-11 store and leaves the new columns alone. Such a build does not
+keep `last_text_run` in step with `last_text`, which is the cost the stamp
+accepts for an additive column.
 
 **Identity is never minted by the store.** `openStore()` takes no arguments and
 does not read `identity.json`. `createIdentity` is called only by `murmur init`;
@@ -523,16 +530,28 @@ A reader never sees a partial event, whatever its size. The hook opens no
 database, takes no lock, calls no tmux and prints nothing, and stops writing for
 a pane past 10,000 waiting files (`doctor` reports it).
 
-**The process chain places an event, not the environment.** A harness may
-clear its hooks' environment, so a hook reads the process table once and walks its
+**The process chain places an event, not the environment.** A harness may clear
+its hooks' environment, so a hook reads the process table once and walks its
 parents to the tmux server (field 2 of `$TMUX` when set, else the tmux argv).
-The pane root is the ancestor right below the server, and the pane key is a
-hash of the server pid and the root pid. Harnesses are matched by argv
+The pane root is the ancestor right below the server, and the pane key is a hash
+of the server pid and the root pid. Harnesses are matched by argv
 (`src/harnesses.ts`), and an adjacent run of one harness -- a launcher and the
 binary it starts -- is one harness. A second, separate harness before the server
 means a nested agent, and nothing is written; so does a chain that never reaches
-a tmux server. An anchor file mu wrote for an ancestor supplies the agent's
-identity.
+a tmux server. A one-shot run (`codex exec`, `muse exec`, `claude -p`/`--print`,
+`cursor-agent -p`/`--print`, read from the harness's own arguments by `runMode`;
+`codex e` and `codex review` count too) with an interactive member of the same
+harness above it is a nested agent too, though no shell separates them: the run
+splits where it turns one-shot. A member whose arguments cannot tell -- a
+launcher option murmur does not know, before a bare argument that may be its
+value -- never splits a run. A one-shot run on its own in a pane is that pane's
+harness. An anchor file mu wrote for an ancestor supplies the agent's identity.
+Anchors are read from `~/.local/state/mu-next/anchors/<pid>.json` first,
+whatever the environment says, then from `$XDG_STATE_HOME/mu-next/anchors` when
+that is another directory: Muse's hooks keep `HOME` and lose `XDG_STATE_HOME`,
+so the home path is the one place every hook can find. An anchor counts only
+when its `start_time` matches the process's; a stale file at home does not hide
+a live one in the fallback.
 
 **Readers drain.** Under the store's write lock (`ingestInbox`, `IMMEDIATE`), a
 reader lists each pane's inbox in name order, applies each event and deletes the
@@ -577,17 +596,31 @@ incumbent's are cleared, as before.
 | Event | Effect |
 | --- | --- |
 | `session_start` (source) | claim if unclaimed; `startup`/`clear`: new `session_id`, `run_count` 0, idle; `resume`: idle; `compact`: nothing |
-| `prompt_submitted` | running; `run_count += 1`; clear `done` |
+| `prompt_submitted` | running; `run_count += 1`; clear `done` and `error` |
 | `continued` | running (mu's stop hook blocked the stop) |
 | `permission_requested` | attention `blocked`, message is the tool |
 | `interrupted` | from the harness: idle; from mu: `idle?` until the next harness event |
-| `turn_stopped` | idle; `last_text` (64 KB); `done` through `settledState` |
+| `turn_stopped` | idle; `last_text` (64 KB) and `last_text_run`; `done` through `settledState` |
 | `turn_failed` | idle; attention `error` |
 | `session_end` (reason) | `clear`: keep the claim; otherwise release, keeping attention |
 
-`blocked` clears on the next event of any other kind. The transitions are one
-pure function (`src/turn.ts`), shared by the drain and the remote area's fold,
-so a remote worker's state follows the same rules as a local pane's.
+`blocked` clears on the next event of any other kind. A new prompt answers the
+last turn's outcome, a failure as much as a finish, so it clears `error` as it
+clears `done`; without that, a failed turn's `error` outlived every later turn
+until someone focused the pane.
+
+`last_text_run` is the `run_count` of the turn that wrote `last_text`. A turn
+that ends without text of its own (an interrupt, a failure, an unnamed stop with
+no text) leaves both alone, so a reader such as mu's settle can tell this turn's
+text from an earlier one's: `last_text_run` below `run_count` means the text is
+older than the last turn. A named turn's stop with no text writes a null text at
+its own run; its late text then takes the run that turn ended in
+(`generation_run`), even when it lands during the next turn. A new session
+resets both to null.
+
+The transitions are one pure function (`src/turn.ts`), shared by the drain and
+the remote area's fold, so a remote worker's state follows the same rules as a
+local pane's.
 
 **Generations.** cursor-agent names each turn with a `generation_id` and
 reports a turn's end in up to three events that run concurrently: its text
@@ -646,6 +679,12 @@ nothing here: its events go to the remote area below.
 `murmur hook mu` is mu's way into the same inbox: one vocabulary event as JSON
 on stdin (`{"event": "continued"}`, plus any of `harness`, `session_id`,
 `source`, `reason`, `message`, `text` and `agent`), written with `by: "mu"`.
+`--by harness` writes it with `by: "harness"` instead, for an event the harness
+itself reported on a remote node that mu relays: codex's `Interrupt` or
+cursor-agent's aborted stop is then confirmed on the origin pane, as it was on
+the node, rather than read as mu's own unconfirmed `idle?`. mu's own events,
+its interrupts included, keep the default. `by` decides nothing but that
+confirmation.
 Without
 `--pane` it is placed by the process chain like a harness hook, so `mu hook
 stop`, running as the harness's own Stop hook, lands its `continued` on that
@@ -667,16 +706,18 @@ the one form that reports failure, on stderr with exit 1 (exit 2 for a bad
 `--pane` or an unknown option).
 
 A nested `codex exec` is not always behind a shell: a shell that `exec`s its
-only command leaves the nested codex directly below the outer one, and the
-chain reads as one codex run. Its events are placed and then refused by the
-store's owner gate while the outer codex owns the pane. Only an unclaimed pane
-can be claimed by one, until the outer codex's next event replaces the dead
-nested owner.
+only command leaves the nested codex directly below the outer one (U0 recorded
+`codex.real < codex exec < codex.real` and `muse.real exec < muse exec <
+muse.real`). The one-shot rule above drops its events at the hook, so they
+never reach the pane, claimed or not. `paneHarness` stops at the same split,
+so `murmur hook mu --pane` names the outer run's member as owner, never the
+nested one.
 
 `murmur pane <pane> --json` drains first and prints one pane's state with the
-harness-side fields (`run_count`, `session_id`, `last_text`), for mu's send gate
-and acknowledgement. None of those fields reach the snapshot: `toAgent` picks
-its fields explicitly, and a test pins the document byte for byte.
+harness-side fields (`run_count`, `session_id`, `last_text`, `last_text_run`),
+for mu's send gate and acknowledgement. `murmur pane --remote` reports
+`last_text_run` the same way. None of those fields reach the snapshot: `toAgent`
+picks its fields explicitly, and a test pins the document byte for byte.
 
 **The remote area.** A worker mu starts on this node for a pane on another
 (D11) carries a remote key, `<origin host>/<origin pane key>`, in its anchor or
@@ -1058,12 +1099,16 @@ machine has at that id. Names travel in the snapshot instead.
 
 ### `clear` may only cancel a request for attention
 
-`murmur clear --pane` runs from tmux focus hooks, so the single fact it knows is
-*the user looked at this pane*. Its only WRITE to murmur state is one `DELETE
-FROM attention WHERE pane = ?`, so a focus hook structurally cannot mutate an
-agent row — no activity, no identity, no owner metadata. It does read local
-panes once, to recompute each pane state and the window aggregate from stored
-state.
+`murmur clear --pane` has two callers, and the single fact either knows is *this
+pane's attention has been seen to*. tmux focus hooks run it without `-L`/`-S`:
+*the user looked at this pane*, on the server the caller's own tmux names. mu
+runs it with `-L <name>` or `-S <path>`, the server read the way `murmur pane`
+and `murmur hook mu` read it, to acknowledge a failed turn on a pane of its own
+tmux server before it retries, from outside that server. Its only WRITE to
+murmur state is one `DELETE FROM attention WHERE pane = ?`, so a focus hook
+structurally cannot mutate an agent row — no activity, no identity, no owner
+metadata. It does read local panes once, to recompute each pane state and the
+window aggregate from stored state.
 
 There is no state focus must refuse to clear, because attention is the only
 thing focus can address. That whole class of bug — a whitelist, a resolver call,

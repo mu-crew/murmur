@@ -53,7 +53,7 @@ import { MURMUR_VERSION } from "./version.js";
  * targets a human typed, deletes the file, and recreates the schema. No ALTER
  * TABLE anywhere in this build.
  */
-const SCHEMA_USER_VERSION = 10;
+const SCHEMA_USER_VERSION = 11;
 
 /**
  * The oldest schema whose build can read and write a store this build creates,
@@ -67,6 +67,8 @@ const SCHEMA_USER_VERSION = 10;
  * difference between an upgrade order that matters and one that does not.
  *
  * A store from before the stamp existed (schema 9 and older) is reset, once.
+ * Schema 11 added `last_text_run` and `generation_run`, both nullable, and
+ * kept the stamp: a schema-10 build still opens it.
  */
 const COMPATIBLE_SINCE = 10;
 
@@ -225,6 +227,10 @@ const SCHEMA = `
     run_count    INTEGER CHECK (run_count IS NULL OR run_count >= 0),
     -- The last turn's assistant text, capped at 64 KB of UTF-8.
     last_text    TEXT    CHECK (last_text IS NULL OR length(CAST(last_text AS BLOB)) <= 65536),
+    -- The run (run_count) whose turn wrote last_text, so a reader can tell
+    -- this turn's text from one an earlier turn left. Schema 11: a build at
+    -- schema 10 opens this store and leaves the column alone.
+    last_text_run  INTEGER CHECK (last_text_run IS NULL OR last_text_run >= 0),
     -- 0 while the activity is mu's word (an interrupt it sent, \`idle?\`) and
     -- no harness event has confirmed it.
     confirmed    INTEGER NOT NULL DEFAULT 1 CHECK (confirmed IN (0, 1)),
@@ -233,6 +239,7 @@ const SCHEMA = `
     -- with the turn they belong to. See src/turn.ts.
     generation_id  TEXT,
     generation_end TEXT CHECK (generation_end IS NULL OR generation_end IN (${GENERATION_END_SQL_LIST})),
+    generation_run INTEGER CHECK (generation_run IS NULL OR generation_run >= 0),
     claimed_at   INTEGER NOT NULL,
     updated_at   INTEGER NOT NULL,
     UNIQUE (server_kind, server_value, pane)
@@ -410,9 +417,11 @@ type AgentDbRow = {
   session_id: string | null;
   run_count: number | null;
   last_text: string | null;
+  last_text_run: number | null;
   confirmed: number;
   generation_id: string | null;
   generation_end: GenerationEnd | null;
+  generation_run: number | null;
   claimed_at: number;
   updated_at: number;
 };
@@ -954,8 +963,9 @@ export function openStore(): Store {
        SET activity = @activity, session = @session, window = @window,
            session_name = @session_name, window_name = @window_name,
            session_id = @session_id, run_count = @run_count, last_text = @last_text,
-           confirmed = @confirmed, generation_id = @generation_id,
-           generation_end = @generation_end, updated_at = @updated_at
+           last_text_run = @last_text_run, confirmed = @confirmed,
+           generation_id = @generation_id, generation_end = @generation_end,
+           generation_run = @generation_run, updated_at = @updated_at
      WHERE agent_id = @agent_id AND owner_pid = @owner_pid AND source = 'inbox'
   `);
   const updateActivity = database.prepare(`
@@ -1320,9 +1330,11 @@ export function openStore(): Store {
           session_id: row.session_id,
           run_count: row.run_count ?? 0,
           last_text: row.last_text,
+          last_text_run: row.last_text_run,
           confirmed: row.confirmed === 1,
           generation_id: row.generation_id,
           generation_end: row.generation_end,
+          generation_run: row.generation_run,
         },
         event,
       );
@@ -1368,9 +1380,11 @@ export function openStore(): Store {
         session_id: step.next.session_id,
         run_count: step.next.run_count,
         last_text: step.next.last_text,
+        last_text_run: step.next.last_text_run,
         confirmed: step.next.confirmed ? 1 : 0,
         generation_id: step.next.generation_id,
         generation_end: step.next.generation_end,
+        generation_run: step.next.generation_run,
         updated_at: event.at,
       });
       return true;
@@ -1477,6 +1491,7 @@ export function openStore(): Store {
         session_id: row.session_id,
         run_count: row.run_count,
         last_text: row.last_text,
+        last_text_run: row.last_text_run,
         confirmed: row.confirmed === 1,
       };
     },

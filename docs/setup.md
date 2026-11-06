@@ -85,6 +85,12 @@ the shell.
 Focus can only cancel attention. It cannot stop a running agent or alter what
 the agent reported about itself.
 
+A focus hook needs no socket: it runs inside the server whose pane it names.
+From outside that server, name it as `murmur pane` does, with
+`murmur clear --pane %N -L <name>` or `-S <path>`; mu does this to acknowledge
+a failed turn on its own tmux server before retrying it. A hook harness's
+next prompt clears that pane's `error` and `done` by itself.
+
 ## Side panel
 
 Bind the side panel in `.tmux.conf`:

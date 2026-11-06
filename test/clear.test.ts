@@ -2,7 +2,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeEach, expect, test } from "vitest";
-import { clearPane } from "../src/cli/clear.js";
+import { clearPane, namedServer } from "../src/cli/clear.js";
 import { asPaneId, asSessionId, asWindowId, type WindowId } from "../src/ids.js";
 import { openStore, type Store } from "../src/store.js";
 import type { AgentMeta, Location } from "../src/types.js";
@@ -399,4 +399,55 @@ test("clear for another pane re-reads targets when that pane is in another windo
 
   expect(reads).toEqual(["@2"]);
   expect(badges.writes).toEqual([["@2", null]]);
+});
+
+test("clear for a pane of a named server acknowledges that server's pane, not the caller's", () => {
+  // mu acknowledging a failed turn on its own tmux server (`murmur clear -L`)
+  // while running under another one, or none.
+  const labelled = { kind: "label", value: "mu-private" } as const;
+  seed((store) => {
+    for (const server of [labelled, { kind: "default" } as const]) {
+      store.requestAttention({
+        kind: "error",
+        location: { ...location("%5"), server },
+        message: "overloaded",
+        source: "claude",
+        driver: "orchestrated",
+      });
+    }
+  });
+  const badges = badgeRecorder();
+  const asked: unknown[] = [];
+  clearPane(
+    "%5",
+    fakeMux({
+      currentView: () => {
+        throw new Error("the caller's view says nothing about a named server");
+      },
+      windowForPane: (_pane, server) => {
+        asked.push(server);
+        return asWindowId("@1");
+      },
+      panesInWindow: () => [asPaneId("%5")],
+      setWindowState: badges.set,
+    }),
+    labelled,
+  );
+  expect(asked).toEqual([labelled]);
+  const left = read((store) => store.localPanes());
+  // Only the default server's pane %5 still asks for attention.
+  expect(left.map((pane) => [pane.server.kind, pane.attention.map((row) => row.kind)])).toEqual([
+    ["default", ["error"]],
+  ]);
+  expect(badges.writes).toEqual([["@1", null]]);
+});
+
+test("clear's -L and -S name a server; with neither, the caller's tmux decides", () => {
+  expect(namedServer({ socketName: "mu-private" })).toEqual({ kind: "label", value: "mu-private" });
+  expect(namedServer({ socketName: "default" })).toEqual({ kind: "default" });
+  expect(namedServer({ socketPath: "/run/mu/tmux.sock" })).toEqual({
+    kind: "path",
+    value: "/run/mu/tmux.sock",
+  });
+  expect(namedServer({})).toBeUndefined();
 });

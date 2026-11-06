@@ -11,6 +11,7 @@ import {
   placeHarnessHook,
 } from "../hook.js";
 import { type HookPayload, hasHookRow } from "../hook-rows.js";
+import type { InboxEvent } from "../inbox-event.js";
 import { remoteKeyName, writeInboxEvent, writeRemoteEvent } from "../inbox-file.js";
 import { tmuxArgs } from "../mux.js";
 import { readProcessTable } from "../process-chain.js";
@@ -92,9 +93,15 @@ function resolvePane(pane: string, server: TmuxServer): MuHookTarget | string {
 /** mu's event, placed and written, or the reason it was not. */
 export function runMuHook(
   payload: HookPayload,
-  options: { pane?: string; remote?: string; socketName?: string; socketPath?: string },
+  options: {
+    pane?: string;
+    remote?: string;
+    socketName?: string;
+    socketPath?: string;
+    by?: InboxEvent["by"];
+  },
 ): string | null {
-  const input = parseMuHookInput(payload);
+  const input = parseMuHookInput(payload, options.by);
   if (typeof input === "string") return input;
   if (options.remote !== undefined) {
     // A remote worker's key, on the worker's node: no pane here to place it in.
@@ -130,6 +137,10 @@ export function registerHook(program: Command): void {
     .option("--remote <key>", "mu only: a remote worker's key, on its node, instead of a pane")
     .option("-L, --socket-name <name>", "mu only: tmux server socket name, with --pane")
     .option("-S, --socket-path <path>", "mu only: tmux server socket path, with --pane")
+    .option(
+      "--by <origin>",
+      "mu only: whose event it is, mu (default) or harness: one the harness reported on a remote node, relayed",
+    )
     // A flag a harness appends must not make commander print and exit 1 before
     // the action runs: it lands in `ignored`, and only mu is refused for one.
     .allowUnknownOption()
@@ -137,12 +148,24 @@ export function registerHook(program: Command): void {
       async (
         name: string,
         ignored: string[],
-        options: { pane?: string; remote?: string; socketName?: string; socketPath?: string },
+        options: {
+          pane?: string;
+          remote?: string;
+          socketName?: string;
+          socketPath?: string;
+          by?: string;
+        },
       ) => {
         if (name === "mu") {
           const unknown = ignored.find((arg) => arg.startsWith("-"));
           if (unknown !== undefined) {
             process.stderr.write(`murmur: hook mu: unknown option: ${unknown}\n`);
+            process.exitCode = 2;
+            return;
+          }
+          const by = options.by ?? "mu";
+          if (by !== "mu" && by !== "harness") {
+            process.stderr.write(`murmur: hook mu: --by must be mu or harness, not ${by}\n`);
             process.exitCode = 2;
             return;
           }
@@ -165,7 +188,10 @@ export function registerHook(program: Command): void {
               return;
             }
           }
-          const failure = runMuHook(parsePayload(await readStdin(HOOK_STDIN_DEADLINE_MS)), options);
+          const failure = runMuHook(parsePayload(await readStdin(HOOK_STDIN_DEADLINE_MS)), {
+            ...options,
+            by,
+          });
           if (failure !== null) {
             process.stderr.write(`murmur: hook mu: ${failure}\n`);
             process.exitCode = 1;

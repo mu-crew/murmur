@@ -11,6 +11,7 @@ import { type HookPayload, mapHookPayload } from "../src/hook-rows.js";
 import { asPaneId, asSessionId, asWindowId } from "../src/ids.js";
 import { drainInbox, type InboxHost, inboxDir, writeInboxEvent } from "../src/inbox.js";
 import { type InboxEvent, LAST_TEXT_MAX_BYTES } from "../src/inbox-event.js";
+import { remoteDir, remoteKeyName } from "../src/inbox-file.js";
 import {
   type ProcessRow,
   type ProcessTable,
@@ -158,12 +159,12 @@ test("every recorded codex call maps as the codex row says", () => {
     9: "turn_stopped",
     10: "prompt_submitted",
     // `codex exec` from the agent's shell. The shell exec'd it, so no shell
-    // separates it from the outer codex and the chain reads as one codex run:
-    // placed, then refused at the drain by the live owner (see the replay).
-    11: "session_start",
-    12: "prompt_submitted",
-    13: "turn_stopped",
-    14: "session_end",
+    // separates it from the outer codex: the one-shot run under the
+    // interactive one is still a second harness, and nothing is written.
+    11: "nested",
+    12: "nested",
+    13: "nested",
+    14: "nested",
     15: "prompt_submitted",
     16: "turn_stopped",
     17: "prompt_submitted",
@@ -399,11 +400,11 @@ test("a recorded codex session drives the pane, its interrupt included", () => {
     8: "prompt_submitted -> working runs=4 session=01a1ab55",
     9: "turn_stopped -> done runs=4 session=01a1ab55",
     10: "prompt_submitted -> working runs=5 session=01a1ab55",
-    // `codex exec`: the live outer codex owns the pane, so its nested run is refused.
-    11: "session_start (refused) -> working runs=5 session=01a1ab55",
-    12: "prompt_submitted (refused) -> working runs=5 session=01a1ab55",
-    13: "turn_stopped (refused) -> working runs=5 session=01a1ab55",
-    14: "session_end (refused) -> working runs=5 session=01a1ab55",
+    // `codex exec`: a nested run, dropped at the hook, never reaches the pane.
+    11: "- -> working runs=5 session=01a1ab55",
+    12: "- -> working runs=5 session=01a1ab55",
+    13: "- -> working runs=5 session=01a1ab55",
+    14: "- -> working runs=5 session=01a1ab55",
     15: "prompt_submitted -> working runs=6 session=01a1ab55",
     16: "turn_stopped -> done runs=6 session=01a1ab55",
     17: "prompt_submitted -> working runs=7 session=01a1ab55",
@@ -529,6 +530,56 @@ test("a claude StopFailure ends the turn in error", () => {
   drain(s);
   expect(view(s)).toMatch(/^error runs=1/);
   expect(attention(s)).toEqual(["error:rate_limit: 429 Too Many Requests"]);
+});
+
+test("the next prompt clears a failed turn's error, as it clears done", () => {
+  const s = store();
+  const prompt = fixture("claude")[1] as FixtureLine;
+  writeInboxEvent(hook("claude", prompt) as InboxEvent);
+  writeInboxEvent(
+    hook(
+      "claude",
+      derived("claude", { hook_event_name: "StopFailure", error: "overloaded" }),
+    ) as InboxEvent,
+  );
+  drain(s);
+  expect(attention(s)).toEqual(["error:overloaded"]);
+  // A retry, or the human typing again: the failure is answered.
+  writeInboxEvent(
+    hook("claude", derived("claude", { hook_event_name: "UserPromptSubmit" })) as InboxEvent,
+  );
+  drain(s);
+  expect(attention(s)).toEqual([]);
+  expect(view(s)).toMatch(/^working runs=2/);
+});
+
+test("last_text_run names the turn whose text the pane holds", () => {
+  const s = store();
+  const run = () => {
+    const agent = paneReport(s, asPaneId("%72"), { kind: "default" }, false).agent;
+    return [agent?.run_count, agent?.last_text, agent?.last_text_run];
+  };
+  const send = (over: HookPayload) => {
+    writeInboxEvent(hook("claude", derived("claude", over)) as InboxEvent);
+    drain(s);
+  };
+  writeInboxEvent(hook("claude", fixture("claude")[0] as FixtureLine) as InboxEvent);
+  drain(s);
+  expect(run()).toEqual([0, null, null]);
+  send({ hook_event_name: "UserPromptSubmit" });
+  send({ hook_event_name: "Stop", last_assistant_message: "first" });
+  expect(run()).toEqual([1, "first", 1]);
+  // A turn that ends without text of its own leaves the earlier turn's, and says so.
+  send({ hook_event_name: "UserPromptSubmit" });
+  expect(run()).toEqual([2, "first", 1]);
+  send({ hook_event_name: "StopFailure", error: "overloaded" });
+  expect(run()).toEqual([2, "first", 1]);
+  send({ hook_event_name: "UserPromptSubmit" });
+  send({ hook_event_name: "Stop", last_assistant_message: "third" });
+  expect(run()).toEqual([3, "third", 3]);
+  // A new session starts the turns, and the text, over.
+  send({ hook_event_name: "SessionStart", source: "clear" });
+  expect(run()).toEqual([0, null, null]);
 });
 
 test("resume and compact pass their source through to the store's rules", () => {
@@ -808,6 +859,26 @@ test("a pane with no local harness takes the harness mu names, or is refused", (
   ).toBe("pane %72 runs claude, not codex");
 });
 
+test("a harness's own interrupt, relayed with --by harness, is confirmed; mu's is not", () => {
+  const s = store();
+  const agent = { agent_name: "worker-3", workstream: "ws", cli: "codex", driver: "orchestrated" };
+  writeInboxEvent(relay({ event: "prompt_submitted", harness: "codex", agent }));
+  drain(s);
+  // codex reported the Interrupt on its node; mu relays it as the harness's.
+  const relayed = relay({ event: "interrupted", harness: "codex", agent }, "harness");
+  expect(relayed).toMatchObject({ event: "interrupted", by: "harness" });
+  writeInboxEvent(relayed);
+  drain(s);
+  expect(view(s)).toMatch(/^idle runs=1/);
+  expect(paneReport(s, asPaneId("%72"), { kind: "default" }, false).agent?.confirmed).toBe(true);
+
+  // An interrupt mu sent itself stays mu's: unconfirmed until the harness speaks.
+  writeInboxEvent(relay({ event: "prompt_submitted", harness: "codex", agent }));
+  writeInboxEvent(relay({ event: "interrupted", harness: "codex", agent }));
+  drain(s);
+  expect(view(s)).toMatch(/^idle\? runs=2/);
+});
+
 /** An ssh pane in the recorded pane's place: the login shell, and the ssh under it. */
 const SSH = 900;
 const sshPane = {
@@ -824,9 +895,9 @@ const sshPane = {
   },
 };
 
-function relay(payload: HookPayload): InboxEvent {
+function relay(payload: HookPayload, by: InboxEvent["by"] = "mu"): InboxEvent {
   const event = muHookEvent(
-    parseMuHookInput(payload) as never,
+    parseMuHookInput(payload, by) as never,
     { table: sshPane.table, self: process.pid, env: {}, now: NOW },
     sshPane.target,
   );
@@ -958,4 +1029,21 @@ test("murmur hook mu reports what it refused", () => {
   const flag = cli(["hook", "mu", "--verbose"], JSON.stringify({ event: "continued" }));
   expect(flag.status).toBe(2);
   expect(flag.stderr).toBe("murmur: hook mu: unknown option: --verbose\n");
+  const by = cli(["hook", "mu", "--by", "codex"], JSON.stringify({ event: "interrupted" }));
+  expect(by.status).toBe(2);
+  expect(by.stderr).toBe("murmur: hook mu: --by must be mu or harness, not codex\n");
+});
+
+test("murmur hook mu --by harness writes the harness's event; without it, mu's", () => {
+  const written = (key: string) => {
+    const dir = join(remoteDir(), remoteKeyName(key) as string);
+    return readdirSync(dir).map((file) => JSON.parse(readFileSync(join(dir, file), "utf8")));
+  };
+  const input = JSON.stringify({ event: "interrupted", harness: "codex" });
+  const relayed = cli(["hook", "mu", "--remote", "origin/%3", "--by", "harness"], input);
+  expect({ status: relayed.status, stderr: relayed.stderr }).toEqual({ status: 0, stderr: "" });
+  expect(written("origin/%3")).toMatchObject([{ event: "interrupted", by: "harness" }]);
+  const own = cli(["hook", "mu", "--remote", "origin/%4"], input);
+  expect({ status: own.status, stderr: own.stderr }).toEqual({ status: 0, stderr: "" });
+  expect(written("origin/%4")).toMatchObject([{ event: "interrupted", by: "mu" }]);
 });

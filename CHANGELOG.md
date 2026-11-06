@@ -6,12 +6,13 @@ so it says what changed for a user rather than listing every commit.
 ## Unreleased
 
 **Store reset, once: upgrade the CLI and the pi package together.** The store
-moves to schema 10 for the hook-harness inbox. The first open by the new build
+moves to schema 11 for the hook-harness inbox. The first open by the new build
 resets it, keeping peers; running pi agents reappear on their next event, or
 on `/new`. An older build refuses the new store and goes silent until it is
-upgraded. Schema 10 also stamps the store "compatible since 10", so a later
-release that only adds columns will not force another reset. No snapshot
-change: nodes still federate across versions.
+upgraded. The store is also stamped "compatible since 10", so a later release
+that only adds columns will not force another reset; schema 11 is itself such
+an addition over schema 10 (`last_text_run`, below). No snapshot change: nodes
+still federate across versions.
 
 **The pane inbox.** Hook harnesses (claude, codex, cursor-agent, muse) get
 a per-pane inbox of event files that every reader -- `status`, the dash, the
@@ -72,6 +73,42 @@ build that cannot load it. Without the variable pi behaves exactly as before.
 **`murmur pane <pane> --json`.** One local pane's state after draining the
 inbox, with the hook harness's `run_count`, `session_id` and last turn text.
 `murmur doctor` reports a pane inbox that has hit its 10,000-event cap.
+
+**`last_text_run`: which turn wrote the last text.** `murmur pane --json` and
+`murmur pane --remote --json` report `last_text_run`, the `run_count` of the
+turn whose text `last_text` holds. A turn that ends without text (an interrupt,
+a failure) leaves both alone, so a reader can tell the last turn's own text
+from an earlier one's; a cursor-agent text that lands during the next turn
+keeps its own turn's run.
+
+**A new prompt clears a failed turn's `error`.** In a hook harness's pane,
+`prompt_submitted` now clears `error` as it already cleared `done`, so a
+retried or re-prompted pane stops showing the old failure. `murmur clear`
+also takes `-L <name>` or `-S <path>`, as `murmur pane` does, to acknowledge a
+pane of a tmux server the caller is not running inside; without them the
+focus hooks behave as before.
+
+**`murmur hook mu --by harness`.** mu relays the events a remote worker's
+harness reported on its node into the origin pane through `murmur hook mu`.
+With `--by harness`, a relayed codex, Muse or cursor-agent interrupt is
+confirmed (`idle`) on the origin, as it was on the node, instead of reading as
+an interrupt mu sent (`idle?`). Without the flag, mu's events are mu's, as
+before.
+
+**Anchors are read from the home path first.** mu's anchor files are read from
+`~/.local/state/mu-next/anchors` whatever the environment, then from
+`$XDG_STATE_HOME/mu-next/anchors` when that is another directory, so mu can
+write one place that every hook finds, Muse's included.
+
+**A nested `codex exec` or `muse exec` writes nothing, even with no shell
+between.** A one-shot run (`codex exec`, `muse exec`, `claude -p`, `cursor-agent
+-p`) started directly under an interactive run of the same harness, as a shell
+tool that `exec`s its command leaves it, is a nested agent and is dropped at the
+hook (`codex e` and `codex review` count as one-shot; a launcher whose own
+options murmur cannot read never splits a run). Before, it read as part of the
+outer run and was only refused by the store's owner gate, which an unclaimed
+pane did not apply. `murmur hook mu --pane` likewise names the outer run as the
+pane's owner.
 
 ## 1.5.2
 

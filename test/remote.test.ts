@@ -192,6 +192,26 @@ test("mu's remote interrupt reads idle? until the harness speaks, and claims not
   expect(read()).toMatchObject({ state: "idle", agent: { confirmed: true, last_text: "OK" } });
 });
 
+test("a remote harness interrupt relayed --by harness is confirmed, and text names its run", () => {
+  const lines = fixture("claude")
+    .filter((line) => line.u0_line <= 4)
+    .map(remoteLine);
+  for (const line of lines) writeHookEvent(place(line, { anchor: anchored(line) }) as HookWrite);
+  // Two turns, each with its own text: the second one wrote it.
+  expect(read()).toMatchObject({ agent: { run_count: 2, last_text: "60", last_text_run: 2 } });
+  writeHookEvent(
+    place(lines[3] as FixtureLine, { anchor: anchored(lines[3] as FixtureLine) }) as HookWrite,
+  );
+  writeRemoteEvent(
+    muRemoteEvent(parseMuHookInput({ event: "interrupted" }, "harness") as never, KEY, Date.now()),
+  );
+  // The third turn ended without text: the text is still the second's.
+  expect(read()).toMatchObject({
+    state: "idle",
+    agent: { run_count: 3, confirmed: true, last_text: "60", last_text_run: 2 },
+  });
+});
+
 test("a released remote key keeps its last turn for mu to collect", () => {
   const lines = fixture("claude")
     .filter((line) => [0, 1, 2].includes(line.u0_line))
