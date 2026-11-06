@@ -133,6 +133,13 @@ test("only a snapshot-version mismatch is flagged; a murmur version is shown pla
     incompatible: false,
   });
 
+  // A pre-release is a version like any other: shown as it is, never parsed,
+  // and no mismatch beside a release on the same snapshot.
+  expect(cell({ murmur_version: "2.0.0-next.0", snapshot_version: SNAPSHOT_VERSION })).toEqual({
+    text: "2.0.0-next.0",
+    incompatible: false,
+  });
+
   const newer = cell({ murmur_version: "9.9.9", snapshot_version: 9 });
   expect(newer.incompatible).toBe(true);
   expect(newer.text).toContain("9.9.9");

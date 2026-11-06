@@ -20,6 +20,7 @@ agents reappear on their next event, or on `/new`, once their extension is the
 new one. A 1.x and a 2.x murmur do not see each other's agents. The store is
 stamped "compatible since 10", so a later release that only adds columns will
 not move again. No snapshot change: nodes still federate across versions.
+Until 2.0.0 ships, `murmur --version` says `2.0.0-next.0`, not 1.5.2.
 
 **The pane inbox.** Hook harnesses (claude, codex, cursor-agent, muse) get
 a per-pane inbox of event files that every reader -- `status`, the dash, the
@@ -91,7 +92,15 @@ process. A hook now records the server's socket from the server's own argv,
 the drain asks the reader's own server next, and a cache in the state
 directory (`tmux-sockets.json`, checked against each server's start time)
 remembers every answer across processes, so a scan happens once, not on every
-read.
+read. A scan asks its sockets all at once, within 1.5 s for the whole drain
+(the hints first, in at most half of it), and leaves an inbox it could not
+place for the next drain, which asks a socket killed at the budget again, so
+even the first `murmur status` past wedged sockets returns in about 2 s.
+
+**An empty or relative `XDG_STATE_HOME` or `XDG_CONFIG_HOME` is ignored**, as
+the XDG spec, mu and muzzle ignore it, and so is an empty `MURMUR_STATE_DIR` or
+`MURMUR_CONFIG_DIR`: none of them can put murmur's files under the directory it
+happened to start in.
 
 **`CLAUDE_CONFIG_DIR` and `CODEX_HOME`.** `murmur init` writes, and
 `murmur doctor` checks, Claude Code's and codex's hook files in the directories

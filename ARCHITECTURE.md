@@ -602,11 +602,16 @@ which outlives the process and counts an entry only while the pid's start time
 matches), then the event's `$TMUX`, then its `server_socket`, then the reader's
 own server (`$TMUX`), each checked by asking that socket for its pid, and only
 then by asking each socket in tmux's directory, skipping the ones the cache
-says belong to another live server or answered nothing in the last ten minutes.
-Asking a socket that accepts and never answers costs a tmux client its full
-3 s, which is what the cache and the order are for. An inbox whose server pid
-is alive but answers on no socket the drain can find waits for a later drain,
-until its oldest event is an hour old. A drained inbox's emptied directory is
+says belong to another live server or had no server in the last ten minutes.
+A socket that accepts and never answers holds its tmux client until it is
+killed, so the hints are asked together, then the directory's sockets together,
+and all the asking in one drain shares a 1.5 s budget, of which a lookup's hints
+get at most half of what is left, so a wedged hinted server cannot starve the
+scan. What has not answered by then is killed and is not an answer: it is not
+cached (a live server under load is slow, not silent) and the next drain asks it
+again. An inbox whose server pid is alive but answers on no socket the drain
+can find, or not within the budget, waits for a later drain, until its oldest
+event is an hour old. A drained inbox's emptied directory is
 removed (non-recursively, so a hook that just linked an event keeps it; a hook
 that finds it gone recreates it): the key is a one-way hash, so an empty
 directory could never be checked against its server or pane again. After the

@@ -4,6 +4,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readdirSync,
+  statSync,
   utimesSync,
   writeFileSync,
 } from "node:fs";
@@ -19,10 +20,13 @@ import {
   type InboxHost,
   inboxDir,
   inboxKey,
+  SOCKET_PROBE_BUDGET_MS,
+  tmuxInboxHost,
   writeInboxEvent,
 } from "../src/inbox.js";
 import { type InboxEvent, LAST_TEXT_MAX_BYTES, parseServerSocket } from "../src/inbox-event.js";
 import type { PublishPlan } from "../src/mux.js";
+import { loadSocketCache } from "../src/socket-cache.js";
 import { openStore, type Store } from "../src/store.js";
 import type { InboxDelivery, Location } from "../src/types.js";
 import { builtArtifact } from "./helpers/built.js";
@@ -552,6 +556,144 @@ test("the drain hands the host the hook's hints: its $TMUX and its server's sock
     [SERVER, { tmux: "/tmp/tmux-501/default,4242,0", socket: { kind: "label", value: "mule" } }],
   ]);
   expect(done).toBe(1);
+});
+
+test("the real host asks a scan's sockets together, once per drain, for every lookup", () => {
+  const dir = mkdtempSync(join(tmpdir(), "murmur-probe-dir-"));
+  for (const name of ["a", "b", "c"]) writeFileSync(join(dir, name), "");
+  const calls: { sockets: readonly string[]; budget: number }[] = [];
+  const h = tmuxInboxHost({
+    socketDirectory: dir,
+    own: [],
+    cache: null,
+    probe: (sockets, budget) => {
+      calls.push({ sockets, budget });
+      return new Map(sockets.map((socket) => [socket, socket.endsWith("b") ? 111 : null]));
+    },
+  });
+  const none = { tmux: null, socket: null };
+  expect(h.serverFor(111, none)).toEqual({ kind: "path", value: join(dir, "b") });
+  // One probe for the whole directory, not one socket after another.
+  expect(calls.map((call) => call.sockets)).toEqual([["a", "b", "c"].map((n) => join(dir, n))]);
+  expect(calls[0]?.budget).toBeLessThanOrEqual(SOCKET_PROBE_BUDGET_MS);
+  // Another pid in the same drain: every socket has answered, so none is asked again.
+  expect(h.serverFor(222, none)).toBeNull();
+  expect(calls).toHaveLength(1);
+});
+
+/** Blocks the test's thread for `ms`, as a probe whose sockets never answer does. */
+function nap(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+test("the real host's probes share one budget; a server not found in it waits for the next drain", () => {
+  const dir = mkdtempSync(join(tmpdir(), "murmur-probe-budget-"));
+  writeFileSync(join(dir, "silent"), "");
+  const calls: { sockets: readonly string[]; budget: number }[] = [];
+  const h = tmuxInboxHost({
+    socketDirectory: dir,
+    own: [],
+    cache: null,
+    probeBudgetMs: 1000,
+    // Sockets that accept and never answer: each probe runs out its budget,
+    // and is killed with nothing to say.
+    probe: (sockets, budget) => {
+      calls.push({ sockets, budget });
+      nap(budget);
+      return new Map();
+    },
+  });
+  const started = Date.now();
+  expect(h.serverFor(333, { tmux: "/nowhere/hint,333,0", socket: null })).toBeNull();
+  expect(h.serverFor(444, { tmux: "/nowhere/other,444,0", socket: null })).toBeNull();
+  // The hint got half the budget and the directory scan the rest, so the
+  // second lookup had nothing left to ask with.
+  expect(calls.map((call) => call.sockets)).toEqual([["/nowhere/hint"], [join(dir, "silent")]]);
+  expect(calls[0]?.budget).toBeLessThanOrEqual(500);
+  expect(calls[1]?.budget).toBeLessThanOrEqual(500);
+  expect(Date.now() - started).toBeLessThan(2000);
+
+  // In a drain, that inbox is kept for a later one rather than deleted.
+  const s = store();
+  write({ event: "prompt_submitted" });
+  const paneDir = join(inboxDir(), inboxKey(SERVER, ROOT));
+  const stuck = tmuxInboxHost({
+    socketDirectory: dir,
+    own: [],
+    cache: null,
+    probe: () => new Map(),
+  });
+  expect(drainInbox(s, { host: { ...stuck, isAlive: () => true }, mux: fakeMux() })).toMatchObject({
+    applied: 0,
+    removed: 0,
+  });
+  expect(existsSync(paneDir)).toBe(true);
+});
+
+test("a hinted socket that never answers does not starve another lookup's directory scan", () => {
+  const dir = mkdtempSync(join(tmpdir(), "murmur-probe-starve-"));
+  for (const name of ["a", "b"]) writeFileSync(join(dir, name), "");
+  const calls: (readonly string[])[] = [];
+  const h = tmuxInboxHost({
+    socketDirectory: dir,
+    own: [],
+    cache: loadSocketCache(null),
+    probeBudgetMs: 1000,
+    probe: (sockets, budget) => {
+      calls.push(sockets);
+      // The hinted socket accepts and never answers; `b` is a live server.
+      if (sockets.includes("/wedged/hint")) nap(budget);
+      return new Map(
+        sockets
+          .filter((socket) => socket !== "/wedged/hint")
+          .map((s) => [s, s.endsWith("b") ? 111 : null]),
+      );
+    },
+  });
+  // The wedged server's inbox comes first, as readdir order may put it.
+  expect(h.serverFor(333, { tmux: "/wedged/hint,333,0", socket: null })).toBeNull();
+  // An inbox with no hint at all is still placed, in the same drain.
+  expect(h.serverFor(111, { tmux: null, socket: null })).toEqual({
+    kind: "path",
+    value: join(dir, "b"),
+  });
+  expect(calls).toEqual([["/wedged/hint"], ["a", "b"].map((name) => join(dir, name))]);
+});
+
+test("a probe killed at the budget is not cached as silent: the next drain asks it again", () => {
+  const dir = mkdtempSync(join(tmpdir(), "murmur-probe-slow-"));
+  writeFileSync(join(dir, "slow"), "");
+  const slow = join(dir, "slow");
+  // One cache across both drains, as the file carries it from one process to
+  // the next.
+  const cache = loadSocketCache(null);
+  let loaded = true;
+  const calls: (readonly string[])[] = [];
+  const host = () =>
+    tmuxInboxHost({
+      socketDirectory: dir,
+      own: [],
+      cache,
+      probeBudgetMs: 200,
+      // A live server under load: too slow for the first drain's budget.
+      probe: (sockets, budget) => {
+        calls.push(sockets);
+        if (loaded) {
+          nap(budget);
+          return new Map();
+        }
+        return new Map(sockets.map((socket) => [socket, 555]));
+      },
+    });
+  expect(host().serverFor(555, { tmux: null, socket: null })).toBeNull();
+  const stat = statSync(slow);
+  expect(cache.skip(slow, { ino: stat.ino, mtime: stat.mtimeMs }, 555, () => true)).toBe(false);
+  loaded = false;
+  expect(host().serverFor(555, { tmux: null, socket: null })).toEqual({
+    kind: "path",
+    value: slow,
+  });
+  expect(calls).toEqual([[slow], [slow]]);
 });
 
 test("a drain limited to some keys leaves every other inbox alone, unlocated", () => {

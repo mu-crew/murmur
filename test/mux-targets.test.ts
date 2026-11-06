@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, expect, test } from "vitest";
@@ -15,6 +15,20 @@ import { openStore } from "../src/store.js";
 // -L rather than -S so tmux applies its own socket directory and permissions,
 // and pid-suffixed so concurrent runs cannot collide.
 const SOCKET = `murmur-targets-${process.pid}`;
+const OUTER = `${SOCKET}-outer`;
+const SECOND = `${SOCKET}-second`;
+
+// A private TMUX_TMPDIR for every server here, the rig and the two "terminal"
+// servers alike, so their sockets land in a temp dir removed in afterAll
+// rather than in the real `/tmp/tmux-<uid>`. `kill-server` leaves the socket
+// file behind, so the two terminal servers' sockets used to stay there after
+// every run, and a run that died early left the rig's too.
+// Under /tmp, not `os.tmpdir()`: macOS's per-user $TMPDIR makes socket paths
+// long enough to hit the unix socket limit. Children inherit it, including the
+// `tmux attach` the outer servers run in their panes, and `src/mux.ts` resolves
+// labels against it too.
+const TMUX_ROOT = realpathSync(mkdtempSync("/tmp/murmur-targets-"));
+process.env.TMUX_TMPDIR = TMUX_ROOT;
 
 // `-f /dev/null`, so the rig never reads the developer's ~/.tmux.conf.
 //
@@ -44,22 +58,17 @@ function rigFails(...args: string[]): boolean {
 }
 
 afterAll(() => {
-  // kill-server stops the server but leaves the socket file behind, and a test
-  // that litters on every run is a test people delete. Ask tmux where the
-  // socket is rather than reconstructing the path: on macOS `os.tmpdir()` is
-  // the per-user $TMPDIR while tmux uses /tmp, so guessing missed by a mile.
-  let socketPath: string | null = null;
-  try {
-    socketPath = rig("display-message", "-p", "#{socket_path}");
-  } catch {
-    // Server already gone; nothing to ask and probably nothing to remove.
+  // Every server this file may have started, whether or not its test got as
+  // far as its own cleanup; then the whole socket directory. kill-server alone
+  // leaves the socket file behind.
+  for (const socket of [SOCKET, OUTER, SECOND]) {
+    try {
+      execFileSync("tmux", ["-L", socket, "kill-server"], { stdio: "ignore", timeout: 5_000 });
+    } catch {
+      // Already gone, or never started.
+    }
   }
-  try {
-    rig("kill-server");
-  } catch {
-    // Already gone, or never started.
-  }
-  if (socketPath) rmSync(socketPath, { force: true });
+  rmSync(TMUX_ROOT, { recursive: true, force: true });
 });
 
 // These two spellings are the whole reason this file talks to a real tmux.
@@ -305,8 +314,8 @@ test("the armed jump hook marks exactly one attaching client and then removes it
   //
   // Two extra tmux servers act as terminals, because a client needs a tty and
   // `attach` from a test process has none.
-  const outer = `${SOCKET}-outer`;
-  const second = `${SOCKET}-second`;
+  const outer = OUTER;
+  const second = SECOND;
   const outerTmux = (...args: string[]) =>
     execFileSync("tmux", ["-L", outer, "-f", "/dev/null", ...args], {
       encoding: "utf8",

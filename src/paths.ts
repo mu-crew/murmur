@@ -1,5 +1,5 @@
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 
 /**
  * The state directory's name. `murmur2` since the hook-harness store: a 1.x
@@ -14,13 +14,29 @@ export const STATE_DIR_NAME = "murmur2";
 export const LEGACY_STATE_DIR_NAME = "murmur";
 
 /**
+ * `$XDG_STATE_HOME`, or undefined when it is unset, empty or relative. The XDG
+ * spec says a relative value is to be ignored, and mu and muzzle ignore it: a
+ * murmur that honoured `XDG_STATE_HOME=state` would put its store under
+ * whatever directory it was started in, and miss mu's anchors.
+ */
+export function xdgStateHome(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  const value = env.XDG_STATE_HOME;
+  return value && isAbsolute(value) ? value : undefined;
+}
+
+/** `$MURMUR_STATE_DIR`, or undefined when it is unset or empty. */
+function stateDirOverride(env: NodeJS.ProcessEnv): string | undefined {
+  return env.MURMUR_STATE_DIR || undefined;
+}
+
+/**
  * Everything murmur keeps: the store, identity, the compile cache, the tmux
  * socket cache. `MURMUR_STATE_DIR` overrides it; otherwise the XDG state home.
  */
 export function stateDir(env: NodeJS.ProcessEnv = process.env, home = homedir()): string {
   return (
-    env.MURMUR_STATE_DIR ??
-    join(env.XDG_STATE_HOME ?? join(home, ".local", "state"), STATE_DIR_NAME)
+    stateDirOverride(env) ??
+    join(xdgStateHome(env) ?? join(home, ".local", "state"), STATE_DIR_NAME)
   );
 }
 
@@ -33,7 +49,7 @@ export function stateDir(env: NodeJS.ProcessEnv = process.env, home = homedir())
  * cannot see that variable cannot see the override either.
  */
 export function homeStateDir(env: NodeJS.ProcessEnv = process.env, home = homedir()): string {
-  return env.MURMUR_STATE_DIR ?? join(home, ".local", "state", STATE_DIR_NAME);
+  return stateDirOverride(env) ?? join(home, ".local", "state", STATE_DIR_NAME);
 }
 
 /**
@@ -45,15 +61,14 @@ export function legacyStateDir(
   env: NodeJS.ProcessEnv = process.env,
   home = homedir(),
 ): string | null {
-  if (env.MURMUR_STATE_DIR !== undefined) return null;
-  return join(env.XDG_STATE_HOME ?? join(home, ".local", "state"), LEGACY_STATE_DIR_NAME);
+  if (stateDirOverride(env) !== undefined) return null;
+  return join(xdgStateHome(env) ?? join(home, ".local", "state"), LEGACY_STATE_DIR_NAME);
 }
 
-export function configDir(): string {
-  return (
-    process.env.MURMUR_CONFIG_DIR ??
-    join(process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config"), "murmur")
-  );
+/** Where peers and settings live, by the same rules as the state directory. */
+export function configDir(env: NodeJS.ProcessEnv = process.env, home = homedir()): string {
+  const xdg = env.XDG_CONFIG_HOME && isAbsolute(env.XDG_CONFIG_HOME) ? env.XDG_CONFIG_HOME : null;
+  return env.MURMUR_CONFIG_DIR || join(xdg ?? join(home, ".config"), "murmur");
 }
 
 /** The current-state database. The only database murmur holds. */
