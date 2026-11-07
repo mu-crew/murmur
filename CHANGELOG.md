@@ -5,6 +5,14 @@ so it says what changed for a user rather than listing every commit.
 
 ## Unreleased
 
+## 2.0.1
+
+**`murmur hook cursor-agent` replies `{}`.** The Cursor CLI marks a hook
+with empty stdout as failed (`empty_stdout`), so sessionStart and the rest
+never stuck and panes stayed invisible in `status` / dash / pick. murmur
+now replies `{}` for that harness only (like muzzle); other harnesses stay
+silent.
+
 **The side panel works with tmux 3.8.** tmux 3.8 prints a window's layout
 as JSON (`{"V":2,"L":...}`) instead of the old `csum,WxH,...` string, so
 opening or closing the side panel failed with "could not reflow tmux window
