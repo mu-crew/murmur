@@ -3,7 +3,7 @@
 Notable changes per release. Written for someone deciding whether to upgrade,
 so it says what changed for a user rather than listing every commit.
 
-## Unreleased
+## 2.0.0
 
 **State moves to `~/.local/state/murmur2`: upgrade the CLI and the pi package
 together.** The hook-harness inbox needs a new store (schema 11), and murmur
@@ -20,7 +20,6 @@ agents reappear on their next event, or on `/new`, once their extension is the
 new one. A 1.x and a 2.x murmur do not see each other's agents. The store is
 stamped "compatible since 10", so a later release that only adds columns will
 not move again. No snapshot change: nodes still federate across versions.
-Until 2.0.0 ships, `murmur --version` says `2.0.0-next.0`, not 1.5.2.
 
 **The pane inbox.** Hook harnesses (claude, codex, cursor-agent, muse) get
 a per-pane inbox of event files that every reader -- `status`, the dash, the
