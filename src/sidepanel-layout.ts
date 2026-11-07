@@ -1,9 +1,13 @@
 import type { PaneId } from "./ids.js";
 
 type Rect = { width: number; height: number; x: number; y: number };
+/** A tmux 3.8+ JSON layout cell, kept whole so fields murmur ignores survive a write-back. */
+type JsonCell = Record<string, unknown>;
 type LayoutNode =
-  | { kind: "leaf"; rect: Rect; pane: number }
-  | { kind: "horizontal" | "vertical"; rect: Rect; children: LayoutNode[] };
+  | { kind: "leaf"; rect: Rect; pane: number; cell?: JsonCell }
+  | { kind: "horizontal" | "vertical"; rect: Rect; children: LayoutNode[]; cell?: JsonCell };
+/** A parsed window layout and how to write a reflowed tree back in the form it was read. */
+type Parsed = { root: LayoutNode; write: (root: LayoutNode) => string };
 
 class Parser {
   private position = 0;
@@ -69,11 +73,73 @@ class Parser {
   }
 }
 
-function parseLayout(layout: string): LayoutNode | null {
+/**
+ * `#{window_layout}` in either form tmux prints: the `csum,WxH,x,y{...}` string
+ * of tmux before 3.8, or 3.8's JSON subset (`{"V":2,"L":{...}}`), which tmux
+ * 3.8 gives every client but a control-mode one without new-layouts.
+ * select-layout accepts both, so the reflow is written back in the form read.
+ */
+function parseLayout(layout: string): Parsed | null {
+  if (layout.startsWith("{")) return parseJsonLayout(layout);
   if (!/^[0-9a-fA-F]{4},/.test(layout)) return null;
   const parser = new Parser(layout.slice(5));
   const root = parser.parseNode();
-  return root && parser.finished() ? root : null;
+  return root && parser.finished() ? { root, write: serialize } : null;
+}
+
+function parseJsonLayout(layout: string): Parsed | null {
+  let doc: unknown;
+  try {
+    doc = JSON.parse(layout);
+  } catch {
+    return null;
+  }
+  if (!isObject(doc) || doc.V !== 2 || !isObject(doc.L)) return null;
+  const root = jsonNode(doc.L);
+  if (!root) return null;
+  return { root, write: (node) => JSON.stringify({ ...doc, L: writeJsonNode(node) }) };
+}
+
+function isObject(value: unknown): value is JsonCell {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function jsonNumber(value: unknown, allowZero: boolean): number | null {
+  return typeof value === "number" &&
+    Number.isSafeInteger(value) &&
+    (allowZero ? value >= 0 : value > 0)
+    ? value
+    : null;
+}
+
+function jsonNode(cell: JsonCell): LayoutNode | null {
+  const width = jsonNumber(cell.w, false);
+  const height = jsonNumber(cell.h, false);
+  const x = jsonNumber(cell.x, true);
+  const y = jsonNumber(cell.y, true);
+  if (width === null || height === null || x === null || y === null) return null;
+  const rect = { width, height, x, y };
+  if (cell.t === "p") {
+    const pane = typeof cell.I === "string" ? paneNumber(cell.I as PaneId) : null;
+    return pane === null ? null : { kind: "leaf", rect, pane, cell };
+  }
+  if ((cell.t !== "h" && cell.t !== "v") || !Array.isArray(cell.c) || cell.c.length < 2) {
+    return null;
+  }
+  const children: LayoutNode[] = [];
+  for (const child of cell.c) {
+    const node = isObject(child) ? jsonNode(child) : null;
+    if (!node) return null;
+    children.push(node);
+  }
+  return { kind: cell.t === "h" ? "horizontal" : "vertical", rect, children, cell };
+}
+
+function writeJsonNode(node: LayoutNode): JsonCell {
+  const { width: w, height: h, x, y } = node.rect;
+  const out: JsonCell = { ...node.cell, w, h, x, y };
+  if (node.kind === "leaf") return out;
+  return { ...out, c: node.children.map(writeJsonNode) };
 }
 
 function paneNumber(pane: PaneId): number | null {
@@ -196,9 +262,16 @@ function containsPane(node: LayoutNode, pane: number): boolean {
 }
 
 export function reflowSidepanelAdded(layout: string, pane: PaneId, width: number): string | null {
-  const root = parseLayout(layout);
+  const parsed = parseLayout(layout);
+  const root = parsed?.root;
   const target = paneNumber(pane);
-  if (!root || target === null || root.kind !== "horizontal" || !Number.isSafeInteger(width)) {
+  if (
+    !parsed ||
+    !root ||
+    target === null ||
+    root.kind !== "horizontal" ||
+    !Number.isSafeInteger(width)
+  ) {
     return null;
   }
 
@@ -225,16 +298,16 @@ export function reflowSidepanelAdded(layout: string, pane: PaneId, width: number
     x += length + 1;
   }
   root.children = [panel, ...content];
-  return serialize(root);
+  return parsed.write(root);
 }
 
 export function reflowSidepanelRemoved(layout: string, pane: PaneId): string | null {
-  const root = parseLayout(layout);
+  const parsed = parseLayout(layout);
   const target = paneNumber(pane);
-  if (!root || target === null || !containsPane(root, target)) return null;
+  if (!parsed || target === null || !containsPane(parsed.root, target)) return null;
 
-  const rect = { ...root.rect };
-  const content = prunePane(root, target);
+  const rect = { ...parsed.root.rect };
+  const content = prunePane(parsed.root, target);
   if (!content || !scaleHorizontally(content, rect.width, rect.x)) return null;
-  return serialize(content);
+  return parsed.write(content);
 }

@@ -101,3 +101,108 @@ test("malformed, trailing, and missing-pane layouts are rejected", () => {
   expect(reflowSidepanelRemoved("0000,10x10,0,0,1", panel)).toBeNull();
   expect(reflowSidepanelRemoved("0000,10x10,0,0{},1", panel)).toBeNull();
 });
+
+// tmux 3.8 prints #{window_layout} as a JSON subset; select-layout takes it back.
+const pane = (id: number, w: number, h: number, x: number, y: number, extra = {}) => ({
+  t: "p",
+  w,
+  h,
+  x,
+  y,
+  ...extra,
+  i: id,
+  I: `%${id}`,
+});
+const json = (root: object, extra = {}) => JSON.stringify({ V: 2, L: root, ...extra });
+
+test("tmux 3.8 JSON: addition reflows the same tree and answers in JSON", () => {
+  const afterSplit = json({
+    t: "h",
+    w: 120,
+    h: 40,
+    x: 0,
+    y: 0,
+    c: [
+      pane(9, 25, 20, 0, 0),
+      {
+        t: "v",
+        w: 94,
+        h: 40,
+        x: 26,
+        y: 0,
+        c: [pane(1, 94, 19, 26, 0, { a: true }), pane(2, 94, 20, 26, 20)],
+      },
+    ],
+  });
+
+  expect(JSON.parse(reflowSidepanelAdded(afterSplit, panel, 30) ?? "null")).toEqual({
+    V: 2,
+    L: {
+      t: "h",
+      w: 120,
+      h: 40,
+      x: 0,
+      y: 0,
+      c: [
+        pane(9, 30, 40, 0, 0),
+        {
+          t: "v",
+          w: 89,
+          h: 40,
+          x: 31,
+          y: 0,
+          c: [pane(1, 89, 19, 31, 0, { a: true }), pane(2, 89, 20, 31, 20)],
+        },
+      ],
+    },
+  });
+});
+
+test("tmux 3.8 JSON: add then remove matches the old format, keeping fields murmur ignores", () => {
+  const afterSplit = json(
+    {
+      t: "h",
+      w: 120,
+      h: 40,
+      x: 0,
+      y: 0,
+      c: [
+        pane(9, 25, 40, 0, 0),
+        {
+          t: "h",
+          w: 94,
+          h: 40,
+          x: 26,
+          y: 0,
+          c: [pane(1, 47, 40, 26, 0, { l: 0 }), pane(2, 46, 40, 74, 0)],
+        },
+      ],
+    },
+    { F: [] },
+  );
+  const added = reflowSidepanelAdded(afterSplit, panel, 30);
+  const removed = JSON.parse(reflowSidepanelRemoved(added ?? "", panel) ?? "null");
+
+  expect(removed).toEqual({
+    V: 2,
+    L: {
+      t: "h",
+      w: 120,
+      h: 40,
+      x: 0,
+      y: 0,
+      c: [pane(1, 60, 40, 0, 0, { l: 0 }), pane(2, 59, 40, 61, 0)],
+    },
+    F: [],
+  });
+});
+
+test("tmux 3.8 JSON: another version, a bad cell or a missing pane is rejected", () => {
+  const ok = { t: "h", w: 10, h: 10, x: 0, y: 0, c: [pane(9, 4, 10, 0, 0), pane(1, 5, 10, 5, 0)] };
+  expect(reflowSidepanelAdded(json(ok), panel, 3)).not.toBeNull();
+  expect(reflowSidepanelAdded(JSON.stringify({ V: 3, L: ok }), panel, 3)).toBeNull();
+  expect(reflowSidepanelAdded('{"V":2,"L":', panel, 3)).toBeNull();
+  expect(reflowSidepanelAdded(json({ ...ok, c: [pane(9, 4, 10, 0, 0)] }), panel, 3)).toBeNull();
+  expect(reflowSidepanelAdded(json({ ...ok, t: "x" }), panel, 3)).toBeNull();
+  expect(reflowSidepanelRemoved(json(pane(1, 10, 10, 0, 0)), panel)).toBeNull();
+});

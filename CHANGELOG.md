@@ -3,6 +3,14 @@
 Notable changes per release. Written for someone deciding whether to upgrade,
 so it says what changed for a user rather than listing every commit.
 
+## Unreleased
+
+**The side panel works with tmux 3.8.** tmux 3.8 prints a window's layout
+as JSON (`{"V":2,"L":...}`) instead of the old `csum,WxH,...` string, so
+opening or closing the side panel failed with "could not reflow tmux window
+for side panel". murmur now reads both forms and writes the reflowed layout
+back in the form tmux gave it.
+
 ## 2.0.0
 
 **State moves to `~/.local/state/murmur2`: upgrade the CLI and the pi package
