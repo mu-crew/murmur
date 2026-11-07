@@ -180,12 +180,16 @@ export function registerHook(program: Command): void {
           }
           return;
         }
-        // A harness hook. Exit 0 and silence, whatever happens below.
+        // A harness hook. Exit 0 whatever happens below. cursor-agent's CLI
+        // treats empty stdout as a failed hook (`empty_stdout`) and tracking
+        // never sticks; reply `{}` like muzzle. Other harnesses stay silent.
         try {
           if (!hasHookRow(name)) return;
           runHarnessHook(name, parsePayload(await readStdin(HOOK_STDIN_DEADLINE_MS)));
         } catch {
           // Nothing to report to: the harness owns this process's output.
+        } finally {
+          if (name === "cursor-agent") process.stdout.write("{}\n");
         }
       },
     );

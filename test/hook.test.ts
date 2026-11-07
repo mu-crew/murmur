@@ -995,7 +995,6 @@ test("a harness hook exits 0 and prints nothing, whatever it is given", () => {
     [["hook", "claude"], "not json"],
     [["hook", "claude"], ""],
     [["hook", "codex"], JSON.stringify(title.payload)],
-    [["hook", "cursor-agent"], "{}"],
     [["hook", "muse"], JSON.stringify({ hook_event_name: "SubagentStop" })],
     [["hook", "claude", "extra", "args"], "[]"],
     [["hook", "claude", "--x"], "{}"],
@@ -1006,6 +1005,17 @@ test("a harness hook exits 0 and prints nothing, whatever it is given", () => {
       args,
       status: 0,
       stdout: "",
+      stderr: "",
+    });
+  }
+  // cursor-agent's CLI marks empty stdout as a failed hook, so that harness
+  // alone replies `{}` — still exit 0, still no stderr, on any stdin.
+  for (const input of ["{}", "not json", ""] as const) {
+    const run = cli(["hook", "cursor-agent"], input);
+    expect({ input, status: run.status, stdout: run.stdout, stderr: run.stderr }).toEqual({
+      input,
+      status: 0,
+      stdout: "{}\n",
       stderr: "",
     });
   }
