@@ -456,6 +456,14 @@ test("a remote glance captures a real private tmux pane", () => {
     const pane = execFileSync("tmux", ["-L", label, "list-panes", "-F", "#{pane_id}"], {
       encoding: "utf8",
     }).trim();
+    // the pane paints its line a moment after new-session returns (on CI, after the capture)
+    for (let i = 0; i < 100; i++) {
+      const shown = execFileSync("tmux", ["-L", label, "capture-pane", "-p", "-t", pane], {
+        encoding: "utf8",
+      });
+      if (shown.includes("PRIVATE_GLANCE_VISIBLE")) break;
+      execFileSync("sleep", ["0.05"]);
+    }
 
     store.addPeer("private", "unused.example");
     store.replacePeerSnapshot("private", {
