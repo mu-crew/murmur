@@ -216,7 +216,9 @@ with `murmur hook cursor-agent`:
 `afterAgentResponse` carries the turn's text and may land after `stop`; murmur
 pairs the two by the turn's `generation_id`. An Escape reads `idle`, and the
 `error` stop cursor-agent sends after it is dropped. The Cursor CLI has no
-permission hook, so its pane never reads `blocked`. Replace the
+permission hook, so its pane never reads `blocked`. `murmur hook cursor-agent`
+replies `{}` on stdout: the CLI treats empty stdout as a failed hook
+(`empty_stdout`) and tracking never sticks. Replace the
 `murmur notify --source cursor` entry below when you add these.
 
 Muse Code, under the `hooks` key of `~/.config/muse/settings.json` (or a
