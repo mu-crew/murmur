@@ -5,6 +5,11 @@ so it says what changed for a user rather than listing every commit.
 
 ## Unreleased
 
+## 2.0.2
+
+Docs and test fixtures use plainer ssh and host examples. No behaviour
+change.
+
 ## 2.0.1
 
 **`murmur hook cursor-agent` replies `{}`.** The Cursor CLI marks a hook
