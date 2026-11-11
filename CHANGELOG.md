@@ -1103,12 +1103,12 @@ Surveyed 4 peers, 4 answered.
 
 One-way peering
   These do not peer this node, so their pickers cannot see its agents.
-  bubba     does not peer mtrojer-mac
-  gardenpc  does not peer mtrojer-mac
+  bubba     does not peer macbook-pro
+  gardenpc  does not peer macbook-pro
 
 Do this
-  ssh bubba murmur peer add mtrojer-mac
-  ssh gardenpc murmur peer add mtrojer-mac
+  ssh bubba murmur peer add macbook-pro
+  ssh gardenpc murmur peer add macbook-pro
 ```
 
 It is read-only — nothing is written to the store and there is no `--fix`, since
@@ -1132,12 +1132,12 @@ possible.** Opt-in, because it costs one ssh dial per ordered pair (4 peers is
 $ murmur doctor --topology
 Reachability  20 ordered pairs probed across 5 nodes
                REACHES                 CANNOT REACH
-  mtrojer-mac  all 4                   -
-  bubba        -                       mtrojer-mac gardenpc linuxpc macmini
-  linuxpc      gardenpc macmini        mtrojer-mac bubba
-  macmini      bubba gardenpc linuxpc  mtrojer-mac
+  macbook-pro  all 4                   -
+  bubba        -                       macbook-pro gardenpc linuxpc macmini
+  linuxpc      gardenpc macmini        macbook-pro bubba
+  macmini      bubba gardenpc linuxpc  macbook-pro
 
-Hub  linuxpc  serves {linuxpc, macmini}, leaves out mtrojer-mac, bubba, gardenpc
+Hub  linuxpc  serves {linuxpc, macmini}, leaves out macbook-pro, bubba, gardenpc
 ```
 
 When no node can hub the fleet it recommends nothing and reports the partition,

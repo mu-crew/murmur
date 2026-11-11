@@ -244,7 +244,7 @@ export type Finding = {
    * Both exist because the two readers want opposite things. `message` stands
    * alone -- it is what `--json` carries and what a consumer logs with no
    * surrounding row to lean on. `detail` assumes the row: printing `message` in a
-   * table gave `gardenpc  gardenpc does not peer this node (mtrojer-mac), so its
+   * table gave `gardenpc  gardenpc does not peer this node (macbook-pro), so its
    * picker cannot see this node's agents` at 106 columns, repeating the subject
    * it was aligned under and repeating the identical consequence on every row.
    *
@@ -778,7 +778,7 @@ export type TopologyNode = {
    *
    * A peer's configured target, or for this node its `display_name` -- what the
    * operator would type, which is NOT guaranteed to resolve elsewhere. Measured
-   * on the author's fleet: `macmini` cannot resolve `mtrojer-mac`. A real
+   * on the author's fleet: `macmini` cannot resolve `macbook-pro`. A real
    * negative about the NAME rather than the network, so the detail is kept.
    */
   target: string;

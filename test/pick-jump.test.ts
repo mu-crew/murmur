@@ -233,7 +233,7 @@ test("enter focuses an attached local pane instead of opening another remote ses
     localPaneProcesses: () => [
       {
         pane: attached,
-        current_command: "2fa-proxy",
+        current_command: "et",
         arguments: "MU_AGENT_NAME=worker-1 MU_WORKSTREAM=murmur et dev",
       },
     ],

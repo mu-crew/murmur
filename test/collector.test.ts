@@ -157,7 +157,7 @@ test("a whole-run failure prints without an empty peer prefix", () => {
 test("a session-channel refusal names the attachment holding the slot", () => {
   const refusal =
     "mux_client_request_session: session request failed: Session open refused by peer " +
-    "mtrojer@dev: Permission denied (keyboard-interactive).";
+    "alice@dev: Permission denied (keyboard-interactive).";
 
   expect(describeFailure("dev", refusal, "%210")).toBe(
     "dev: ssh session limit reached -- pane %210 is your own attachment to this peer. Close it, then collect.",
@@ -952,7 +952,7 @@ test("collect republishes a pane that reconciliation marks crashed", async () =>
 
 const BUSY =
   "mux_client_request_session: session request failed: Session open refused by peer\n" +
-  "mtrojer@dev: Permission denied (keyboard-interactive).";
+  "alice@dev: Permission denied (keyboard-interactive).";
 
 test("a fetch refused for a busy session channel is retried once", async () => {
   // A `MaxSessions 1` host shares its one channel with every tool riding the

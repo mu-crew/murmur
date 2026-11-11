@@ -625,7 +625,7 @@ One JSON document, `murmur export` on stdout, no `--since`, not JSONL.
 {
   "murmur_snapshot": 1,
   "host_id": "9f1c...",            // from identity.json
-  "display_name": "mtrojer-mac",
+  "display_name": "macbook-pro",
   "murmur_version": "0.2.0",       // read from package.json, never restated
   "generated_at": 1772456400000,   // this node's clock at build time
   "panes": [

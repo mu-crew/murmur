@@ -823,7 +823,7 @@ but a quit.
 {
   "murmur_snapshot": 6,
   "host_id": "1d2ee96e-3a94-41b2-90fa-5f1ee2f04276",  // from identity.json
-  "display_name": "mtrojer-mac",
+  "display_name": "macbook-pro",
   "murmur_version": "0.4.0",         // read from package.json, never restated
   "generated_at": 1788105698997,     // this node's clock at build time
   "panes": [

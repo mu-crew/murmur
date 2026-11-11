@@ -76,7 +76,7 @@ hits the host's interactive auth and dies there:
 
 ```
 mux_client_request_session: session request failed: Session open refused by peer
-mtrojer@dev: Permission denied (keyboard-interactive).
+alice@dev: Permission denied (keyboard-interactive).
 ```
 
 The second line is the one that survives in a log, and nothing in it mentions
@@ -169,7 +169,7 @@ appears to work and then fails identically.
 
 ```sh
 pkill -f 'ssh -MNf dev'                     # the master
-pkill -f '2fa-proxy .*dev'                      # its ProxyCommand child, if any
+pkill -f '2fa-proxy .*dev'                  # its ProxyCommand child, if any
 rm -f ~/.ssh/control/'<user>@<host>:22'     # the stale socket
 ssh -MNf -S '~/.ssh/control/%r@%h:%p' dev   # rebuild, answer the second factor
 ssh -O check dev                            # expect: Master running (pid=...)

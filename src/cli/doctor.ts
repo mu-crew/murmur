@@ -322,7 +322,7 @@ export function renderTopology(topology: Topology): string {
   // A name that does not resolve from the far side is called out separately,
   // because it is indistinguishable from a network problem in the matrix and has
   // a completely different fix. Measured on the author's own fleet: macmini
-  // cannot resolve `mtrojer-mac`, which is this node's display_name.
+  // cannot resolve `macbook-pro`, which is this node's display_name.
   const unresolved = topology.edges.filter((edge) => isNameResolutionFailure(edge.detail));
   if (unresolved.length > 0) {
     const targets = [...new Set(unresolved.map((edge) => edge.to))];

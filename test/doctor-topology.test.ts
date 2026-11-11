@@ -105,14 +105,14 @@ test("this node's own row is dialled locally, not through an ssh to itself", asy
       return "";
     },
   };
-  await probeReach(channel, node("mtrojer-mac", { self: true }), node("gardenpc"));
+  await probeReach(channel, node("macbook-pro", { self: true }), node("gardenpc"));
   // Probing ourselves through ourselves would measure a loopback no other node
   // uses. The payload is still `true`, so every row means the same thing.
   expect(log).toEqual(["gardenpc :: true"]);
 });
 
 test("a target that is up and unreachable is a real negative", async () => {
-  const nodes = fleet("mtrojer-mac", "bubba", "gardenpc");
+  const nodes = fleet("macbook-pro", "bubba", "gardenpc");
   // Everything answered the survey, so every target is demonstrably up.
   const topology = await buildTopology(
     dialsOf(["SELF>bubba", "SELF>gardenpc"]),
@@ -122,11 +122,11 @@ test("a target that is up and unreachable is a real negative", async () => {
   // bubba was dialled and failed, against a target known up. That is a fact
   // about the pair.
   expect(reachOf(topology, "bubba", "gardenpc")).toBe("unreachable");
-  expect(reachOf(topology, "mtrojer-mac", "bubba")).toBe("reaches");
+  expect(reachOf(topology, "macbook-pro", "bubba")).toBe("reaches");
 });
 
 test("a target that is down reports unknown, never unreachable", async () => {
-  const nodes = fleet("mtrojer-mac", "macmini", "linuxpc");
+  const nodes = fleet("macbook-pro", "macmini", "linuxpc");
   // linuxpc did not answer the survey: it is switched off. Every dial to it
   // fails, and none of those failures is evidence about the pair.
   const topology = await buildTopology(
@@ -135,7 +135,7 @@ test("a target that is down reports unknown, never unreachable", async () => {
     reachableFromHere([...surveys("macmini"), down("linuxpc")]),
   );
   expect(reachOf(topology, "macmini", "linuxpc")).toBe("unknown");
-  expect(reachOf(topology, "mtrojer-mac", "linuxpc")).toBe("unknown");
+  expect(reachOf(topology, "macbook-pro", "linuxpc")).toBe("unknown");
   // The distinction is the whole point: calling a sleeping laptop a firewall
   // makes hub advice flip between runs as machines sleep.
   expect(reachOf(topology, "macmini", "linuxpc")).not.toBe("unreachable");
@@ -146,7 +146,7 @@ test("a target that is down reports unknown, never unreachable", async () => {
 
 test("a pair whose source is down is never dialled at all", async () => {
   const log: string[] = [];
-  const nodes = fleet("mtrojer-mac", "macmini", "linuxpc");
+  const nodes = fleet("macbook-pro", "macmini", "linuxpc");
   await buildTopology(
     dialsOf(["SELF>macmini"], log),
     nodes,
@@ -160,7 +160,7 @@ test("a pair whose source is down is never dialled at all", async () => {
 });
 
 test("asymmetric reachability is recorded in both directions independently", async () => {
-  const nodes = fleet("mtrojer-mac", "macmini", "gardenpc");
+  const nodes = fleet("macbook-pro", "macmini", "gardenpc");
   // The measured case: macmini reaches gardenpc, gardenpc does not reach back.
   const topology = await buildTopology(
     dialsOf(["SELF>macmini", "SELF>gardenpc", "macmini>gardenpc"]),
@@ -177,15 +177,15 @@ test("asymmetric reachability is recorded in both directions independently", asy
 });
 
 test("a viable whole-fleet hub is computed and named", async () => {
-  const nodes = fleet("mtrojer-mac", "bubba", "gardenpc");
+  const nodes = fleet("macbook-pro", "bubba", "gardenpc");
   // Every pair reaches, so any node could hub; the fleet is fully connected.
   const topology = await buildTopology(
     dialsOf([
       "SELF>bubba",
       "SELF>gardenpc",
-      "bubba>mtrojer-mac",
+      "bubba>macbook-pro",
       "bubba>gardenpc",
-      "gardenpc>mtrojer-mac",
+      "gardenpc>macbook-pro",
       "gardenpc>bubba",
     ]),
     nodes,
@@ -195,12 +195,12 @@ test("a viable whole-fleet hub is computed and named", async () => {
   expect(hub?.star).toHaveLength(3);
   const output = renderTopology(topology);
   expect(output).toContain("serves the whole fleet");
-  expect(output).toContain("  ssh bubba murmur peer add mtrojer-mac\n");
-  expect(output).toContain("  ssh gardenpc murmur peer add mtrojer-mac\n");
+  expect(output).toContain("  ssh bubba murmur peer add macbook-pro\n");
+  expect(output).toContain("  ssh gardenpc murmur peer add macbook-pro\n");
 });
 
 test("when no hub exists it recommends nothing and says so", async () => {
-  const nodes = fleet("mtrojer-mac", "bubba", "gardenpc");
+  const nodes = fleet("macbook-pro", "bubba", "gardenpc");
   // This node reaches both peers; neither peer reaches anything. The spec's
   // measured case, and the one the naive design got wrong.
   const topology = await buildTopology(
@@ -219,11 +219,11 @@ test("when no hub exists it recommends nothing and says so", async () => {
   // The matrix still reports each node's own reach, in whatever layout.
   expect(output).toMatch(/bubba\s+-\s/);
   expect(output).toMatch(/gardenpc\s+-\s/);
-  expect(output).toMatch(/mtrojer-mac\s+all 2/);
+  expect(output).toMatch(/macbook-pro\s+all 2/);
 });
 
 test("bubba reaching nothing is never named as a hub", async () => {
-  const nodes = fleet("mtrojer-mac", "bubba", "gardenpc", "linuxpc");
+  const nodes = fleet("macbook-pro", "bubba", "gardenpc", "linuxpc");
   // The exact failure the measured matrix killed: bubba reaches nothing, so
   // "make bubba the hub" would build a fleet of permanently stale spokes.
   const topology = await buildTopology(
@@ -231,9 +231,9 @@ test("bubba reaching nothing is never named as a hub", async () => {
       "SELF>bubba",
       "SELF>gardenpc",
       "SELF>linuxpc",
-      "gardenpc>mtrojer-mac",
+      "gardenpc>macbook-pro",
       "gardenpc>linuxpc",
-      "linuxpc>mtrojer-mac",
+      "linuxpc>macbook-pro",
       "linuxpc>gardenpc",
     ]),
     nodes,
@@ -250,33 +250,33 @@ test("bubba reaching nothing is never named as a hub", async () => {
 });
 
 test("the largest workable subset is named along with what it leaves out", async () => {
-  const nodes = fleet("mtrojer-mac", "macmini", "gardenpc", "linuxpc");
+  const nodes = fleet("macbook-pro", "macmini", "gardenpc", "linuxpc");
   const topology = await buildTopology(
     dialsOf([
       "SELF>macmini",
       "SELF>gardenpc",
       "SELF>linuxpc",
-      "macmini>mtrojer-mac",
+      "macmini>macbook-pro",
       "macmini>gardenpc",
-      "gardenpc>mtrojer-mac",
+      "gardenpc>macbook-pro",
       "gardenpc>macmini",
     ]),
     nodes,
     reachableFromHere(surveys("macmini", "gardenpc", "linuxpc")),
   );
   const output = renderTopology(topology);
-  expect(output).toMatch(/Hub\s+mtrojer-mac/);
-  expect(output).toContain("serves {mtrojer-mac, macmini, gardenpc}");
+  expect(output).toMatch(/Hub\s+macbook-pro/);
+  expect(output).toContain("serves {macbook-pro, macmini, gardenpc}");
   expect(output).toMatch(/leaves out .*linuxpc/);
   // Only the spokes that are actually served get a command.
-  expect(output).toContain("  ssh macmini murmur peer add mtrojer-mac\n");
+  expect(output).toContain("  ssh macmini murmur peer add macbook-pro\n");
   expect(output).not.toContain("ssh linuxpc murmur peer add");
 });
 
 test("the cost of a star is always stated when a star is recommended", async () => {
-  const nodes = fleet("mtrojer-mac", "bubba");
+  const nodes = fleet("macbook-pro", "bubba");
   const topology = await buildTopology(
-    dialsOf(["SELF>bubba", "bubba>mtrojer-mac"]),
+    dialsOf(["SELF>bubba", "bubba>macbook-pro"]),
     nodes,
     reachableFromHere(surveys("bubba")),
   );
@@ -290,7 +290,7 @@ test("the cost of a star is always stated when a star is recommended", async () 
 });
 
 test("unknown pairs are reported separately from real negatives", async () => {
-  const nodes = fleet("mtrojer-mac", "macmini", "linuxpc");
+  const nodes = fleet("macbook-pro", "macmini", "linuxpc");
   const topology = await buildTopology(
     dialsOf(["SELF>macmini"]),
     nodes,
@@ -301,18 +301,18 @@ test("unknown pairs are reported separately from real negatives", async () => {
   // Merging them would have the operator act on the wrong one.
   // A dedicated UNKNOWN column, present only because this fleet has one.
   expect(output).toContain("UNKNOWN");
-  expect(output).toMatch(/mtrojer-mac\s+macmini\s+-\s+linuxpc/);
+  expect(output).toMatch(/macbook-pro\s+macmini\s+-\s+linuxpc/);
   // linuxpc never answered, so nothing about it is called a negative.
   expect(output).not.toContain("cannot reach linuxpc");
 });
 
 test("a name that does not resolve is called out as naming, not network", async () => {
-  const nodes = fleet("mtrojer-mac", "macmini");
+  const nodes = fleet("macbook-pro", "macmini");
   const channel: Channel = {
     exec: async (target, argv) => {
       if (argv[0] === "true") return "";
       throw new Error(
-        `Command failed: ssh ${target}\nssh: Could not resolve hostname mtrojer-mac: nodename nor servname provided, or not known`,
+        `Command failed: ssh ${target}\nssh: Could not resolve hostname macbook-pro: nodename nor servname provided, or not known`,
       );
     },
   };
@@ -321,7 +321,7 @@ test("a name that does not resolve is called out as naming, not network", async 
   // Measured on the real fleet: macmini cannot resolve this node's
   // display_name. It looks identical to a network fault in the matrix and has a
   // completely different fix.
-  expect(output).toContain("mtrojer-mac is not resolvable by name from macmini");
+  expect(output).toContain("macbook-pro is not resolvable by name from macmini");
   expect(output).toMatch(/a naming\n\s+problem, not a network one/);
 });
 
@@ -337,7 +337,7 @@ test("name-resolution failures are recognised in ssh's several phrasings", () =>
 });
 
 test("the probe count reported is the number of dials actually attempted", async () => {
-  const nodes = fleet("mtrojer-mac", "macmini", "linuxpc");
+  const nodes = fleet("macbook-pro", "macmini", "linuxpc");
   const topology = await buildTopology(
     dialsOf(["SELF>macmini"]),
     nodes,
@@ -353,7 +353,7 @@ test("pairs the deadline never reached are unknown, never a false negative", asy
   // Enough nodes that the pool cannot claim every pair before the deadline
   // stops it: eleven nodes is 110 ordered pairs against MAX_CONCURRENT_PEERS.
   // A slow fleet must not read as a partitioned one.
-  const names = ["mtrojer-mac", "a", "b", "c", "d", "e", "f", "g", "h", "i", "j"];
+  const names = ["macbook-pro", "a", "b", "c", "d", "e", "f", "g", "h", "i", "j"];
   const nodes = fleet(...names);
   let dials = 0;
   const channel: Channel = {
@@ -390,7 +390,7 @@ test("the topology deadline exceeds the survey's, because the work is O(N square
 
 test("a single node fleet probes nothing and recommends nothing", async () => {
   const log: string[] = [];
-  const topology = await buildTopology(dialsOf([], log), fleet("mtrojer-mac"), new Set());
+  const topology = await buildTopology(dialsOf([], log), fleet("macbook-pro"), new Set());
   expect(topology.edges).toEqual([]);
   expect(log).toEqual([]);
   expect(bestHub(hubCandidates(topology))).toBeNull();
@@ -399,20 +399,20 @@ test("a single node fleet probes nothing and recommends nothing", async () => {
 });
 
 test("the largest star wins when candidates differ in size", async () => {
-  const nodes = fleet("mtrojer-mac", "macmini", "gardenpc", "bubba");
+  const nodes = fleet("macbook-pro", "macmini", "gardenpc", "bubba");
   // Two viable hubs of DIFFERENT sizes, so picking the smaller is detectable:
-  //   macmini   <-> mtrojer-mac, gardenpc, bubba  => star of 4
-  //   gardenpc  <-> mtrojer-mac, macmini           => star of 3
+  //   macmini   <-> macbook-pro, gardenpc, bubba  => star of 4
+  //   gardenpc  <-> macbook-pro, macmini           => star of 3
   // A fleet where every viable star is the same size cannot tell "largest" from
   // "first", which is how a best-of selection quietly becomes an arbitrary one.
   const topology = await buildTopology(
     dialsOf([
       "SELF>macmini",
       "SELF>gardenpc",
-      "macmini>mtrojer-mac",
+      "macmini>macbook-pro",
       "macmini>gardenpc",
       "macmini>bubba",
-      "gardenpc>mtrojer-mac",
+      "gardenpc>macbook-pro",
       "gardenpc>macmini",
       "bubba>macmini",
     ]),
@@ -429,30 +429,30 @@ test("the largest star wins when candidates differ in size", async () => {
 });
 
 test("the hub is never told to add itself as a peer", async () => {
-  const nodes = fleet("mtrojer-mac", "bubba", "gardenpc");
+  const nodes = fleet("macbook-pro", "bubba", "gardenpc");
   const topology = await buildTopology(
     dialsOf([
       "SELF>bubba",
       "SELF>gardenpc",
-      "bubba>mtrojer-mac",
+      "bubba>macbook-pro",
       "bubba>gardenpc",
-      "gardenpc>mtrojer-mac",
+      "gardenpc>macbook-pro",
       "gardenpc>bubba",
     ]),
     nodes,
     reachableFromHere(surveys("bubba", "gardenpc")),
   );
   const hub = bestHub(hubCandidates(topology));
-  expect(hub?.node).toBe("mtrojer-mac");
+  expect(hub?.node).toBe("macbook-pro");
   const output = renderTopology(topology);
   // `peer add` refuses to add this node to itself ("is this node; not adding it
   // as a peer"), so suggesting it would print a command that is guaranteed to
   // fail -- in the one block the operator is meant to copy verbatim.
-  expect(output).not.toContain("ssh mtrojer-mac murmur peer add mtrojer-mac");
+  expect(output).not.toContain("ssh macbook-pro murmur peer add macbook-pro");
   // Exactly the two spokes get a command, and no more.
   const adds = output.split("\n").filter((line) => line.includes("murmur peer add"));
   expect(adds).toEqual([
-    "  ssh bubba murmur peer add mtrojer-mac",
-    "  ssh gardenpc murmur peer add mtrojer-mac",
+    "  ssh bubba murmur peer add macbook-pro",
+    "  ssh gardenpc murmur peer add macbook-pro",
   ]);
 });

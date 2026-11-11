@@ -22,7 +22,7 @@ import { SNAPSHOT_VERSION } from "../src/types.js";
 const SELF = "SELF-HOST-ID";
 
 function localNode(peers: LocalPeer[], over: Partial<LocalNode> = {}): LocalNode {
-  return { host_id: SELF, display_name: "mtrojer-mac", peers, ...over };
+  return { host_id: SELF, display_name: "macbook-pro", peers, ...over };
 }
 
 function peer(over: Partial<LocalPeer> & { name: string }): LocalPeer {
@@ -76,11 +76,11 @@ test("a mutual fleet produces no findings at all", () => {
       peer({ name: "macmini", host_id: "MACMINI" }),
     ]),
     [
-      surveyed({ target: "bubba", host_id: "BUBBA", roster: [row("mtrojer-mac", "mtrojer-mac")] }),
+      surveyed({ target: "bubba", host_id: "BUBBA", roster: [row("macbook-pro", "macbook-pro")] }),
       surveyed({
         target: "macmini",
         host_id: "MACMINI",
-        roster: [row("mtrojer-mac", "mtrojer-mac")],
+        roster: [row("macbook-pro", "macbook-pro")],
       }),
     ],
   );
@@ -95,9 +95,9 @@ test("a peer that does not peer this node is an asymmetry observation naming the
   expect(asymmetry.severity).toBe("observation");
   expect(asymmetry.subject).toBe("bubba");
   expect(asymmetry.message).toBe(
-    "bubba does not peer this node (mtrojer-mac), so its picker cannot see this node's agents",
+    "bubba does not peer this node (macbook-pro), so its picker cannot see this node's agents",
   );
-  expect(asymmetry.remedy).toBe("ssh bubba murmur peer add mtrojer-mac");
+  expect(asymmetry.remedy).toBe("ssh bubba murmur peer add macbook-pro");
 });
 
 test("asymmetry is never a problem, so a one-directional fleet still exits clean", () => {
@@ -133,7 +133,7 @@ test("island wording is one-hop scoped and claims nothing about the wider fleet"
   expect(island.severity).toBe("observation");
   // Pinned exactly, so a future transitive survey cannot quietly widen the claim.
   expect(island.message).toBe(
-    "no peer that this node surveyed peers this host (mtrojer-mac); " +
+    "no peer that this node surveyed peers this host (macbook-pro); " +
       "2 of 2 surveyed peers cannot see this node's agents",
   );
   // The forbidden claim, stated in the shapes a rewrite would reach for. Not a
@@ -152,7 +152,7 @@ test("one peer that does peer this node means no island, even when others do not
       peer({ name: "macmini", host_id: "MACMINI" }),
     ]),
     [
-      surveyed({ target: "bubba", host_id: "BUBBA", roster: [row("mtrojer-mac", "mtrojer-mac")] }),
+      surveyed({ target: "bubba", host_id: "BUBBA", roster: [row("macbook-pro", "macbook-pro")] }),
       surveyed({ target: "macmini", host_id: "MACMINI" }),
     ],
   );
@@ -191,13 +191,13 @@ test("one machine configured twice on this node is a problem, matched on host_id
         target: "gardenpc.local",
         host_id: "GARDENPC",
         display_name: "gardenpc",
-        roster: [row("mtrojer-mac", "mtrojer-mac")],
+        roster: [row("macbook-pro", "macbook-pro")],
       }),
       surveyed({
         target: "gardenpc",
         host_id: "GARDENPC",
         display_name: "gardenpc",
-        roster: [row("mtrojer-mac", "mtrojer-mac")],
+        roster: [row("macbook-pro", "macbook-pro")],
       }),
     ],
   );
@@ -293,7 +293,7 @@ test("one host_id under different names on different nodes is naming drift", () 
         // bubba calls the same machine "garden". Recognised as one host because
         // gardenpc published `gardenpc` to both nodes, not because the names
         // look alike.
-        roster: [row("garden", "gardenpc", "gardenpc.local"), row("mtrojer-mac", "mtrojer-mac")],
+        roster: [row("garden", "gardenpc", "gardenpc.local"), row("macbook-pro", "macbook-pro")],
       }),
     ],
   );
@@ -316,7 +316,7 @@ test("the same name on both nodes is not drift", () => {
         target: "bubba",
         host_id: "BUBBA",
         display_name: "bubba",
-        roster: [row("gardenpc", "gardenpc"), row("mtrojer-mac", "mtrojer-mac")],
+        roster: [row("gardenpc", "gardenpc"), row("macbook-pro", "macbook-pro")],
       }),
     ],
   );
@@ -331,7 +331,7 @@ test("a roster row whose hostname is a container id is not matched to this node"
     surveyed({
       target: "bubba",
       host_id: "BUBBA",
-      roster: [row("mtrojer-mac", "6f3c1a9b2d44")],
+      roster: [row("macbook-pro", "6f3c1a9b2d44")],
     }),
   ]);
   expect(kinds(findings)).toContain("asymmetry");
@@ -399,7 +399,7 @@ test("an unsurveyable peer is never counted as failing to peer this node", () =>
       peer({ name: "linuxpc", host_id: "LINUXPC" }),
     ]),
     [
-      surveyed({ target: "bubba", host_id: "BUBBA", roster: [row("mtrojer-mac", "mtrojer-mac")] }),
+      surveyed({ target: "bubba", host_id: "BUBBA", roster: [row("macbook-pro", "macbook-pro")] }),
       {
         ok: false,
         target: "linuxpc",
@@ -443,7 +443,7 @@ test("a node that has itself in its own roster is not naming drift", () => {
         roster: [
           row("myself", "bubba", "localhost"),
           row("gardenpc", "gardenpc"),
-          row("mtrojer-mac", "mtrojer-mac"),
+          row("macbook-pro", "macbook-pro"),
         ],
       }),
     ],
@@ -525,7 +525,7 @@ test("a gated peer that answered the survey just now is not reported", () => {
     localNode([
       peer({ name: "dev", last_error: "dev: Permission denied (publickey)", host_id: "DEV" }),
     ]),
-    [surveyed({ target: "dev", host_id: "DEV", roster: [row("mtrojer-mac", "mtrojer-mac")] })],
+    [surveyed({ target: "dev", host_id: "DEV", roster: [row("macbook-pro", "macbook-pro")] })],
   );
   expect(kinds(findings)).not.toContain("needs-session");
 });
