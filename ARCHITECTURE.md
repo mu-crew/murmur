@@ -1648,54 +1648,32 @@ each was cheaper to accept than to solve:
    loses the previous occupant's attention, which is intended, and two
    sequential agents in one pane cannot each hold their own `done`.
 9. **A peer demanding interactive auth is collectable only while a session is
-   open.** Every ssh murmur runs sets `BatchMode=yes`, so a host wanting a
-   second factor, a token touch or a password per connection cannot be reached
-   unattended — which is the case `SSH_OPTIONS` names as out of scope
-   ("never prompt", not "never authenticate") and the reason `hasWarmSocket`
-   exists. Such a peer is skipped by ambient collects rather than dialled and
-   failed on every tick, keeps its cached snapshot, and is named in the picker
-   header with the command that fixes it. That command is `ssh -MNf -S
-   <ControlPath> <host>`. `-N` keeps it from opening a shell that would hold a
-   capped host's only session slot, `-f` backgrounds it, and the other two are
-   about socket LOCATION rather than auth: OpenSSH defaults to `ControlMaster
-   no` and `ControlPath none` (verified with `ssh -F /dev/null -G`), so on a
-   machine whose ssh_config murmur does not
-   control a bare `ssh` leaves no socket on the path `SSH_OPTIONS` reads. Where
-   the reader's own config sets `ControlMaster auto` and a matching
-   `ControlPath`, a plain `ssh` does produce a master murmur can ride; the flags
-   buy one instruction that is correct everywhere. Eternal Terminal does not
-   substitute, since it bootstraps over ssh and leaves no socket to attach to —
-   but on a session-capped host it is the right place for an operator's own
-   work, precisely because it holds no ssh session and so leaves the capped slot
-   to murmur. The operator-facing version of all this is [SSH.md](SSH.md); what
-   follows is why the design accepts it.
+   open.** Every ssh murmur runs sets `BatchMode=yes` ("never prompt", not
+   "never authenticate"), so a host wanting a prompt per connection is reached
+   only over an existing master. Ambient collects skip such a peer instead of
+   failing on every tick, keep its cached snapshot, and the picker header names
+   the fix, `ssh -MNf -S <ControlPath> <host>`: `-N -f` so it holds no session
+   slot, `-M -S` so the socket lands where `SSH_OPTIONS` reads, since OpenSSH
+   defaults to neither. Eternal Terminal cannot be that master, but it can
+   carry one over a port forward, and it is the right place for an operator's
+   own work on a capped host, since it holds no ssh session. The operator's
+   version is [SSH.md](SSH.md).
 
-   An earlier version of this entry claimed `-M` was the cure for `Session open
-   refused by peer`, on the theory that a `ProxyCommand` can leave a socket that
-   forwards but has never authenticated a session. That was wrong. The error is
-   session-slot contention — a host with `MaxSessions 1` refuses a second
-   channel on one connection — and it reproduces against a fully authenticated
-   master built by this exact command. ssh then retries on a fresh connection
-   and fails at the auth wall, so the text ends in `Permission denied` and
-   mimics an auth problem; `sessionChannelBusy` is what keeps the two apart, and
-   `needsInteractiveAuth` excludes it explicitly rather than by check order.
+   `Session open refused by peer` is slot contention, not auth: a `MaxSessions
+   1` host refuses a second channel on one connection, ssh retries on a fresh
+   connection and fails auth, and the text ends in `Permission denied`.
+   `sessionChannelBusy` keeps the two apart, and `needsInteractiveAuth`
+   excludes it explicitly. (An earlier version of this entry blamed a socket
+   that had never authenticated; wrong.)
 
-   Two accepted costs. The reminder cannot say *when* a session lapsed, only
-   that none exists now. And `hasWarmSocket` answers "is there a master", not
-   "can I open a session", so a peer whose one session slot is busy opens the
-   gate and the collect then fails once — self-correcting on the next pass, now
-   that the failure is classified retryable rather than auth-class, but a real
-   gap between the check and the question.
-
-   The JUMP competes for the same slot, which the collector's design does not
-   account for. `jumpToAgent` runs `ssh -t <host> tmux attach`, a session channel
-   held for the whole visit — so on a capped host an attached operator starves
-   that peer's collects until they detach, and a jump attempted while the slot is
-   busy fails with the same misleading `Permission denied`. Both measured. The
-   collector recovers on its own; the failed jump does not, and presents as a
-   keypress that did nothing. Not fixed, because the fix is either a queue in
-   front of every ssh or a second connection per peer, and both cost every host
-   to serve the rare one. Documented as "peek, then back out" in SSH.md instead.
+   Accepted costs: the reminder cannot say when a session lapsed, only that
+   none exists; `hasWarmSocket` answers "is there a master", not "can I open a
+   session", so a busy slot costs one failed, retryable collect. The jump
+   (`jumpToAgent`, `ssh -t <host> tmux attach`) holds the slot for the whole
+   visit, so an attached operator starves that peer's collects, and a jump to a
+   busy slot fails with the same misleading error. Not fixed: a queue in front
+   of every ssh, or a second connection per peer, would cost every host to
+   serve the rare one. SSH.md says "peek, then back out".
 
 ## Known gaps
 
