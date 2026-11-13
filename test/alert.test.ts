@@ -162,7 +162,7 @@ test("the hook runs with the event in its environment", async () => {
   const hook = join(dir, "on-attention");
   writeFileSync(
     hook,
-    `#!/bin/sh\nprintf '%s|%s|%s|%s|%s|%s' "$MURMUR_KIND" "$MURMUR_AGENT" "$MURMUR_MESSAGE" "$MURMUR_HOST_COLOR" "$MURMUR_GLYPH" "$MURMUR_KIND_COLOR" > '${out}'\n`,
+    `#!/bin/sh\nprintf '%s|%s|%s|%s|%s|%s' "$MURMUR_KIND" "$MURMUR_AGENT" "$MURMUR_MESSAGE" "$MURMUR_HOST_COLOR" "$MURMUR_GLYPH" "$MURMUR_KIND_COLOR" > '${out}.tmp' && mv '${out}.tmp' '${out}'\n`,
   );
   chmodSync(hook, 0o755);
   expect(alertHook(dir)).toBe(hook);

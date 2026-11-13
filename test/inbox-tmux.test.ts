@@ -88,10 +88,12 @@ beforeAll(() => {
   );
   writeFileSync(
     join(work, "hook.mjs"),
-    `import { writeFileSync } from "node:fs";
+    // The placement file is the test's "done" signal, so it lands last and
+    // whole (tmp + rename): a poller never sees it before the inbox event,
+    // nor half-written.
+    `import { renameSync, writeFileSync } from "node:fs";
      const { placeEvent, readProcessTable, writeInboxEvent } = await import(${JSON.stringify(SDK)});
      const placement = placeEvent(readProcessTable(), process.pid, {});
-     writeFileSync(process.argv[2], JSON.stringify(placement));
      if (placement.kind === "local") {
        writeInboxEvent({
          v: 1, event: "prompt_submitted", harness: placement.harness, at: Date.now(),
@@ -101,7 +103,9 @@ beforeAll(() => {
          by: "harness",
          agent: { agent_name: null, workstream: null, role: null, cli: null, driver: "human" },
        });
-     }`,
+     }
+     writeFileSync(process.argv[2] + ".tmp", JSON.stringify(placement));
+     renameSync(process.argv[2] + ".tmp", process.argv[2]);`,
   );
 });
 
@@ -262,11 +266,12 @@ test("murmur hook claude and murmur hook mu, from real process chains, drive one
   writeFileSync(
     join(work, "feed.mjs"),
     `import { spawnSync } from "node:child_process";
-     import { readFileSync, writeFileSync } from "node:fs";
+     import { readFileSync, renameSync, writeFileSync } from "node:fs";
      const [script, done] = process.argv.slice(2);
      const codes = JSON.parse(readFileSync(script, "utf8")).map(({ payload, args }) =>
        spawnSync(${JSON.stringify(process.execPath)}, args, { input: JSON.stringify(payload) }).status);
-     writeFileSync(done, JSON.stringify(codes));
+     writeFileSync(done + ".tmp", JSON.stringify(codes));
+     renameSync(done + ".tmp", done);
      setTimeout(() => {}, 600000);`,
   );
   const pane = rig(
