@@ -9,7 +9,25 @@ permissions:
   contents: read
 
 jobs:
+  # Seconds, no install: a tag that does not match package.json fails before
+  # the full gate runs.
+  version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 26
+      - name: Check release version
+        run: node scripts/check-release-version.mjs "${{ github.ref_name }}"
+
+  # The same gate as PRs and main, run against the tagged commit.
+  check:
+    needs: version
+    uses: ./.github/workflows/check.yml
+
   publish:
+    needs: check
     runs-on: ubuntu-latest
     # id-token: npm trusted publishing. No npm token is stored anywhere; npmjs.com
     # trusts this repo's release.yml for @mu-crew/murmur.
@@ -21,13 +39,8 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: 26
-      - name: Check release version
-        run: node scripts/check-release-version.mjs "${{ github.ref_name }}"
-      # zsh: one tmux-rig test runs the remote jump hook through a real zsh.
-      - run: sudo apt-get update && sudo apt-get install -y tmux zsh
-      # prepare installs git hooks into the checkout; harmless in CI.
+      # prepare builds dist/, which npm publish ships.
       - run: npm ci
-      - run: npm run check
       # Trusted publishing (OIDC) needs npm 11.5.1+; older npm fails with a
       # misleading 404.
       - run: npm install -g npm@^11.5.1

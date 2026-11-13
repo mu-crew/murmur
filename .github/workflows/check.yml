@@ -1,24 +1,63 @@
 name: Check
 
-# The release workflow's gate, without publishing: for PRs, pushes to main and
-# manual runs, so a runner-only failure shows up before a tag does.
+# `npm run check`, split into parallel jobs so a failure names its gate. Runs
+# for PRs, pushes to main and manual runs, and is called by release.yml as the
+# gate before publishing, so a runner-only failure shows up before a tag does.
 on:
   push:
     branches: [main]
   pull_request:
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
 
+concurrency:
+  group: check-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
-  check:
+  typecheck:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
         with:
           node-version: 26
-      - run: sudo apt-get update && sudo apt-get install -y tmux zsh
+          cache: npm
       - run: npm ci
-      - run: npm run check
+      - run: npm run typecheck
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 26
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+
+  # The vitest projects in vitest.config.ts: `unit` runs files in parallel,
+  # `tmux-rig` drives a real tmux server one file at a time.
+  test:
+    name: test (${{ matrix.project }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        project: [unit, tmux-rig]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 26
+          cache: npm
+      # zsh: one tmux-rig test runs the remote jump hook through a real zsh.
+      - run: sudo apt-get update && sudo apt-get install -y tmux zsh
+      # prepare builds dist/, which the tests spawn; installs git hooks too,
+      # harmless in CI.
+      - run: npm ci
+      - run: npx vitest run --project ${{ matrix.project }}
