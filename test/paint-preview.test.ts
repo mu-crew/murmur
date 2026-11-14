@@ -12,6 +12,7 @@ import { previewText, previewTextAsync } from "../src/paint.js";
 import { status } from "../src/status.js";
 import { openStore, type Store } from "../src/store.js";
 import type { Location, Snapshot, SnapshotPane, TmuxServer } from "../src/types.js";
+import type { PaneView } from "../src/view.js";
 
 let store: Store;
 
@@ -670,4 +671,55 @@ test("a LOCAL capture is sanitised on the same terms as a remote one", () => {
   expect(captured).not.toContain("52;c;");
   expect(captured).toContain("red     hot");
   expect(captured.split("\n")[1]).toBe("\u001b[41mbled\u001b[0m");
+});
+
+test("the preview names the harness and keeps the cli line", () => {
+  const base = {
+    host_id: "R",
+    host: "bubba",
+    local: false,
+    server: { kind: "default" },
+    pane: asPaneId("%1"),
+    session: asSessionId("$1"),
+    window: asWindowId("@1"),
+    session_name: "s",
+    window_name: null,
+    activity: "running",
+    attention: [],
+    freshness: "fresh",
+    agent_id: "a",
+    agent_name: "w",
+    pi_session: null,
+    workstream: null,
+    role: null,
+    cli: "pi",
+    harness: null,
+    driver: "human",
+    model: null,
+    provider: null,
+    effort: null,
+    provider_effort: null,
+    context_pct: null,
+    context_tokens: null,
+    context_window: null,
+    usage: null,
+    pending: null,
+    updated_at: 1,
+    snapshot_at: null,
+    fetched_at: null,
+    attached_pane: null,
+  } as const satisfies PaneView;
+  const text = (over: Partial<PaneView>) =>
+    previewText(store, { ...base, ...over }, [], () => "pane contents");
+
+  const plain = text({});
+  expect(plain).toContain("cli      pi");
+  expect(plain).not.toContain("harness");
+  const pi = text({ harness: "pi" });
+  expect(pi).toContain("harness  pi");
+  expect(pi).toContain("cli      pi");
+  expect(pi.split("\n").filter((line) => !line.startsWith("harness"))).toEqual(plain.split("\n"));
+  const claude = text({ harness: "claude", cli: "claude" });
+  expect(claude).toContain("harness  claude");
+  expect(claude).toContain("cli      claude");
 });

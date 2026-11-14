@@ -188,6 +188,12 @@ function reportedSummary(agent: PaneView): string {
     .join(" \u00b7 ");
 }
 
+/** A short tag for which harness runs the agent; empty when unknown. */
+export function harnessTag(agent: Pick<PaneView, "harness">): string {
+  if (agent.harness === null) return "";
+  return agent.harness === "cursor-agent" ? "cursor" : agent.harness;
+}
+
 /**
  * One line describing what this pane is doing, in order of authority.
  *

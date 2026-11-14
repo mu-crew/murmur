@@ -83,6 +83,7 @@ test("rows name the agent, rendered state, host, age, and workstream", () => {
     hostColor: hostColor("localhost"),
     age: "2m",
     stream: "murmur",
+    tag: "",
   });
 
   const [remote] = sidepanelRows(

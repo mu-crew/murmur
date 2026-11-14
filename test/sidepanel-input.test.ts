@@ -233,6 +233,7 @@ function row(key: string): SidepanelRow {
     hostColor: "#a6e3a1",
     age: "",
     stream: null,
+    tag: "",
   };
 }
 

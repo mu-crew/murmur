@@ -401,6 +401,7 @@ function previewBody(
     agent.workstream ? `stream   ${terminalText(agent.workstream)}` : "",
     agent.role ? `role     ${terminalText(agent.role)}` : "",
     agent.pi_session ? `session  ${terminalText(agent.pi_session)}` : "",
+    agent.harness ? `harness  ${terminalText(agent.harness)}` : "",
     agent.cli ? `cli      ${terminalText(agent.cli)}` : "",
     agent.driver === "orchestrated" ? "driver   orchestrated (crew)" : "",
     // Two ages, never one. A node polled a second ago can be serving a

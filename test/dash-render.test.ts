@@ -72,3 +72,52 @@ test("dash renders its first frame", () => {
     stderr.mockRestore();
   }
 });
+
+function dashFrame(panes: PaneView[], columns: number): string {
+  const dashStore = {
+    store: {},
+    generation: { dev: 0n, ino: 0n },
+  } as unknown as DashStore;
+  const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+  try {
+    return renderToString(createElement(App, { dashStore, initial: { ...initial, panes } }), {
+      columns,
+    });
+  } finally {
+    stderr.mockRestore();
+  }
+}
+
+test("a dash card carries a dim harness tag and the pi card is otherwise unchanged", () => {
+  const plain = dashFrame([pane], 80);
+  const tagged = dashFrame([{ ...pane, harness: "pi" }], 80);
+  const squash = (text: string) => text.replace(/ +/g, " ");
+  expect(plain).not.toMatch(/ pi\b/);
+  const header = tagged.split("\n").find((line) => line.includes("worker-1")) ?? "";
+  expect(header).toMatch(/ pi\b/);
+  // Byte-identical once the tag is taken out (column padding aside).
+  expect(squash(tagged.replace(/ pi\b/, ""))).toBe(squash(plain));
+});
+
+test("claude shows model and effort, codex model only, cursor-agent is tagged cursor", () => {
+  const claude = dashFrame([{ ...pane, harness: "claude", model: "opus-4", effort: "medium" }], 80);
+  expect(claude).toContain(" claude");
+  expect(claude).toContain("opus-4 · medium");
+  const codex = dashFrame([{ ...pane, harness: "codex", model: "gpt-5" }], 80);
+  expect(codex).toContain(" codex");
+  expect(codex).toContain("gpt-5");
+  expect(codex).not.toContain("·  ");
+  expect(dashFrame([{ ...pane, harness: "cursor-agent" }], 80)).toContain(" cursor");
+});
+
+test("a null harness has no tag", () => {
+  const frame = dashFrame([{ ...pane, harness: null, model: "m" }], 80);
+  for (const name of ["claude", "codex", "cursor", "muse"]) expect(frame).not.toContain(name);
+});
+
+test("a narrow dash (30 columns) lays out as it does without a tag", () => {
+  const width = (frame: string) => Math.max(...frame.split("\n").map((line) => line.length));
+  const tagged = dashFrame([{ ...pane, harness: "claude", model: "opus-4", effort: "medium" }], 30);
+  expect(tagged).toContain("worker-1");
+  expect(width(tagged)).toBe(width(dashFrame([pane], 30)));
+});

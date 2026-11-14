@@ -2,10 +2,12 @@ import { PassThrough } from "node:stream";
 import { render as renderInk, renderToString } from "ink";
 import { createElement } from "react";
 import { expect, test, vi } from "vitest";
+import { visibleWidth } from "../src/ansi-width.js";
 import { App, SidepanelRefreshTracker, settleSidepanelRenderer } from "../src/cli/sidepanel.js";
 import { DEFAULT_DASH_PREFS } from "../src/dash-prefs.js";
 import type { DashStore } from "../src/dash-store.js";
 import { asPaneId, asSessionId, asWindowId } from "../src/ids.js";
+import { sidepanelCompactLine } from "../src/sidepanel-view.js";
 import type { Status } from "../src/status.js";
 import type { PaneView } from "../src/view.js";
 
@@ -346,4 +348,46 @@ test("a merged chunk of navigation keys moves once per key", async () => {
     expect(selectedName(Buffer.concat(writes.slice(before)).toString())).toBe(order[3]),
   );
   await instance.unmount();
+});
+
+test("the harness tag shows in both layouts; null harness has none", () => {
+  const claude = pane({ harness: "claude", model: "opus-4", effort: "medium" });
+  expect(renderFrame(view([claude]))).toContain("running · claude · here");
+  expect(renderFrame(view([claude]), true)).toContain("claude");
+  expect(renderFrame(view([pane({ harness: "cursor-agent" })]))).toContain(
+    "running · cursor · here",
+  );
+  const none = renderFrame(view([pane({ harness: null })]));
+  expect(none).toContain("running · here · 2m");
+  expect(renderFrame(view([pane({ harness: "codex", model: "gpt-5" })]), true)).toContain("codex");
+});
+
+test("a pi row is unchanged except the tag", () => {
+  const plain = renderFrame(view([pane()]));
+  const tagged = renderFrame(view([pane({ harness: "pi" })]));
+  expect(tagged).toContain("running · pi · here · 2m");
+  expect(tagged.replace(" · pi", "")).toBe(plain);
+  const compactPlain = renderFrame(view([pane()]), true);
+  const compactTagged = renderFrame(view([pane({ harness: "pi" })]), true);
+  expect(compactTagged.replace(/ +/g, " ").replace(" pi", "")).toBe(
+    compactPlain.replace(/ +/g, " "),
+  );
+});
+
+test("a narrow compact panel (min width 16) keeps the row within the width", () => {
+  const row = {
+    key: "k",
+    state: "running" as const,
+    icon: ">",
+    name: "worker-1",
+    facts: "",
+    host: "here",
+    hostColor: "#fff",
+    age: "2m",
+    stream: "murmur",
+    tag: "claude",
+  };
+  const line = sidepanelCompactLine(row, 16, false);
+  expect(visibleWidth(line)).toBeLessThanOrEqual(16);
+  expect(line).toContain("worker-1");
 });

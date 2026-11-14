@@ -4,7 +4,14 @@ import { DASH_GLYPH, hostColor } from "./dash-paint.js";
 import type { DashPrefs } from "./dash-prefs.js";
 import { type CompactRowLayout, compactRowLayout, compactRowParts } from "./dash-tick.js";
 import { dashRows } from "./dash-view.js";
-import { age, type PaneView, pendingSummary, type RenderState, renderState } from "./view.js";
+import {
+  age,
+  harnessTag,
+  type PaneView,
+  pendingSummary,
+  type RenderState,
+  renderState,
+} from "./view.js";
 
 export function sidepanelPaneKey(pane: PaneView): string {
   return JSON.stringify([
@@ -26,6 +33,8 @@ export type SidepanelRow = {
   hostColor: string;
   age: string;
   stream: string | null;
+  /** The harness tag; empty when unknown. */
+  tag: string;
 };
 
 export function sidepanelRows(
@@ -42,11 +51,14 @@ export function sidepanelRows(
       state,
       icon: DASH_GLYPH[state],
       name: agentLabel(pane),
-      facts: [state, pendingSummary(pane), host, elapsed].filter(Boolean).join(" · "),
+      facts: [state, harnessTag(pane), pendingSummary(pane), host, elapsed]
+        .filter(Boolean)
+        .join(" · "),
       host,
       hostColor: hostColor(pane.host),
       age: elapsed,
       stream: pane.workstream ?? pane.session_name,
+      tag: harnessTag(pane),
     };
   });
 }
@@ -57,7 +69,7 @@ function compactFields(row: SidepanelRow) {
     agent: row.name,
     host: row.host,
     stream: row.stream ?? "",
-    flags: "",
+    flags: row.tag,
     age: row.age,
     summary: "",
   };

@@ -89,6 +89,7 @@ import {
 import { type Status, status, statusWithCollect } from "../status.js";
 import {
   age,
+  harnessTag,
   oneLiner,
   type PaneView,
   pendingSummary,
@@ -280,6 +281,7 @@ function Card({
   const summary = clipGlanceLine(oneLiner(pane, glanceLine), CARD_TEXT_WIDTH);
   const elapsed = age(pane.updated_at === null ? null : now - pane.updated_at);
   const pending = pendingSummary(pane);
+  const tag = harnessTag(pane);
 
   return (
     <Box
@@ -291,6 +293,7 @@ function Card({
     >
       <Text bold color={DASH_COLOR[state]} wrap="truncate-end">
         {DASH_GLYPH[state]} {agentLabel(pane)} {elapsed}
+        {tag ? <Text dimColor> {tag}</Text> : null}
       </Text>
       <Text wrap="truncate-end">
         <Text color={hostColor(pane.host)}>
@@ -338,6 +341,7 @@ function compactFields(
     host: pane.local ? DASH_CHROME.here : `${DASH_CHROME.remote} ${terminalText(pane.host)}`,
     stream: stream ? terminalText(stream) : "",
     flags: [
+      harnessTag(pane),
       pane.driver === "orchestrated" ? DASH_CHROME.crew : "",
       pane.freshness === "stale" ? DASH_CHROME.stale : "",
       (pane.pending ?? 0) > 0 ? `${DASH_GLYPH.waiting}${pane.pending}` : "",
