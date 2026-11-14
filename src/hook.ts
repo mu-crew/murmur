@@ -7,6 +7,7 @@ import {
   type InboxAgent,
   type InboxEvent,
   type InboxEventName,
+  type InboxRuntime,
   parseAgent,
   type RemoteEvent,
 } from "./inbox-event.js";
@@ -70,7 +71,10 @@ export function hookAgent(anchor: AgentAnchor | null, env: NodeJS.ProcessEnv): I
 export type EventFields = Pick<
   InboxEvent,
   "event" | "session_id" | "source" | "reason" | "message" | "text" | "generation_id"
->;
+> & {
+  /** Hook runtime; rides on a local inbox event only, never a remote one. */
+  runtime?: InboxRuntime | undefined;
+};
 
 type Where = Pick<
   InboxEvent,
@@ -84,7 +88,16 @@ function inboxEvent(
   agent: InboxAgent,
   now: number,
 ): InboxEvent {
-  return { v: INBOX_EVENT_VERSION, ...fields, ...where, at: now, by, agent };
+  const { runtime, ...rest } = fields;
+  return {
+    v: INBOX_EVENT_VERSION,
+    ...rest,
+    ...(runtime && Object.keys(runtime).length > 0 ? { runtime } : {}),
+    ...where,
+    at: now,
+    by,
+    agent,
+  };
 }
 
 /** Where one event goes: a pane's inbox on this node, or a remote worker's area. */
@@ -164,11 +177,13 @@ function placedWrite(
   const tmux = context.env.TMUX ?? null;
   const tmux_pane = context.env.TMUX_PANE ?? null;
   if (placement.kind === "remote") {
+    // Remote workers carry no hook runtime.
+    const { runtime: _runtime, ...remoteFields } = fields;
     return {
       area: "remote",
       event: {
         v: INBOX_EVENT_VERSION,
-        ...fields,
+        ...remoteFields,
         remote_key: placement.remote_key,
         harness: placement.harness,
         owner_pid: placement.owner_pid,

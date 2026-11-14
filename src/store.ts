@@ -1093,6 +1093,36 @@ export function openStore(): Store {
     return prepared;
   };
 
+  const writeRuntime = (update: RuntimeUpdate): boolean => {
+    // Built from the keys actually PRESENT, so an explicit null is written and
+    // an absent key is left alone. COALESCE would have been shorter and cannot
+    // express the first case -- which is the one pi hits after every
+    // compaction, when the context percent legitimately becomes unknown.
+    const columns = RUNTIME_COLUMNS.filter((column) => column in update);
+    // Reachable, not defensive: an older pi offers none of the members, so the
+    // producer's `runtimeFromContext` returns {} and passes it straight here. A
+    // SET clause built from zero columns is a syntax error.
+    if (columns.length === 0) return false;
+    const assignments = columns.map((column) => `${column} = @${column}`).join(", ");
+    const values: Record<string, string | number | null> = {
+      agent_id: update.agent_id,
+      owner_pid: update.owner_pid,
+      updated_at: update.now ?? Date.now(),
+    };
+    for (const column of columns) {
+      const value = update[column];
+      // The bundle is one JSON column: it is nullable as a unit and no query
+      // looks inside it. Serialised here rather than by the caller, so no
+      // producer has to know the storage shape.
+      values[column] =
+        column === "usage" && value != null ? JSON.stringify(value) : (value as never);
+    }
+    // Prepared per shape and cached: there are a handful of real combinations
+    // (one per event), so this settles after the first few turns rather than
+    // re-planning identical SQL forever.
+    return runtimeStatement(assignments).run(values).changes === 1;
+  };
+
   const setActivityByPane = database.prepare(
     `UPDATE agents SET activity = ?, updated_at = ?
       WHERE server_kind = ? AND server_value = ? AND pane = ?`,
@@ -1441,6 +1471,17 @@ export function openStore(): Store {
       } else if (step.raise) {
         attention(step.raise.kind, step.raise.message);
       }
+      // After the owner and session checks, and before the `next: null` return
+      // (a compact `session_start`): the ignore and release paths above wrote none.
+      // pi reports its own runtime; its store-free inbox events carry none to apply.
+      if (event.runtime && event.harness !== "pi") {
+        writeRuntime({
+          ...event.runtime,
+          agent_id: row.agent_id,
+          owner_pid: row.owner_pid,
+          now: event.at,
+        });
+      }
       if (!step.next) return true;
       updateInboxAgent.run({
         agent_id: row.agent_id,
@@ -1569,35 +1610,7 @@ export function openStore(): Store {
       };
     },
 
-    setRuntime(update) {
-      // Built from the keys actually PRESENT, so an explicit null is written and
-      // an absent key is left alone. COALESCE would have been shorter and cannot
-      // express the first case -- which is the one pi hits after every
-      // compaction, when the context percent legitimately becomes unknown.
-      const columns = RUNTIME_COLUMNS.filter((column) => column in update);
-      // Reachable, not defensive: an older pi offers none of the members, so the
-      // producer's `runtimeFromContext` returns {} and passes it straight here. A
-      // SET clause built from zero columns is a syntax error.
-      if (columns.length === 0) return false;
-      const assignments = columns.map((column) => `${column} = @${column}`).join(", ");
-      const values: Record<string, string | number | null> = {
-        agent_id: update.agent_id,
-        owner_pid: update.owner_pid,
-        updated_at: update.now ?? Date.now(),
-      };
-      for (const column of columns) {
-        const value = update[column];
-        // The bundle is one JSON column: it is nullable as a unit and no query
-        // looks inside it. Serialised here rather than by the caller, so no
-        // producer has to know the storage shape.
-        values[column] =
-          column === "usage" && value != null ? JSON.stringify(value) : (value as never);
-      }
-      // Prepared per shape and cached: there are a handful of real combinations
-      // (one per event), so this settles after the first few turns rather than
-      // re-planning identical SQL forever.
-      return runtimeStatement(assignments).run(values).changes === 1;
-    },
+    setRuntime: writeRuntime,
 
     setActivity(update) {
       // Both key components are required, so a write from a REPLACED owner

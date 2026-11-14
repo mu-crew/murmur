@@ -262,8 +262,8 @@ export type PaneView = {
   // which harness runs the agent; null with no agent row or an unknown harness
   harness: string | null;
   // owner-reported runtime: what the agent is running WITH, as opposed to the
-  // metadata above, which is who it is. Null for any harness that does not
-  // report, which is every one without the pi extension.
+  // metadata above, which is who it is. Null when the harness reports none: pi
+  // reports all of it, a hook harness what its payloads name (model, effort).
   model: string | null;
   provider: string | null;
   effort: Effort | null;

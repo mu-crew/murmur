@@ -462,6 +462,7 @@ three surfaces carried machinery for it:
 | (row removed) | `releaseAgent` | `session_shutdown` |
 | (attention removed) | `acknowledgePane` | `murmur clear`, i.e. tmux focus, `i` in the dash (over ssh for a remote pane), or mu's `murmur clear -L/-S` before a retry |
 | activity, `run_count`, `last_text`, attention `done`/`blocked`/`error` | the inbox drain | a hook harness's events; see [The inbox](#the-inbox) |
+| runtime `model`, `provider`, `effort`, `provider_effort` | the inbox drain | a hook event's `runtime`, when the payload names them; never for pi, never null; see [The inbox](#the-inbox) |
 
 Nothing writes `crashed` from inside an agent, for the obvious reason.
 
@@ -630,6 +631,21 @@ every pane it changed, through the same `publishAgentStates` every writer uses.
    pid the hook recorded.
 4. An event whose `session_id` differs from the claimed session is ignored,
    unless it is `session_start`.
+
+**Runtime rides on the event.** A hook row maps the model, provider and effort
+its payload really names into an optional `runtime` on the event (claude: the
+model from `SessionStart`, the effort level from `Stop`; codex: the model; muse:
+model and `model_provider`; cursor-agent: the model, unless it says `default` or
+`auto`; muse's `unknown` counts as none). A subagent's payload maps to nothing,
+so its model never reaches the pane. The drain applies it with `setRuntime`
+under the row's own owner pid, after the ownership and session checks, so an
+ignored or releasing event writes none and a compact `session_start` still does.
+It is patch-shaped and never null: an absent field is left out, so a later
+payload without a model does not erase the first one's. Each field is validated
+alone and a bad one is dropped, never the event. An effort outside the known
+levels is kept as `provider_effort`. pi's rows and its store-free events
+(`harness: pi`) take none. Remote workers carry no hook runtime. The field is
+optional in event version 1: an older drain ignores it.
 
 **pi keeps its pane.** pi's claim replaces an `inbox` incumbent unless that
 incumbent's owner is alive AND is pi's ancestor. That covers a stray inbox claim

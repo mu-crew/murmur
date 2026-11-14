@@ -1,5 +1,10 @@
 import type { Harness } from "./harnesses.js";
-import { capLastText, type InboxEventName } from "./inbox-event.js";
+import {
+  capLastText,
+  type InboxEventName,
+  type InboxRuntime,
+  parseRuntime,
+} from "./inbox-event.js";
 
 /**
  * Each hook harness's row: how one of its hook payloads maps onto the inbox
@@ -28,6 +33,8 @@ export type HookMapping = {
   message: string | null;
   text: string | null;
   generation_id: string | null;
+  /** What the payload says it runs with; absent when it says nothing usable. */
+  runtime?: InboxRuntime;
 };
 
 type HookRow = (payload: HookPayload) => HookMapping | null;
@@ -51,6 +58,46 @@ function mapping(
     generation_id: null,
     ...over,
   };
+}
+
+/** A model or provider word that names nothing: the harness's own "no answer". */
+const ABSENT_WORDS: readonly string[] = ["default", "auto", "unknown"];
+
+function named(value: unknown): string | undefined {
+  const word = text(value);
+  if (word === null || word.trim() === "" || ABSENT_WORDS.includes(word.toLowerCase())) {
+    return undefined;
+  }
+  return word;
+}
+
+/**
+ * The runtime fields of one payload, each only when well formed. Never null:
+ * a field the payload lacks is left out, so it cannot erase an earlier one.
+ */
+function runtimeOf(fields: {
+  model?: unknown;
+  provider?: unknown;
+  effort?: unknown;
+}): HookMapping["runtime"] {
+  const runtime = parseRuntime({
+    model: named(fields.model),
+    provider: named(fields.provider),
+    effort: fields.effort,
+  });
+  return Object.keys(runtime).length > 0 ? runtime : undefined;
+}
+
+function withRuntime(mapped: HookMapping, fields: Parameters<typeof runtimeOf>[0]): HookMapping {
+  const runtime = runtimeOf(fields);
+  return runtime ? { ...mapped, runtime } : mapped;
+}
+
+function effortLevel(payload: HookPayload): unknown {
+  const effort = payload.effort;
+  return typeof effort === "object" && effort !== null && !Array.isArray(effort)
+    ? (effort as Record<string, unknown>).level
+    : undefined;
 }
 
 /** `turn_stopped`, with the payload's own last assistant text, capped at 64 KB. */
@@ -103,7 +150,9 @@ function failureMessage(payload: HookPayload): string | null {
 const claude: HookRow = (payload) => {
   switch (payload.hook_event_name) {
     case "SessionStart":
-      return mapping("session_start", payload, { source: text(payload.source) });
+      return withRuntime(mapping("session_start", payload, { source: text(payload.source) }), {
+        model: payload.model,
+      });
     case "UserPromptSubmit":
       return mapping("prompt_submitted", payload);
     case "PermissionRequest":
@@ -113,7 +162,7 @@ const claude: HookRow = (payload) => {
         ? mapping("permission_requested", payload, { message: permissionMessage(payload) })
         : null;
     case "Stop":
-      return stopped(payload);
+      return withRuntime(stopped(payload), { effort: effortLevel(payload) });
     case "StopFailure":
       return mapping("turn_failed", payload, { message: failureMessage(payload) });
     case "SessionEnd":
@@ -138,6 +187,11 @@ const claude: HookRow = (payload) => {
  */
 const codex: HookRow = (payload) => {
   if ("transcript_path" in payload && payload.transcript_path === null) return null;
+  const mapped = codexEvent(payload);
+  return mapped && withRuntime(mapped, { model: payload.model });
+};
+
+function codexEvent(payload: HookPayload): HookMapping | null {
   switch (payload.hook_event_name) {
     case "SessionStart":
       return mapping("session_start", payload, { source: text(payload.source) });
@@ -154,7 +208,7 @@ const codex: HookRow = (payload) => {
     default:
       return null;
   }
-};
+}
 
 /**
  * cursor-agent. Its own event names, camelCased, and one `stop` for every way
@@ -180,6 +234,11 @@ const codex: HookRow = (payload) => {
  * reads only the fields it maps.
  */
 const cursorAgent: HookRow = (payload) => {
+  const mapped = cursorEvent(payload);
+  return mapped && withRuntime(mapped, { model: payload.model });
+};
+
+function cursorEvent(payload: HookPayload): HookMapping | null {
   const generation = { generation_id: text(payload.generation_id) };
   switch (payload.hook_event_name) {
     case "sessionStart":
@@ -211,7 +270,7 @@ const cursorAgent: HookRow = (payload) => {
     default:
       return null;
   }
-};
+}
 
 /**
  * Muse Code. Claude Code's event names and payload fields, so claude's
@@ -237,6 +296,11 @@ const cursorAgent: HookRow = (payload) => {
  * echo must not clear a Muse error.
  */
 const muse: HookRow = (payload) => {
+  const mapped = museEvent(payload);
+  return mapped && withRuntime(mapped, { model: payload.model, provider: payload.model_provider });
+};
+
+function museEvent(payload: HookPayload): HookMapping | null {
   const generation = { generation_id: text(payload.turn_id) };
   switch (payload.hook_event_name) {
     case "SessionStart":
@@ -256,7 +320,7 @@ const muse: HookRow = (payload) => {
     default:
       return null;
   }
-};
+}
 
 /** The harnesses `murmur hook <harness>` has a row for. */
 export const HOOK_ROWS: Readonly<Partial<Record<Harness, HookRow>>> = Object.freeze({

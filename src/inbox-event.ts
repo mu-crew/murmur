@@ -1,5 +1,5 @@
 import { type Harness, isHarness } from "./harnesses.js";
-import type { Driver, TmuxServer } from "./types.js";
+import { type Driver, EFFORTS, type Effort, type TmuxServer } from "./types.js";
 
 /**
  * The canonical inbox event: what `murmur hook <harness>` writes for one hook
@@ -39,6 +39,19 @@ export type InboxAgent = {
   driver: Driver;
 };
 
+/**
+ * What a hook payload says its harness runs with: best effort, every key
+ * optional, and an absent key never erases what the row already holds.
+ * `effort` is a level murmur knows; any other level travels as
+ * `provider_effort`, free text.
+ */
+export type InboxRuntime = {
+  model?: string;
+  provider?: string;
+  effort?: Effort;
+  provider_effort?: string;
+};
+
 export type InboxEvent = {
   v: typeof INBOX_EVENT_VERSION;
   event: InboxEventName;
@@ -73,7 +86,34 @@ export type InboxEvent = {
   /** Who wrote it. An `interrupted` from mu is unconfirmed until the harness speaks. */
   by: "harness" | "mu";
   agent: InboxAgent;
+  /** Runtime the payload reported, hook events only. Absent from older hooks' events. */
+  runtime?: InboxRuntime;
 };
+
+/**
+ * A payload's runtime fields, each kept only when well formed: a bad field is
+ * dropped and the event is not. Empty when nothing is usable.
+ */
+export function parseRuntime(value: unknown): InboxRuntime {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return {};
+  const record = value as Record<string, unknown>;
+  const runtime: InboxRuntime = {};
+  const word = (field: unknown): string | null =>
+    typeof field === "string" && field.trim() !== "" ? field : null;
+  const model = word(record.model);
+  if (model !== null) runtime.model = model;
+  const provider = word(record.provider);
+  if (provider !== null) runtime.provider = provider;
+  const effort = word(record.effort);
+  if (effort !== null) {
+    const known = EFFORTS.find((level) => level === effort);
+    if (known) runtime.effort = known;
+    else runtime.provider_effort = effort;
+  }
+  const applied = word(record.provider_effort);
+  if (applied !== null) runtime.provider_effort = applied;
+  return runtime;
+}
 
 function isEventName(value: unknown): value is InboxEventName {
   return typeof value === "string" && (INBOX_EVENTS as readonly string[]).includes(value);
@@ -96,7 +136,7 @@ function optionalText(value: unknown): string | null | undefined {
  */
 export type RemoteEvent = Omit<
   InboxEvent,
-  "harness" | "server_pid" | "root_pid" | "owner_pid" | "server_socket"
+  "harness" | "server_pid" | "root_pid" | "owner_pid" | "server_socket" | "runtime"
 > & {
   remote_key: string;
   harness: Harness | null;
@@ -105,7 +145,7 @@ export type RemoteEvent = Omit<
 
 type EventBody = Omit<
   InboxEvent,
-  "v" | "harness" | "server_pid" | "root_pid" | "owner_pid" | "server_socket"
+  "v" | "harness" | "server_pid" | "root_pid" | "owner_pid" | "server_socket" | "runtime"
 >;
 
 /** The fields every event shares, validated, or null. */
@@ -170,9 +210,11 @@ export function parseInboxEvent(raw: string): InboxEvent | null {
   }
   const body = parseBody(record);
   if (!body) return null;
+  const runtime = parseRuntime(record.runtime);
   return {
     v: INBOX_EVENT_VERSION,
     ...body,
+    ...(Object.keys(runtime).length > 0 ? { runtime } : {}),
     harness: record.harness,
     server_pid: record.server_pid,
     root_pid: record.root_pid,
