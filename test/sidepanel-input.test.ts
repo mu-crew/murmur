@@ -38,6 +38,7 @@ const pane = {
   workstream: "murmur",
   role: null,
   cli: "pi",
+  harness: null,
   driver: "human",
   model: null,
   provider: null,

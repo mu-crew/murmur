@@ -33,6 +33,7 @@ const base: PaneView = {
   workstream: "ws",
   role: null,
   cli: "pi",
+  harness: null,
   driver: "human",
   model: null,
   provider: null,

@@ -75,6 +75,7 @@ function pane(id: string, over: Partial<SnapshotPane> = {}): SnapshotPane {
       workstream: "murmur",
       role: null,
       cli: "pi",
+      harness: null,
       driver: "human",
       model: null,
       provider: null,
@@ -95,7 +96,7 @@ function pane(id: string, over: Partial<SnapshotPane> = {}): SnapshotPane {
 
 function document(panes: SnapshotPane[], over: Partial<Snapshot> = {}): Snapshot {
   return {
-    murmur_snapshot: 6,
+    murmur_snapshot: 7,
     host_id: "REMOTE",
     display_name: "dev",
     murmur_version: "0.2.0",

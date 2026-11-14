@@ -821,7 +821,7 @@ but a quit.
 
 ```jsonc
 {
-  "murmur_snapshot": 6,
+  "murmur_snapshot": 7,
   "host_id": "1d2ee96e-3a94-41b2-90fa-5f1ee2f04276",  // from identity.json
   "display_name": "macbook-pro",
   "murmur_version": "0.4.0",         // read from package.json, never restated
@@ -842,6 +842,7 @@ but a quit.
         "workstream": "murmur",
         "role": null,
         "cli": "pi",
+        "harness": "pi",               // required key, null when unknown
         "driver": "orchestrated",
         // Runtime: what the agent is running WITH, as the agent reports it.
         // Every field nullable -- a harness that knows none of this says so.

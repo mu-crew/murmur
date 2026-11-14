@@ -41,7 +41,7 @@ function location(pane: string): Location {
 
 function remoteSnapshot(panes: SnapshotPane[]): Snapshot {
   return {
-    murmur_snapshot: 6,
+    murmur_snapshot: 7,
     host_id: "REMOTE",
     display_name: "container-id",
     murmur_version: "0.2.0",
@@ -66,6 +66,7 @@ function remotePane(pane: string, server: TmuxServer = { kind: "default" }): Sna
       workstream: null,
       role: null,
       cli: "pi",
+      harness: null,
       driver: "human",
       model: null,
       provider: null,

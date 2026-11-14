@@ -62,6 +62,7 @@ function pane(local: boolean, id = "%9"): PaneView {
     workstream: null,
     role: null,
     cli: "pi",
+    harness: null,
     driver: "human",
     model: null,
     provider: null,

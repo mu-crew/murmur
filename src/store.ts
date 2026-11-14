@@ -750,6 +750,7 @@ function toAgent(row: AgentDbRow): SnapshotAgent {
     workstream: row.workstream,
     role: row.role,
     cli: row.cli,
+    harness: row.harness,
     driver: row.driver as SnapshotAgent["driver"],
     model: row.model,
     provider: row.provider,

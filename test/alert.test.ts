@@ -105,7 +105,7 @@ test("collect fires for a remote peer's events and a crash it found locally", as
   // Remote: a done on another node, arriving in its snapshot.
   store.addPeer("dev", "dev");
   const remote: Snapshot = {
-    murmur_snapshot: 6,
+    murmur_snapshot: 7,
     host_id: "REMOTE",
     display_name: "Remote",
     murmur_version: "x",

@@ -98,7 +98,7 @@ function localAgent(
 
 function remoteSnapshot(panes: SnapshotPane[], generatedAt = 1_000): Snapshot {
   return {
-    murmur_snapshot: 6,
+    murmur_snapshot: 7,
     host_id: "REMOTE",
     display_name: "container-id-nobody-can-type",
     murmur_version: "0.2.0",
@@ -132,6 +132,7 @@ function remotePane(pane: string, over: Partial<SnapshotPane> = {}): SnapshotPan
       workstream: null,
       role: null,
       cli: "pi",
+      harness: null,
       driver: "human",
       model: null,
       provider: null,
@@ -176,6 +177,17 @@ test("counts group by render state, and attention beats activity", () => {
   expect(blocked?.attention.map((entry) => entry.kind)).toEqual(["blocked"]);
 });
 
+test("status --json rows carry the harness: a local pi row says pi, a row without an agent null", () => {
+  localAgent("%1");
+  localAgent("%2", { attention: ["done"] });
+  const rows = JSON.parse(JSON.stringify(status(store, IDENTITY))).panes;
+  const harness = (pane: string) =>
+    rows.find((row: { pane: string }) => row.pane === pane)?.harness;
+  expect(harness("%1")).toBe("pi");
+  expect(harness("%2")).toBe("pi");
+  expect(rows.every((row: { harness: unknown }) => "harness" in row)).toBe(true);
+});
+
 test("a remote worker points back to its matching local attachment", () => {
   store.addPeer("dev", "dev", "et dev -c 'tmux attach -t {pane}'");
   store.replacePeerSnapshot("dev", {
@@ -191,6 +203,7 @@ test("a remote worker points back to its matching local attachment", () => {
           workstream: "murmur",
           role: null,
           cli: "pi",
+          harness: null,
           driver: "orchestrated",
           model: null,
           provider: null,
@@ -244,6 +257,7 @@ test("a remote worker has no back-reference when no local pane matches", () => {
           workstream: "murmur",
           role: null,
           cli: "pi",
+          harness: null,
           driver: "orchestrated",
           model: null,
           provider: null,
@@ -291,6 +305,7 @@ function remoteWorkerStore(name: string) {
           workstream: "murmur",
           role: null,
           cli: "pi",
+          harness: null,
           driver: "orchestrated",
           model: null,
           provider: null,

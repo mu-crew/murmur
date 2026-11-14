@@ -50,6 +50,7 @@ function pane(id: string): SnapshotPane {
       workstream: null,
       role: null,
       cli: "pi",
+      harness: null,
       driver: "human",
       model: null,
       provider: null,
@@ -69,7 +70,7 @@ function pane(id: string): SnapshotPane {
 
 function snapshot(panes: SnapshotPane[], hostId = "REMOTE", over: Partial<Snapshot> = {}): string {
   return JSON.stringify({
-    murmur_snapshot: 6,
+    murmur_snapshot: 7,
     host_id: hostId,
     display_name: "Remote",
     murmur_version: "0.2.0",
@@ -415,6 +416,7 @@ test("collect reconciles each tmux server independently with one query per serve
     workstream: null,
     role: null,
     cli: "pi",
+    harness: null,
     driver: "human" as const,
   };
   store.claimAgent({

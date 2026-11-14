@@ -9,8 +9,8 @@
   server; `%34` on the default server and `%34` on `tmux -L mule` are different
   addresses.
 - **snapshot** — one node's complete current state. Versions are deliberately
-  incompatible in both directions; version 6 requires a `driver` on every
-  attention entry.
+  incompatible in both directions; version 7 requires a `harness` on every
+  agent.
 - **driver** — who is waiting on a pane: `human` (you) or `orchestrated` (a
   supervisor such as mu, which consumes the result). An agent row carries its
   agent's driver, and each attention row the driver its requester saw. A pane

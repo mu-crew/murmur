@@ -48,6 +48,7 @@ function pane(overrides: Partial<PaneView> = {}): PaneView {
     workstream: "dash",
     role: "worker",
     cli: "pi",
+    harness: null,
     driver: "human",
     model: null,
     provider: null,

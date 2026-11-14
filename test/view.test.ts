@@ -57,6 +57,7 @@ function view(over: Partial<PaneView> = {}): PaneView {
     workstream: null,
     role: null,
     cli: "pi",
+    harness: null,
     driver: "human",
     model: null,
     provider: null,

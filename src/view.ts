@@ -259,6 +259,8 @@ export type PaneView = {
   workstream: string | null;
   role: string | null;
   cli: string | null;
+  // which harness runs the agent; null with no agent row or an unknown harness
+  harness: string | null;
   // owner-reported runtime: what the agent is running WITH, as opposed to the
   // metadata above, which is who it is. Null for any harness that does not
   // report, which is every one without the pi extension.
@@ -432,6 +434,7 @@ function paneView(pane: SnapshotPane, source: ViewSource): PaneView {
     workstream: agent?.workstream ?? null,
     role: agent?.role ?? null,
     cli: agent?.cli ?? null,
+    harness: agent?.harness ?? null,
     model: agent?.model ?? null,
     provider: agent?.provider ?? null,
     effort: agent?.effort ?? null,

@@ -145,6 +145,7 @@ const AGENT_KEYS = [
   "workstream",
   "role",
   "cli",
+  "harness",
   "driver",
   "model",
   "effort",
@@ -233,6 +234,7 @@ function parseAgent(value: unknown, path: string): SnapshotAgent | null {
     workstream: textOrNull(row.workstream, `${path}.workstream`),
     role: textOrNull(row.role, `${path}.role`),
     cli: text(row.cli, `${path}.cli`),
+    harness: textOrNull(row.harness, `${path}.harness`),
     driver: member(row.driver, `${path}.driver`, DRIVERS),
     model: textOrNull(row.model, `${path}.model`),
     // Null-tolerant `member`: the set is closed, but not reporting is always

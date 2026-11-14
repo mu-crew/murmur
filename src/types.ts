@@ -239,7 +239,7 @@ export type PeerRecord = {
  * that every peer speaking the new version was incompatible, because its copy
  * still said 1.
  */
-export const SNAPSHOT_VERSION = 6;
+export const SNAPSHOT_VERSION = 7;
 
 /**
  * One node's whole current state. Complete, never a delta: a peer that returns
@@ -272,6 +272,8 @@ export type SnapshotAgent = AgentMeta &
   AgentRuntime & {
     agent_id: string;
     activity: Activity;
+    /** Which harness runs the agent (claude, codex, pi, ...); null when unknown. Not `cli`. */
+    harness: string | null;
     claimed_at: number;
     updated_at: number;
   };
