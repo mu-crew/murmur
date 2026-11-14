@@ -5,6 +5,8 @@ so it says what changed for a user rather than listing every commit.
 
 ## Unreleased
 
+## 2.1.0
+
 **Snapshot version 7.** The agent record carries the agent's `harness`
 (`claude`, `codex`, `cursor-agent`, `muse` or `pi`), also in `status --json`.
 Every node must upgrade together; a mixed fleet refuses each other's
