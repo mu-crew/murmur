@@ -390,6 +390,8 @@ export function compactSelectionMarker(selected: boolean, cardsFocused: boolean)
 export type CompactRowFields = {
   state: string;
   agent: string;
+  /** The harness tag: its own column, dropped only after every other optional one. */
+  tag?: string;
   host: string;
   stream: string;
   flags: string;
@@ -397,7 +399,7 @@ export type CompactRowFields = {
   summary: string;
 };
 
-type CompactOptionalColumn = "host" | "stream" | "flags" | "age";
+type CompactOptionalColumn = "tag" | "host" | "stream" | "flags" | "age";
 
 export type CompactRowLayout = {
   width: number;
@@ -411,6 +413,7 @@ export type CompactRowLayout = {
 const COMPACT_CAPS = { agent: 24, host: 18, stream: 18, segment: 20 } as const;
 const SUMMARY_SEPARATOR = " · ";
 const COMPACT_SUMMARY_MIN = 8;
+const COMPACT_AGENT_FLOOR = 3;
 const COMPACT_SEPARATOR = "  ";
 
 function compactCell(value: string, width: number): string {
@@ -430,16 +433,17 @@ export function compactRowLayout(
   width: number,
 ): CompactRowLayout {
   const measured = (key: keyof CompactRowFields, cap = Number.POSITIVE_INFINITY) =>
-    Math.min(cap, Math.max(0, ...rows.map((row) => cachedWidth(row[key]))));
+    Math.min(cap, Math.max(0, ...rows.map((row) => cachedWidth(row[key] ?? ""))));
   const widths = {
     state: Math.max(1, measured("state")),
     agent: Math.max(1, measured("agent", COMPACT_CAPS.agent)),
+    tag: measured("tag"),
     host: measured("host", COMPACT_CAPS.host),
     stream: measured("stream", COMPACT_CAPS.stream),
     flags: measured("flags"),
     age: measured("age"),
   };
-  const optionalColumns: CompactOptionalColumn[] = ["host", "stream", "flags", "age"];
+  const optionalColumns: CompactOptionalColumn[] = ["tag", "host", "stream", "flags", "age"];
   const columns = optionalColumns.filter((column) => widths[column] > 0);
   const used = () =>
     2 +
@@ -447,8 +451,8 @@ export function compactRowLayout(
     widths.agent +
     columns.reduce((sum, column) => sum + widths[column], 0) +
     COMPACT_SEPARATOR.length * (1 + columns.length);
-  const drop = (fits: () => boolean) => {
-    for (const column of ["flags", "age", "stream", "host"] as const) {
+  const drop = (fits: () => boolean, order: readonly CompactOptionalColumn[]) => {
+    for (const column of order) {
       if (fits()) break;
       const index = columns.indexOf(column);
       if (index >= 0) columns.splice(index, 1);
@@ -458,13 +462,20 @@ export function compactRowLayout(
   let summary = rows.some((row) => row.summary.length > 0);
   if (summary) {
     const all = [...columns];
-    drop(summaryFits);
+    // The tag is required information: never evicted to make room for a summary.
+    drop(summaryFits, ["flags", "age", "stream", "host"]);
     if (!summaryFits()) {
       summary = false;
       columns.splice(0, columns.length, ...all);
     }
   }
-  drop(() => used() <= width);
+  drop(() => used() <= width, ["flags", "age", "stream", "host"]);
+  // The tag goes last, and only when even a shrunk agent name cannot share
+  // the row with it: the agent column gives way before the tag does.
+  if (used() - widths.agent + Math.min(widths.agent, COMPACT_AGENT_FLOOR) > width) {
+    const index = columns.indexOf("tag");
+    if (index >= 0) columns.splice(index, 1);
+  }
   widths.agent = Math.max(1, Math.min(widths.agent, width - (used() - widths.agent)));
   // Summaries are usually `model · effort · ctx%`, and a variable-length model
   // name shears everything after it. Every segment but the last is aligned.
@@ -498,24 +509,24 @@ export function compactRow(
   layout: CompactRowLayout,
   marker: string,
 ): string {
-  const { before, host, after } = compactRowParts(row, layout, marker);
-  return before + host + after;
+  const { before, tag, between, host, after } = compactRowParts(row, layout, marker);
+  return before + tag + between + host + after;
 }
 
 /**
- * The same row, split around the host cell so a surface can color the host
- * alone. `host` is empty when the layout dropped the column or the width cut
- * the row before it.
+ * The same row, split around the tag and host cells so a surface can style
+ * them alone. A cell is empty when the layout dropped the column or the width
+ * cut the row before it.
  */
 export function compactRowParts(
   row: CompactRowFields,
   layout: CompactRowLayout,
   marker: string,
-): { before: string; host: string; after: string } {
+): { before: string; tag: string; between: string; host: string; after: string } {
   const cells = [
     compactCell(row.state, layout.widths.state),
     compactCell(row.agent, layout.widths.agent),
-    ...layout.columns.map((column) => compactCell(row[column], layout.widths[column])),
+    ...layout.columns.map((column) => compactCell(row[column] ?? "", layout.widths[column])),
   ];
   let line = `${marker}${cells.join(COMPACT_SEPARATOR)}`;
   if (layout.summary) {
@@ -524,18 +535,36 @@ export function compactRowParts(
     line += `${COMPACT_SEPARATOR}${compactCell(summary, Math.max(0, remaining))}`;
   }
   const full = compactCell(line, layout.width);
-  const hostIndex = layout.columns.indexOf("host");
-  if (hostIndex < 0) return { before: full, host: "", after: "" };
-  const prefix = `${marker}${cells.slice(0, 2 + hostIndex).join(COMPACT_SEPARATOR)}${COMPACT_SEPARATOR}`;
-  const hostCell = cells[2 + hostIndex] ?? "";
+  const whole = { before: full, tag: "", between: "", host: "", after: "" };
   // Only split a row whose start the width left intact; anything clipped
-  // earlier keeps the single string, uncolored, rather than mis-cut.
-  if (!full.startsWith(prefix + hostCell)) return { before: full, host: "", after: "" };
-  return {
-    before: prefix,
-    host: hostCell,
-    after: full.slice(prefix.length + hostCell.length),
+  // earlier keeps the single string, unstyled, rather than mis-cut.
+  const start = (column: CompactOptionalColumn): number => {
+    const index = layout.columns.indexOf(column);
+    if (index < 0) return -1;
+    const prefix = `${marker}${cells.slice(0, 2 + index).join(COMPACT_SEPARATOR)}${COMPACT_SEPARATOR}`;
+    return full.startsWith(prefix + cells[2 + index]) ? prefix.length : -1;
   };
+  const tagAt = start("tag");
+  const hostAt = start("host");
+  const tagCell = tagAt < 0 ? "" : (cells[2 + layout.columns.indexOf("tag")] ?? "");
+  const hostCell = hostAt < 0 ? "" : (cells[2 + layout.columns.indexOf("host")] ?? "");
+  const hits = [
+    { at: tagAt, cell: tagCell, key: "tag" as const },
+    { at: hostAt, cell: hostCell, key: "host" as const },
+  ]
+    .filter((hit) => hit.at >= 0)
+    .sort((x, y) => x.at - y.at);
+  if (hits.length === 0) return whole;
+  const out = { ...whole, before: full.slice(0, hits[0]?.at) };
+  let end = out.before.length;
+  hits.forEach((hit, index) => {
+    out[hit.key] = hit.cell;
+    end = hit.at + hit.cell.length;
+    const next = hits[index + 1];
+    if (next) out.between = full.slice(end, next.at);
+  });
+  out.after = full.slice(end);
+  return out;
 }
 
 export type DashKeyRoute = "help-open" | "help-close" | "help-inert" | "dash";

@@ -69,7 +69,8 @@ function compactFields(row: SidepanelRow) {
     agent: row.name,
     host: row.host,
     stream: row.stream ?? "",
-    flags: row.tag,
+    tag: row.tag,
+    flags: "",
     age: row.age,
     summary: "",
   };
@@ -88,8 +89,8 @@ export function sidepanelCompactLine(
   selected: boolean,
   layout = sidepanelCompactLayout([row], width),
 ): string {
-  const { before, host, after } = sidepanelCompactParts(row, width, selected, layout);
-  return before + host + after;
+  const { before, tag, between, host, after } = sidepanelCompactParts(row, width, selected, layout);
+  return before + tag + between + host + after;
 }
 
 /** The compact line split around its host cell, for coloring the host alone. */

@@ -523,26 +523,44 @@ function CompactLine({
   layout: ReturnType<typeof sidepanelCompactLayout>;
   color: string;
 }) {
-  const { before, host, after } = sidepanelCompactParts(row, columns, selected, layout);
+  const { before, tag, between, host, after } = sidepanelCompactParts(
+    row,
+    columns,
+    selected,
+    layout,
+  );
   return (
     <Text bold={selected} color={color} wrap="truncate-end">
       {before}
+      {tag ? <Text dimColor>{tag}</Text> : null}
+      {between}
       {host && !selected ? <Text color={row.hostColor}>{host}</Text> : host}
       {after}
     </Text>
   );
 }
 
-/** The facts line with the host in its accent; selection keeps one color. */
+/** The facts line: the tag always dim, the host in its accent unless selected. */
 function Facts({ row, selected }: { row: SidepanelRow; selected: boolean }) {
-  if (selected) return <>{row.facts}</>;
+  // The tag sits right after the state; split it out first.
+  const lead = `${row.state} · `;
+  const tagged = row.tag !== "" && row.facts.startsWith(lead + row.tag);
+  const head = tagged ? lead : "";
+  const rest = tagged ? row.facts.slice(lead.length + row.tag.length) : row.facts;
   const marker = ` · ${row.host}`;
-  const at = row.facts.indexOf(marker);
-  if (at < 0) return <>{row.facts}</>;
+  const at = selected ? -1 : rest.indexOf(marker);
   return (
     <>
-      {row.facts.slice(0, at)} · <Text color={row.hostColor}>{row.host}</Text>
-      {row.facts.slice(at + marker.length)}
+      {head}
+      {tagged ? <Text dimColor>{row.tag}</Text> : null}
+      {at < 0 ? (
+        rest
+      ) : (
+        <>
+          {rest.slice(0, at)} · <Text color={row.hostColor}>{row.host}</Text>
+          {rest.slice(at + marker.length)}
+        </>
+      )}
     </>
   );
 }

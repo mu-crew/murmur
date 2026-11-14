@@ -389,5 +389,7 @@ test("a narrow compact panel (min width 16) keeps the row within the width", () 
   };
   const line = sidepanelCompactLine(row, 16, false);
   expect(visibleWidth(line)).toBeLessThanOrEqual(16);
-  expect(line).toContain("worker-1");
+  // The tag outranks the agent name: the name shrinks before the tag is dropped.
+  expect(line).toContain("claude");
+  expect(line).toContain("wo…");
 });

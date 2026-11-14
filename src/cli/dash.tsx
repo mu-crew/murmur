@@ -340,8 +340,8 @@ function compactFields(
     agent: agentLabel(pane),
     host: pane.local ? DASH_CHROME.here : `${DASH_CHROME.remote} ${terminalText(pane.host)}`,
     stream: stream ? terminalText(stream) : "",
+    tag: harnessTag(pane),
     flags: [
-      harnessTag(pane),
       pane.driver === "orchestrated" ? DASH_CHROME.crew : "",
       pane.freshness === "stale" ? DASH_CHROME.stale : "",
       (pane.pending ?? 0) > 0 ? `${DASH_GLYPH.waiting}${pane.pending}` : "",
@@ -373,7 +373,7 @@ function CompactRow({
   // Colour alone carried selection and focus on a borderless line; the gutter
   // makes both survive a low-contrast or colour-blind terminal.
   const marker = compactSelectionMarker(selected, cardsFocused);
-  const { before, host, after } = compactRowParts(fields, layout, marker);
+  const { before, tag, between, host, after } = compactRowParts(fields, layout, marker);
 
   return (
     <Box ref={elementRef} width={layout.width} height={1}>
@@ -391,6 +391,8 @@ function CompactRow({
         wrap="truncate-end"
       >
         {before}
+        {tag ? <Text dimColor>{tag}</Text> : null}
+        {between}
         {host && !selected ? <Text color={hostColor(pane.host)}>{host}</Text> : host}
         {after}
       </Text>

@@ -114,10 +114,3 @@ test("a null harness has no tag", () => {
   const frame = dashFrame([{ ...pane, harness: null, model: "m" }], 80);
   for (const name of ["claude", "codex", "cursor", "muse"]) expect(frame).not.toContain(name);
 });
-
-test("a narrow dash (30 columns) lays out as it does without a tag", () => {
-  const width = (frame: string) => Math.max(...frame.split("\n").map((line) => line.length));
-  const tagged = dashFrame([{ ...pane, harness: "claude", model: "opus-4", effort: "medium" }], 30);
-  expect(tagged).toContain("worker-1");
-  expect(width(tagged)).toBe(width(dashFrame([pane], 30)));
-});
