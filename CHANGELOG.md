@@ -5,6 +5,32 @@ so it says what changed for a user rather than listing every commit.
 
 ## Unreleased
 
+**Snapshot version 7.** The agent record carries the agent's `harness`
+(`claude`, `codex`, `cursor-agent`, `muse` or `pi`), also in `status --json`.
+Every node must upgrade together; a mixed fleet refuses each other's
+snapshots until all peers are upgraded, and a downgraded build reads cached v7
+peer snapshots as empty until the next fetch. The local store is unchanged.
+
+**Model, provider and effort from hooks.** The claude, codex, muse and
+cursor-agent hooks now record what the payload names, best effort: model
+(claude on SessionStart, codex and muse on most events, cursor-agent unless it
+says `default`), provider (muse) and effort (claude on Stop). A missing or
+invalid field is skipped and never erases an earlier value or drops the event.
+An effort outside murmur's levels is kept as free text but not shown in the
+summary. pi still reports its own runtime, unchanged. Remote workers carry no
+hook runtime.
+
+**`murmur report`.** A script or a harness without a hook row can set
+`--model`, `--provider`, `--effort`, `--context-pct`, `--context-tokens` and
+`--context-window` on its pane. It changes no activity or attention, never
+claims a pane, and always exits 0. A murmur that predates it drops the event
+silently, so older drains lose `runtime_reported`.
+
+**Harness tag.** The dash, the side panel and the preview show the harness
+(`cursor-agent` as `cursor`) as a dim tag; the preview also gains a `harness`
+line. At 50 columns and up a pi row shows what it did before; narrower layouts
+may drop other fields, never the tag.
+
 ## 2.0.2
 
 Docs and test fixtures use plainer ssh and host examples. No behaviour
