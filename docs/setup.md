@@ -277,7 +277,8 @@ murmur report --model claude-opus-4 --provider anthropic --effort high \
 Each flag sets only its own key and leaves the others as they are. It is placed
 like `murmur hook` (the process chain from the pane's harness); `--pane %N`
 (with `-L`/`-S`) targets a pane from outside it. It is best effort: an invalid
-value is warned about on stderr and skipped, no flags writes nothing, and the
+value, a flag missing its argument or an unknown option is warned about on
+stderr and skipped (the valid fields still go through), no flags writes nothing, and the
 exit status is always 0. It changes no activity or attention, never claims a
 pane (the pane needs a live harness row already), and ignores pi, which reports
 in-process, and remote workers. Nothing runs it by default. A murmur that

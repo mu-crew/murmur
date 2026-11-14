@@ -125,9 +125,13 @@ export function parseRuntime(value: unknown): InboxRuntime {
   if (typeof pct === "number" && Number.isFinite(pct) && pct >= 0 && pct <= 100) {
     runtime.context_pct = pct;
   }
-  for (const key of ["context_tokens", "context_window"] as const) {
+  // Zero tokens used is a valid report (a fresh context); a window is never 0.
+  for (const [key, least] of [
+    ["context_tokens", 0],
+    ["context_window", 1],
+  ] as const) {
     const count = record[key];
-    if (typeof count === "number" && Number.isSafeInteger(count) && count > 0) {
+    if (typeof count === "number" && Number.isSafeInteger(count) && count >= least) {
       runtime[key] = count;
     }
   }

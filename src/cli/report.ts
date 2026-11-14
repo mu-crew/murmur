@@ -11,6 +11,9 @@ import { paneServer } from "./pane.js";
  * `murmur hook`; best effort, so it warns and exits 0 whatever is wrong.
  */
 
+/** Commander's value for an option declared `[value]` and given none. */
+type Given<T> = T | true;
+
 export type ReportFlags = {
   model?: string;
   provider?: string;
@@ -96,24 +99,52 @@ export function reportEvent(
 }
 
 export function registerReport(program: Command): void {
+  // Tolerant parsing, for `report` only: every option takes an optional value
+  // and unknown options are allowed, so a malformed command line reaches the
+  // action, which warns, skips what it cannot use and exits 0.
   program
     .command("report")
     .description("Report the model, provider, effort and context a harness runs with")
-    .option("--pane <pane>", "the pane the report is about (default: the pane it runs in)")
-    .option("--model <id>", "model id")
-    .option("--provider <name>", "model provider")
-    .option("--effort <level>", "reasoning effort")
-    .option("--context-pct <n>", "context window used, 0-100")
-    .option("--context-tokens <n>", "context tokens used")
-    .option("--context-window <n>", "context window size in tokens")
-    .option("-L, --socket-name <name>", "tmux server socket name, with --pane")
-    .option("-S, --socket-path <path>", "tmux server socket path, with --pane")
+    .allowUnknownOption()
+    .allowExcessArguments()
+    .option("--pane [pane]", "the pane the report is about (default: the pane it runs in)")
+    .option("--model [id]", "model id")
+    .option("--provider [name]", "model provider")
+    .option("--effort [level]", "reasoning effort")
+    .option("--context-pct [n]", "context window used, 0-100")
+    .option("--context-tokens [n]", "context tokens used")
+    .option("--context-window [n]", "context window size in tokens")
+    .option("-L, --socket-name [name]", "tmux server socket name, with --pane")
+    .option("-S, --socket-path [path]", "tmux server socket path, with --pane")
     .action(
-      (options: ReportFlags & { pane?: string; socketName?: string; socketPath?: string }) => {
+      (
+        raw: { [K in keyof ReportFlags]?: Given<string> } & {
+          pane?: Given<string>;
+          socketName?: Given<string>;
+          socketPath?: Given<string>;
+        },
+        command: Command,
+      ) => {
         const warn = (message: string): void => {
           process.stderr.write(`murmur: report: ${message}\n`);
         };
         try {
+          // An option given no value is a missing argument: warn and skip it.
+          const options: ReportFlags & { pane?: string; socketName?: string; socketPath?: string } =
+            {};
+          for (const [key, value] of Object.entries(raw)) {
+            if (value === true) {
+              const flag = key.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`);
+              warn(`--${flag}: argument missing, skipped`);
+            } else if (typeof value === "string") {
+              (options as Record<string, string>)[key] = value;
+            }
+          }
+          for (const arg of command.args) {
+            warn(
+              `${arg.startsWith("-") ? "unknown option" : "unexpected argument"} ${arg}, skipped`,
+            );
+          }
           const { runtime, warnings } = reportRuntime(options);
           for (const message of warnings) warn(message);
           if (Object.keys(runtime).length === 0) {

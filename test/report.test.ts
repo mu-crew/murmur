@@ -2,14 +2,17 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import Database from "better-sqlite3";
 import { afterEach, beforeEach, expect, test } from "vitest";
 import { reportEvent, reportRuntime } from "../src/cli/report.js";
 import { asPaneId, asSessionId, asWindowId } from "../src/ids.js";
 import { drainInbox, type InboxHost, writeInboxEvent } from "../src/inbox.js";
 import { type InboxEvent, parseInboxEvent } from "../src/inbox-event.js";
+import { dbPath } from "../src/paths.js";
 import type { ProcessRow } from "../src/process-chain.js";
 import { applyRemoteEvent, emptyRemoteState } from "../src/remote.js";
 import { openStore, type Store } from "../src/store.js";
+import { initialTurn, stepTurn } from "../src/turn.js";
 import type { Location } from "../src/types.js";
 import { builtArtifact } from "./helpers/built.js";
 import { fakeMux } from "./helpers/fake-mux.js";
@@ -245,4 +248,123 @@ test("murmur report exits 0 for an invalid flag and for none", () => {
   const none = run();
   expect(none.status).toBe(0);
   expect(none.stderr).toContain("nothing to report");
+});
+
+test("murmur report tolerates malformed options and keeps the valid fields", () => {
+  const run = (...args: string[]) =>
+    spawnSync("node", [builtArtifact("cli.js"), "report", ...args], {
+      encoding: "utf8",
+      env: { ...process.env, MURMUR_STATE_DIR: process.env.MURMUR_STATE_DIR },
+    });
+  const missing = run("--context-pct");
+  expect(missing.status).toBe(0);
+  expect(missing.stderr).toContain("--context-pct: argument missing");
+  expect(run("--effort").status).toBe(0);
+  const unknown = run("--bogus", "--model", "valid");
+  expect(unknown.status).toBe(0);
+  expect(unknown.stderr).toContain("unknown option --bogus");
+  // The valid field survives: it got as far as placing the event (no tmux
+  // here), not "nothing to report".
+  expect(unknown.stderr).not.toContain("nothing to report");
+  const mixed = run("--model", "--context-pct", "33");
+  expect(mixed.status).toBe(0);
+  expect(mixed.stderr).toContain("--model: argument missing");
+  expect(mixed.stderr).not.toContain("nothing to report");
+  // Other commands keep Commander's strictness.
+  const other = spawnSync("node", [builtArtifact("cli.js"), "status", "--bogus"], {
+    encoding: "utf8",
+    env: { ...process.env, MURMUR_STATE_DIR: process.env.MURMUR_STATE_DIR },
+  });
+  expect(other.status).not.toBe(0);
+});
+
+test("context_tokens 0 replaces a nonzero count; a zero window is still refused", () => {
+  const s = open();
+  send(s, undefined, event({ event: "session_start", session_id: "s1" }));
+  send(s, undefined, report({ context_tokens: 1200, context_window: 2000 }));
+  expect(row(s)).toMatchObject({ context_tokens: 1200, context_window: 2000 });
+  const flags = reportRuntime({ contextTokens: "0", contextWindow: "0" });
+  expect(flags.runtime).toEqual({ context_tokens: 0 });
+  expect(flags.warnings).toHaveLength(1);
+  send(s, undefined, report(flags.runtime));
+  expect(row(s)).toMatchObject({ context_tokens: 0, context_window: 2000 });
+});
+
+test("stepTurn applies a runtime_reported to no state at all", () => {
+  const state = {
+    ...initialTurn("s1"),
+    activity: "running" as const,
+    run_count: 3,
+    last_text: "t",
+    last_text_run: 2,
+    confirmed: false,
+    generation_id: "g",
+    generation_end: "stopped" as const,
+    generation_run: 2,
+  };
+  const step = stepTurn(state, {
+    event: "runtime_reported",
+    by: "harness",
+    session_id: null,
+    source: null,
+    reason: null,
+    message: null,
+    text: null,
+    generation_id: "g",
+  });
+  expect(step).toEqual({ kind: "apply", next: null, release: false, clear: [], raise: null });
+});
+
+function generation() {
+  const database = new Database(dbPath(), { readonly: true });
+  try {
+    return database
+      .prepare(
+        "SELECT generation_id, generation_end, generation_run, activity, run_count FROM agents",
+      )
+      .get() as Record<string, unknown>;
+  } finally {
+    database.close();
+  }
+}
+
+test("a report leaves the stored generation columns as they were", () => {
+  const s = open();
+  send(s, undefined, event({ event: "session_start", session_id: "s1" }));
+  send(s, undefined, event({ event: "prompt_submitted", session_id: "s1", at: 1_100 }));
+  send(
+    s,
+    undefined,
+    event({ event: "turn_stopped", session_id: "s1", text: "hi", generation_id: "g", at: 1_200 }),
+  );
+  const before = generation();
+  expect(before.generation_id).toBe("g");
+  expect(before.generation_end).toBe("stopped");
+  expect(before.generation_run).not.toBeNull();
+  send(s, undefined, report({ model: "m2" }, { session_id: "s1", generation_id: "g" }));
+  expect(row(s)?.model).toBe("m2");
+  expect(generation()).toEqual(before);
+});
+
+test("a report against a populated remote state leaves it unchanged", () => {
+  const key = "k";
+  let state = emptyRemoteState(key);
+  for (const e of [
+    event({ event: "session_start", session_id: "s1" }),
+    event({ event: "prompt_submitted", session_id: "s1", at: 1_100 }),
+    event({ event: "turn_stopped", session_id: "s1", text: "hi", generation_id: "g", at: 1_200 }),
+  ]) {
+    const next = applyRemoteEvent(state, { ...e, remote_key: key } as never, () => true);
+    if (next) state = next;
+  }
+  expect(state.claimed).toBe(true);
+  expect(state.turn.generation_id).toBe("g");
+  const before = structuredClone(state);
+  const result = applyRemoteEvent(
+    state,
+    { ...report({ model: "x" }), remote_key: key } as never,
+    () => true,
+  );
+  expect(result).toBeNull();
+  expect(state).toEqual(before);
 });
