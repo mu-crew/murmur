@@ -291,10 +291,18 @@ function Card({
       flexDirection="column"
       paddingX={1}
     >
-      <Text bold color={DASH_COLOR[state]} wrap="truncate-end">
-        {DASH_GLYPH[state]} {agentLabel(pane)} {elapsed}
-        {tag ? <Text dimColor> {tag}</Text> : null}
-      </Text>
+      <Box>
+        <Box flexShrink={1}>
+          <Text bold color={DASH_COLOR[state]} wrap="truncate-end">
+            {DASH_GLYPH[state]} {agentLabel(pane)} {elapsed}
+          </Text>
+        </Box>
+        {tag ? (
+          <Box flexShrink={0}>
+            <Text dimColor> {tag}</Text>
+          </Box>
+        ) : null}
+      </Box>
       <Text wrap="truncate-end">
         <Text color={hostColor(pane.host)}>
           {pane.local

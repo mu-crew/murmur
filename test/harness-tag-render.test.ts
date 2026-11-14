@@ -140,6 +140,20 @@ test("the harness forced colour is on", () => {
   expect(dashFrame([pane()], 80)).toMatch(ANSI);
 });
 
+for (const name of ["worker-with-a-long-name", "工作者-とても長い名前-에이전트-with-a-long-name"]) {
+  for (const columns of [30, 40, 80]) {
+    for (const harness of ["pi", "claude"] as const) {
+      test(`dash full card at ${columns} columns keeps a dim ${harness} tag with a long name`, () => {
+        writeFileSync(join(configDir, "dash.toml"), "compact = false\n");
+        const frame = dashFrame([pane({ harness, agent_name: name })], columns);
+        fits(frame, columns);
+        expect(plain(frame)).toContain(` ${harness}`);
+        expect(frame).toMatch(dimTag(` ${harness}`));
+      });
+    }
+  }
+}
+
 for (const columns of [30, 40]) {
   for (const harness of ["pi", "claude"] as const) {
     test(`dash compact at ${columns} columns keeps a dim ${harness} tag within the width`, () => {
@@ -194,7 +208,11 @@ test("a pi compact row equals the pre-change row except the tag and its width", 
     const old = compactRow(before, l0, "  ");
     const now = compactRow(after, l1, "  ");
     expect(visibleWidth(now)).toBe(width);
-    if (l1.columns.join() !== `tag,${l0.columns.join()}` || l1.summary !== l0.summary) continue;
+    // Every width: fits, and the tag is present.
+    expect(plain(now)).toContain("pi");
+    if (width < 50) continue;
+    // REVISION 4: from 50 columns a pi row keeps every pre-change field.
+    expect(l1.columns.join()).toBe(`tag,${l0.columns.join()}`);
     // Take the tag cell (and its separator) out; what is left is the old row,
     // clipped on the right only.
     const stripped = now.replace(/ {2}pi {2}/, "  ").trimEnd();
