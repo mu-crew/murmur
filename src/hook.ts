@@ -250,7 +250,11 @@ export function parseMuHookInput(
   by: InboxEvent["by"] = "mu",
 ): MuHookInput | string {
   const event = payload.event;
-  if (typeof event !== "string" || !(INBOX_EVENTS as readonly string[]).includes(event)) {
+  if (
+    typeof event !== "string" ||
+    event === "runtime_reported" ||
+    !(INBOX_EVENTS as readonly string[]).includes(event)
+  ) {
     return `unknown event: ${typeof event === "string" ? event : JSON.stringify(event ?? null)}`;
   }
   const harness = payload.harness ?? null;

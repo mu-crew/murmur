@@ -94,6 +94,11 @@ const IGNORE: TurnStep = { kind: "ignore" };
  * exception, since it is not the harness saying anything new.
  */
 export function stepTurn(state: TurnState, event: TurnEvent): TurnStep {
+  // A runtime report is no turn: the row, its attention and its confirmation
+  // stay exactly as they are (the drain applies its runtime itself).
+  if (event.event === "runtime_reported") {
+    return { kind: "apply", next: null, release: false, clear: [], raise: null };
+  }
   const generation = event.generation_id;
   // An event about a turn that has already ended: cursor-agent's late text,
   // its `stop` after the text, the `error` stop that follows an abort, or

@@ -218,6 +218,8 @@ export function applyRemoteEvent(
   event: RemoteEvent,
   isAlive: LiveCheck,
 ): RemoteState | null {
+  // Remote workers carry no runtime: a report changes nothing here.
+  if (event.event === "runtime_reported") return null;
   let current = state;
   if (event.owner_pid === null) {
     // mu's: it applies to the claim, and cannot make one.

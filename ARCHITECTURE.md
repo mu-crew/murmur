@@ -647,6 +647,13 @@ levels is kept as `provider_effort`. pi's rows and its store-free events
 (`harness: pi`) take none. Remote workers carry no hook runtime. The field is
 optional in event version 1: an older drain ignores it.
 
+`murmur report` writes the same `runtime` alone, as a `runtime_reported` event
+(the flags add `context_pct`, `context_tokens` and `context_window`, which no
+hook maps). The drain drops it unless a live row exists whose owner pid and
+harness are the event's; it never claims a pane, never reports for pi, and
+`stepTurn` and the remote fold treat it as a no-op. An older drain does not know
+the event name and drops it as malformed.
+
 **pi keeps its pane.** pi's claim replaces an `inbox` incumbent unless that
 incumbent's owner is alive AND is pi's ancestor. That covers a stray inbox claim
 during pi's `/new` release window or after a store reset, while a pi nested
@@ -671,6 +678,7 @@ incumbent's are cleared, as before.
 | `turn_stopped` | idle; `last_text` (64 KB) and `last_text_run`; `done` through `settledState` |
 | `turn_failed` | idle; attention `error` |
 | `session_end` (reason) | `clear`: keep the claim; otherwise release, keeping attention |
+| `runtime_reported` | only its `runtime` patch, onto the live row its harness owns; no turn, no attention, no confirmation, never a claim |
 
 `blocked` clears on the next event of any other kind. A new prompt answers the
 last turn's outcome, a failure as much as a finish, so it clears `error` as it

@@ -1387,6 +1387,27 @@ export function openStore(): Store {
       // harness started there next.
       if (row?.source === "pi" && isAlive(row.owner_pid)) return false;
 
+      if (event.event === "runtime_reported") {
+        // Never claims a pane and never a turn: it patches the runtime of the
+        // live row its own harness owns, and is dropped otherwise.
+        if (
+          !row ||
+          !event.runtime ||
+          event.harness === "pi" ||
+          row.harness !== event.harness ||
+          row.owner_pid !== event.owner_pid ||
+          !isAlive(row.owner_pid)
+        ) {
+          return false;
+        }
+        return writeRuntime({
+          ...event.runtime,
+          agent_id: row.agent_id,
+          owner_pid: row.owner_pid,
+          now: event.at,
+        });
+      }
+
       if (!row || row.owner_pid !== event.owner_pid) {
         if (event.event === "session_end") return false;
         if (row && isAlive(row.owner_pid)) return false;

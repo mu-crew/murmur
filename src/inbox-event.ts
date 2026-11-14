@@ -20,6 +20,11 @@ export const INBOX_EVENTS = [
   "turn_stopped",
   "turn_failed",
   "session_end",
+  /**
+   * A runtime report (`murmur report`): the `runtime` patch and nothing else.
+   * Never a turn, never a claim; an older drain drops it as malformed.
+   */
+  "runtime_reported",
 ] as const;
 
 export type InboxEventName = (typeof INBOX_EVENTS)[number];
@@ -50,6 +55,10 @@ export type InboxRuntime = {
   provider?: string;
   effort?: Effort;
   provider_effort?: string;
+  /** `murmur report` only: a hook payload names none of these. */
+  context_pct?: number;
+  context_tokens?: number;
+  context_window?: number;
 };
 
 export type InboxEvent = {
@@ -112,6 +121,16 @@ export function parseRuntime(value: unknown): InboxRuntime {
   }
   const applied = word(record.provider_effort);
   if (applied !== null) runtime.provider_effort = applied;
+  const pct = record.context_pct;
+  if (typeof pct === "number" && Number.isFinite(pct) && pct >= 0 && pct <= 100) {
+    runtime.context_pct = pct;
+  }
+  for (const key of ["context_tokens", "context_window"] as const) {
+    const count = record[key];
+    if (typeof count === "number" && Number.isSafeInteger(count) && count > 0) {
+      runtime[key] = count;
+    }
+  }
   return runtime;
 }
 

@@ -265,6 +265,24 @@ using the store: it writes inbox events like the hooks above and never claims
 the pane or loads a native module. Set it only for a pi build that cannot load
 murmur's store; mu then drives that pi like the harnesses above.
 
+### `murmur report`
+
+A script, or a harness with no hook row, can say what it runs with:
+
+```sh
+murmur report --model claude-opus-4 --provider anthropic --effort high \
+  --context-pct 42 --context-tokens 84000 --context-window 200000
+```
+
+Each flag sets only its own key and leaves the others as they are. It is placed
+like `murmur hook` (the process chain from the pane's harness); `--pane %N`
+(with `-L`/`-S`) targets a pane from outside it. It is best effort: an invalid
+value is warned about on stderr and skipped, no flags writes nothing, and the
+exit status is always 0. It changes no activity or attention, never claims a
+pane (the pane needs a live harness row already), and ignores pi, which reports
+in-process, and remote workers. Nothing runs it by default. A murmur that
+predates it drops the event silently.
+
 ### `murmur notify`
 
 Harnesses with no hook murmur maps run a command when something happens, and

@@ -40,7 +40,7 @@ import { readStdin } from "./stdin.js";
  */
 const HOOK_STDIN_DEADLINE_MS = 2000;
 
-function context(): HookContext | null {
+export function context(): HookContext | null {
   const table = readProcessTable();
   if (!table) return null;
   return { table, self: process.pid, env: process.env, anchor: anchorLookup(), now: Date.now() };
@@ -65,7 +65,7 @@ export function runHarnessHook(name: string, payload: HookPayload): boolean {
 }
 
 /** The server pid, pane root pid and socket of one pane, from tmux. */
-function resolvePane(pane: string, server: TmuxServer): MuHookTarget | string {
+export function resolvePane(pane: string, server: TmuxServer): MuHookTarget | string {
   const address = paneAddress(pane, server);
   if (address === null) return `no such pane: ${pane}`;
   const { server_pid, root_pid, socket } = address;
