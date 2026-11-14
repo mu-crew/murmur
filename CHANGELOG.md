@@ -20,16 +20,16 @@ An effort outside murmur's levels is kept as free text but not shown in the
 summary. pi still reports its own runtime, unchanged. Remote workers carry no
 hook runtime.
 
-**`murmur report`.** A script or a harness without a hook row can set
-`--model`, `--provider`, `--effort`, `--context-pct`, `--context-tokens` and
-`--context-window` on its pane. It changes no activity or attention, never
-claims a pane, and always exits 0. A murmur that predates it drops the event
-silently, so older drains lose `runtime_reported`.
+**`murmur report`.** A script can set `--model`, `--provider`, `--effort`,
+`--context-pct`, `--context-tokens` and `--context-window` on an existing pane
+of a recognised hook harness (claude, codex, cursor-agent, muse). pi is
+refused, and it never creates a row. It changes no activity or attention and
+always exits 0. A murmur that predates it drops the event silently, so older
+drains lose `runtime_reported`.
 
-**Harness tag.** The dash, the side panel and the preview show the harness
-(`cursor-agent` as `cursor`) as a dim tag; the preview also gains a `harness`
-line. At 50 columns and up a pi row shows what it did before; narrower layouts
-may drop other fields, never the tag.
+**Harness tag.** The dash and the side panel show the harness
+(`cursor-agent` as `cursor`) as a dim tag; the preview gains a plain `harness`
+line. The tag stays visible; when space is tight, other fields may give way.
 
 ## 2.0.2
 
