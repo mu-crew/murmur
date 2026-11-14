@@ -29,7 +29,8 @@ drains lose `runtime_reported`.
 
 **Harness tag.** The dash and the side panel show the harness
 (`cursor-agent` as `cursor`) as a dim tag; the preview gains a plain `harness`
-line. The tag stays visible; when space is tight, other fields may give way.
+line. When space is tight the tag takes priority over other fields, though very
+narrow layouts may still truncate or omit it.
 
 ## 2.0.2
 
