@@ -5,6 +5,13 @@ so it says what changed for a user rather than listing every commit.
 
 ## Unreleased
 
+**A mu remote worker shows the host it runs on.** A worker mu runs on another
+machine over a plain ssh session has its only pane here, so its row was local
+and every surface said `here`. mu now sets `@mu_host` on that pane, and the
+dash, side panel and picker show the host instead (`linuxpc via here`), in its
+colour; `status --json` carries it as `runs_on`. The jump still focuses the
+local pane. Needs a mu that sets the option; nothing changes on disk.
+
 ## 2.1.0
 
 **Snapshot version 7.** The agent record carries the agent's `harness`

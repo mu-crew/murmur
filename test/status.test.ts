@@ -400,6 +400,43 @@ test("a remote pane keeps its own node's fields and takes its node's freshness",
   expect(result.counts.running).toBe(1);
 });
 
+// A mu remote worker over a `session` transport: its only pane is the local
+// ssh client, so the row is local, and mu's `@mu_host` option is the one
+// record of where the agent runs.
+test("a local crew pane mu marked with @mu_host runs on that host", () => {
+  localAgent("%1", { driver: "orchestrated" });
+  localAgent("%2", { driver: "orchestrated" });
+  localAgent("%3");
+  const asked: string[] = [];
+  const result = status(store, IDENTITY, 1_000, () => false, undefined, {
+    mux: fakeMux({
+      paneOptionValues: (option) => {
+        asked.push(option);
+        return new Map([
+          [asPaneId("%1"), "linuxpc"],
+          // A human row is never a mu worker, whatever its pane says.
+          [asPaneId("%3"), "linuxpc"],
+        ]);
+      },
+    }),
+  });
+
+  const runsOn = Object.fromEntries(result.panes.map((pane) => [pane.pane, pane.runs_on]));
+  expect(runsOn).toEqual({ "%1": "linuxpc", "%2": null, "%3": null });
+  expect(result.panes.find((pane) => pane.pane === "%1")).toMatchObject({ local: true });
+  // One read per tmux server, not per pane.
+  expect(asked).toEqual(["@mu_host"]);
+});
+
+test("no crew pane here, no tmux read for @mu_host", () => {
+  localAgent("%1");
+  const read = vi.fn(() => new Map());
+  status(store, IDENTITY, 1_000, () => false, undefined, {
+    mux: fakeMux({ paneOptionValues: read }),
+  });
+  expect(read).not.toHaveBeenCalled();
+});
+
 test("local panes are always fresh, and no read path probes a pid", () => {
   // A local pane is authored by this node, so there is nothing to be stale
   // about. Freshness answers "how recently did we reach the node that told us",

@@ -53,6 +53,7 @@ const pane = {
   snapshot_at: null,
   fetched_at: null,
   attached_pane: null,
+  runs_on: null,
 } satisfies PaneView;
 
 test("a failed jump leaves the source panel open", async () => {

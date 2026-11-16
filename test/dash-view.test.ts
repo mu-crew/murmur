@@ -57,6 +57,7 @@ function view(over: Partial<PaneView> = {}): PaneView {
     snapshot_at: null,
     fetched_at: null,
     attached_pane: null,
+    runs_on: null,
     ...over,
   };
 }
@@ -306,4 +307,9 @@ test("dashRows filters then sorts", () => {
     "alpha%3",
     "beta%1",
   ]);
+});
+
+test("a mu remote worker is found by the host its card names", () => {
+  const worker = view({ host: "mac", local: true, runs_on: "linuxpc" });
+  expect(dashMatches(worker, "linuxpc")).toBe(true);
 });

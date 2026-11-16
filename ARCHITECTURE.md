@@ -815,6 +815,11 @@ by rename after each, and deletes the files. It prints the state in
 `murmur pane`'s words, plus the events it applied this time, which mu relays
 to the origin's ssh pane through `murmur hook mu --pane`. A released key keeps
 its last turn, so mu can collect a worker's final text after it exits.
+The origin's row says nothing about where the worker runs, so mu sets the
+pane option `@mu_host` on the origin pane and `status` reads it into the
+view's `runs_on` (one `list-panes` per tmux server holding a local crew row,
+none without one). It is never stored or exported: the snapshot's `host` is
+still the node that owns the pane.
 `murmur hook mu --remote <key>` writes one of mu's events (an interrupt it
 sent) into the area; it names no owner, applies to whoever holds the key, and
 cannot claim one. A crew worker's settled turn raises no `done` there: the

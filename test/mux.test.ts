@@ -602,3 +602,23 @@ test("localPaneProcesses batches one ps for many candidates, and unfiltered keep
   expect(tmuxCalls).toHaveLength(2);
   expect(tmuxCalls[1]).toEqual(["ww", "-o", "pid=,command=", "10", "20", "30", "40", "50"]);
 });
+
+test("paneOptionValues reads one option for every pane in one call, on the named server", () => {
+  tmuxCalls.length = 0;
+  tmuxReplies.length = 0;
+  // tmux expands an unset option to the empty string: that pane has none.
+  tmuxReplies.push("%1\tlinuxpc\n%2\t\n%3\tdev0\n");
+  expect(tmux.paneOptionValues("@mu_host", { kind: "label", value: "mule" })).toEqual(
+    new Map([
+      [asPaneId("%1"), "linuxpc"],
+      [asPaneId("%3"), "dev0"],
+    ]),
+  );
+  expect(tmuxCalls).toEqual([["-L", "mule", "list-panes", "-a", "-F", "#{pane_id}\t#{@mu_host}"]]);
+});
+
+test("paneOptionValues is empty when tmux cannot answer", () => {
+  tmuxReplies.length = 0;
+  tmuxReplies.push("THROW:no server running");
+  expect(tmux.paneOptionValues("@mu_host").size).toBe(0);
+});

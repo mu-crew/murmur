@@ -41,6 +41,7 @@ const pane: PaneView = {
   snapshot_at: null,
   fetched_at: null,
   attached_pane: null,
+  runs_on: null,
 };
 const counts = { crashed: 0, error: 0, blocked: 0, done: 0, running: 1, waiting: 0, idle: 0 };
 const initial: Status = {
@@ -113,4 +114,12 @@ test("claude shows model and effort, codex model only, cursor-agent is tagged cu
 test("a null harness has no tag", () => {
   const frame = dashFrame([{ ...pane, harness: null, model: "m" }], 80);
   for (const name of ["claude", "codex", "cursor", "muse"]) expect(frame).not.toContain(name);
+});
+
+test("a mu remote worker's card names the host it runs on, via here", () => {
+  // Human-driven only so the default crew filter shows the card: the host line
+  // reads runs_on whoever drives the row.
+  const frame = dashFrame([{ ...pane, runs_on: "linuxpc" }], 80);
+  expect(frame).toContain("linuxpc via here");
+  expect(dashFrame([pane], 80)).not.toContain("via here");
 });

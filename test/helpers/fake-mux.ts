@@ -69,6 +69,7 @@ export function fakeMux(over: Partial<Mux> & PublishHooks = {}): Mux {
     currentView: () => null,
     livePanes: () => new Set<PaneId>(),
     localPaneProcesses: () => [],
+    paneOptionValues: () => new Map<PaneId, string>(),
     setWindowState: () => {},
     setPaneState: () => {},
     setPaneLabel: () => {},

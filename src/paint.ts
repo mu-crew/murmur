@@ -293,10 +293,13 @@ export function pickerRow(
   // not cosmetic -- a local row is a keystroke away, a remote one costs an ssh
   // and a nested tmux. Both forms start in the same column, so the arrows form a
   // vertical run you can scan without reading a word.
+  // A mu remote worker reads as the host it runs on, with the arrow, though its
+  // pane (and so the jump) is here: "via here" in the flags says that part.
+  const shownHost = agent.runs_on ?? agent.host;
   const host = showHost
-    ? local
+    ? local && !agent.runs_on
       ? `${hostSgr(agent.host)}  here${RESET}`
-      : `${hostSgr(agent.host)}\u2192 ${terminalText(agent.host)}${RESET}`
+      : `${hostSgr(shownHost)}\u2192 ${terminalText(shownHost)}${RESET}`
     : "";
   // Workstream if mu set one, otherwise the tmux session name: both answer
   // "which piece of work is this", and only mu-spawned agents have a workstream.
@@ -319,6 +322,7 @@ export function pickerRow(
     // stale node keeps its last-known fields, and the reader must be told so.
     agent.freshness === "stale" ? "stale host" : "",
     agent.attached_pane ? `attached here ${agent.attached_pane}` : "",
+    local && agent.runs_on ? "via here" : "",
     ...extra,
     agent.activity === "running" && state !== "running" ? "running" : "",
     age(agent.updated_at === null ? null : Date.now() - agent.updated_at),

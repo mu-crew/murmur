@@ -136,7 +136,7 @@ export async function runPick(
         ? `No human agents  (+${hidden} crew — press ctrl-a)`
         : "No agents";
 
-  const showHost = agents.some((agent) => !agent.local);
+  const showHost = agents.some((agent) => !agent.local || agent.runs_on !== null);
   const currentPane = process.env.TMUX_PANE ?? "";
   const input = agents
     .map((agent) => pickerRow(agent, showHost, agent.pane === currentPane))
@@ -301,7 +301,7 @@ async function runRows(store: Store, options: PickOptions = {}): Promise<void> {
   // The launch-time background collect is the floored one, in `spawnCollect`.
   const view = await statusWithCollect(store, identity);
   const agents = view.panes.filter((agent) => options.all || isVisible(agent));
-  const showHost = agents.some((agent) => !agent.local);
+  const showHost = agents.some((agent) => !agent.local || agent.runs_on !== null);
   const currentPane = process.env.TMUX_PANE ?? "";
   for (const agent of agents) {
     process.stdout.write(`${pickerRow(agent, showHost, agent.pane === currentPane)}\n`);

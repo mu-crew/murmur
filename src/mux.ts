@@ -58,6 +58,11 @@ export interface Mux {
    * cannot match; an empty set reads nothing.
    */
   localPaneProcesses(commands?: ReadonlySet<string>): LocalPaneProcess[];
+  /**
+   * Every pane on `server` whose pane option `option` is set, with its value.
+   * Best effort, for presentation: a failed read is an empty map.
+   */
+  paneOptionValues(option: string, server?: TmuxServer): Map<PaneId, string>;
   // Sets murmur's aggregate WINDOW state. Status bars and pickers read this.
   setWindowState(
     window: WindowId,
@@ -512,6 +517,18 @@ export const tmux: Mux = {
       return tmuxServerAbsent(stderr) ? new Set() : null;
     }
     return new Set(out.split("\n").filter(Boolean).map(asPaneId));
+  },
+
+  // One list-panes for the whole server rather than a show-options per pane:
+  // the format expands to the empty string on a pane without the option.
+  paneOptionValues(option: string, server?: TmuxServer) {
+    const values = new Map<PaneId, string>();
+    const out = runTmux(["list-panes", "-a", "-F", `#{pane_id}\t#{${option}}`], server);
+    for (const line of out?.split("\n") ?? []) {
+      const [pane, value] = line.split("\t");
+      if (pane && value) values.set(asPaneId(pane), value);
+    }
+    return values;
   },
 
   // A separate best-effort read for presentation. Unlike livePanes(), failure

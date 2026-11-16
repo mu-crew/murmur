@@ -15,6 +15,7 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { visibleWidth } from "../src/ansi-width.js";
 import { App as DashApp } from "../src/cli/dash.js";
 import { App as SidepanelApp } from "../src/cli/sidepanel.js";
+import { hostColor } from "../src/dash-paint.js";
 import { DEFAULT_DASH_PREFS } from "../src/dash-prefs.js";
 import type { DashStore } from "../src/dash-store.js";
 import { compactRow, compactRowLayout } from "../src/dash-tick.js";
@@ -61,6 +62,7 @@ function pane(over: Partial<PaneView> = {}): PaneView {
     snapshot_at: null,
     fetched_at: null,
     attached_pane: null,
+    runs_on: null,
     ...over,
   };
 }
@@ -225,4 +227,20 @@ test("a pi compact row equals the pre-change row except the tag and its width", 
   const boundary = compactRow(fieldsOf("pi"), compactRowLayout([fieldsOf("pi")], 50), "  ");
   expect(plain(boundary)).toContain("pi");
   expect(visibleWidth(boundary)).toBe(50);
+});
+
+test("dash compact paints a mu remote worker's host in that host's colour", () => {
+  // Two rows: the selected one paints no host colour at all. "origin" and
+  // "linuxpc" hash to different colours, so colouring by the origin fails.
+  expect(hostColor("origin")).not.toBe(hostColor("linuxpc"));
+  const frame = dashFrame(
+    [
+      pane({ agent_name: "first", host: "origin" }),
+      pane({ pane: asPaneId("%2"), agent_name: "worker", host: "origin", runs_on: "linuxpc" }),
+    ],
+    60,
+  );
+  const hex = hostColor("linuxpc").slice(1);
+  const [r, g, b] = [0, 2, 4].map((at) => Number.parseInt(hex.slice(at, at + 2), 16));
+  expect(frame).toContain(`\u001b[38;2;${r};${g};${b}m`);
 });

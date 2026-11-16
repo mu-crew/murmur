@@ -48,6 +48,7 @@ const base: PaneView = {
   snapshot_at: null,
   fetched_at: null,
   attached_pane: null,
+  runs_on: null,
 };
 
 /** The visible label: the row minus its two hidden key columns and the escapes. */
@@ -549,4 +550,12 @@ test("the two header registers are visually distinct", () => {
   const attribute = (line: string) => (line.match(ANSI) ?? []).sort().join(",");
 
   expect(new Set([attribute(notice), attribute(columns)]).size).toBe(2);
+});
+
+test("a mu remote worker names the host it runs on, and that its pane is here", () => {
+  const worker = { ...base, local: true, driver: "orchestrated" as const, runs_on: "linuxpc" };
+  const row = label(pickerRow(worker, true, false, true));
+  expect(row).toContain("→ linuxpc");
+  expect(row).toContain("via here");
+  expect(row).not.toContain("  here");
 });

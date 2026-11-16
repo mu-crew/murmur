@@ -77,6 +77,7 @@ function pane(local: boolean, id = "%9"): PaneView {
     snapshot_at: null,
     fetched_at: null,
     attached_pane: null,
+    runs_on: null,
   };
 }
 

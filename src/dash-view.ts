@@ -73,6 +73,8 @@ export function dashSearchText(agent: PaneView): string {
     agent.workstream,
     agent.session_name,
     agent.host,
+    // A mu remote worker's card names the host it runs on: findable by it.
+    agent.runs_on,
     renderState(agent),
   ]
     .filter((field): field is string => Boolean(field))

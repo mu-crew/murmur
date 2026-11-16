@@ -50,6 +50,7 @@ function pane(over: Partial<PaneView> = {}): PaneView {
     snapshot_at: null,
     fetched_at: null,
     attached_pane: null,
+    runs_on: null,
     ...over,
   };
 }
@@ -238,4 +239,24 @@ test("resizing grows at once and shrinks only past a small slack", () => {
   expect(sidepanelResizeTarget(30, 28)).toBeNull();
   expect(sidepanelResizeTarget(30, 27)).toBe(27);
   expect(sidepanelResizeTarget(30, 30)).toBeNull();
+});
+
+test("a mu remote worker's row names the host it runs on, in that host's colour", () => {
+  // "origin" and "linuxpc" hash to different colours ("localhost" does not).
+  expect(hostColor("origin")).not.toBe(hostColor("linuxpc"));
+  const [row] = sidepanelRows([pane({ host: "origin", runs_on: "linuxpc" })], prefs(), 120_000);
+  expect(row).toMatchObject({ host: "linuxpc", hostColor: hostColor("linuxpc") });
+  expect(row?.facts).toContain("linuxpc");
+});
+
+test("a host from a tmux option reaches the panel without terminal controls", () => {
+  const [row] = sidepanelRows(
+    [pane({ runs_on: "linuxpc\rFAKE\u001b]8;;https://x\u0007" })],
+    prefs(),
+    120_000,
+  );
+  for (const control of ["\r", "\u001b", "\u0007"]) {
+    expect(row?.host).not.toContain(control);
+    expect(row?.facts).not.toContain(control);
+  }
 });

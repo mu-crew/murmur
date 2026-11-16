@@ -1,4 +1,4 @@
-import { agentLabel } from "./agents.js";
+import { agentLabel, terminalText } from "./agents.js";
 import { visibleWidth } from "./ansi-width.js";
 import { DASH_GLYPH, hostColor } from "./dash-paint.js";
 import type { DashPrefs } from "./dash-prefs.js";
@@ -45,7 +45,11 @@ export function sidepanelRows(
   return dashRows(panes, prefs, now).map((pane) => {
     const state = renderState(pane);
     const elapsed = age(pane.updated_at === null ? null : now - pane.updated_at);
-    const host = pane.local ? "here" : pane.host;
+    // A mu remote worker names the host it runs on; its pane is still here.
+    // Through terminalText like every other surface: `runs_on` is a tmux
+    // option any process can set, and the panel prints these fields raw.
+    const host = terminalText(pane.runs_on ?? (pane.local ? "here" : pane.host));
+    const stream = pane.workstream ?? pane.session_name;
     return {
       key: sidepanelPaneKey(pane),
       state,
@@ -55,9 +59,9 @@ export function sidepanelRows(
         .filter(Boolean)
         .join(" · "),
       host,
-      hostColor: hostColor(pane.host),
+      hostColor: hostColor(pane.runs_on ?? pane.host),
       age: elapsed,
-      stream: pane.workstream ?? pane.session_name,
+      stream: stream === null ? null : terminalText(stream),
       tag: harnessTag(pane),
     };
   });

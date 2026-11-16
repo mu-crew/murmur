@@ -48,6 +48,7 @@ function pane(over: Partial<PaneView> = {}): PaneView {
     snapshot_at: null,
     fetched_at: null,
     attached_pane: null,
+    runs_on: null,
     ...over,
   };
 }

@@ -118,6 +118,31 @@ export function tmuxStatus(view: Status): string {
   return states + (Number.isSafeInteger(crew) && crew > 0 ? `crew\t${crew}\n` : "");
 }
 
+/** The pane option mu sets on a remote worker's local pane: the host the worker runs on. */
+export const MU_HOST_OPTION = "@mu_host";
+
+/**
+ * Name the host each mu remote worker runs on. Such a worker's row is local --
+ * its pane here holds the ssh session, and the origin is the one writer of the
+ * row (ARCHITECTURE § The remote area) -- so nothing in the store says where
+ * the agent is. mu does: it sets `@mu_host` on the pane when it spawns one.
+ *
+ * Only orchestrated local rows can be one, so a host with none asks tmux
+ * nothing; otherwise one `list-panes` per tmux server those rows live on.
+ */
+function markRemoteWorkers(panes: PaneView[], mux: Mux): void {
+  const candidates = panes.filter((pane) => pane.local && pane.driver === "orchestrated");
+  const byServer = new Map<string, PaneView[]>();
+  for (const pane of candidates) {
+    const key = JSON.stringify(pane.server);
+    byServer.set(key, [...(byServer.get(key) ?? []), pane]);
+  }
+  for (const group of byServer.values()) {
+    const values = mux.paneOptionValues(MU_HOST_OPTION, group[0]?.server);
+    for (const pane of group) pane.runs_on = values.get(pane.pane) ?? null;
+  }
+}
+
 /**
  * The current view. Pure with respect to the network: the caller decides whether
  * to collect first (see `statusWithCollect`).
@@ -174,6 +199,7 @@ export function status(
       if (remote) remote.attached_pane = process.pane;
     }
   }
+  markRemoteWorkers(panes, options.mux ?? tmux);
   const sortedPanes = viewSort(panes, { ...context, now });
   for (const pane of sortedPanes) {
     const target = pane.driver === "human" ? counts : orchestratedCounts;

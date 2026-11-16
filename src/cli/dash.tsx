@@ -304,11 +304,7 @@ function Card({
         ) : null}
       </Box>
       <Text wrap="truncate-end">
-        <Text color={hostColor(pane.host)}>
-          {pane.local
-            ? `${DASH_CHROME.here} here`
-            : `${DASH_CHROME.remote} ${terminalText(pane.host)}`}
-        </Text>
+        <Text color={hostColor(pane.runs_on ?? pane.host)}>{dashHost(pane, true)}</Text>
         {pane.driver === "orchestrated" ? `  ${DASH_CHROME.crew}` : ""}
         {stream ? `  ${terminalText(stream)}` : ""}
         {pending ? (
@@ -324,6 +320,20 @@ function Card({
       </Text>
     </Box>
   );
+}
+
+/**
+ * Where a card says the agent is. A mu remote worker names the host it runs on,
+ * like a remote row, and (with room) that its pane is here, which is where a
+ * jump goes.
+ */
+function dashHost(pane: PaneView, full: boolean): string {
+  if (pane.runs_on) {
+    const host = `${DASH_CHROME.remote} ${terminalText(pane.runs_on)}`;
+    return full ? `${host} via here` : host;
+  }
+  if (pane.local) return full ? `${DASH_CHROME.here} here` : DASH_CHROME.here;
+  return `${DASH_CHROME.remote} ${terminalText(pane.host)}`;
 }
 
 /**
@@ -346,7 +356,7 @@ function compactFields(
   return {
     state: DASH_GLYPH[state],
     agent: agentLabel(pane),
-    host: pane.local ? DASH_CHROME.here : `${DASH_CHROME.remote} ${terminalText(pane.host)}`,
+    host: dashHost(pane, false),
     stream: stream ? terminalText(stream) : "",
     tag: harnessTag(pane),
     flags: [
@@ -401,7 +411,11 @@ function CompactRow({
         {before}
         {tag ? <Text dimColor>{tag}</Text> : null}
         {between}
-        {host && !selected ? <Text color={hostColor(pane.host)}>{host}</Text> : host}
+        {host && !selected ? (
+          <Text color={hostColor(pane.runs_on ?? pane.host)}>{host}</Text>
+        ) : (
+          host
+        )}
         {after}
       </Text>
     </Box>

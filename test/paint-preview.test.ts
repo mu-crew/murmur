@@ -708,6 +708,7 @@ test("the preview names the harness and keeps the cli line", () => {
     snapshot_at: null,
     fetched_at: null,
     attached_pane: null,
+    runs_on: null,
   } as const satisfies PaneView;
   const text = (over: Partial<PaneView>) =>
     previewText(store, { ...base, ...over }, [], () => "pane contents");

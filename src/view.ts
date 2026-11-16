@@ -290,6 +290,12 @@ export type PaneView = {
   fetched_at: number | null;
   /** A local pane already attached to this remote worker, derived per read. */
   attached_pane: PaneId | null;
+  /**
+   * The host a local pane's agent actually runs on, when that is not this one:
+   * a mu remote worker, whose pane here holds the ssh session to it. mu names
+   * the host in the pane's `@mu_host` option; derived per read, never stored.
+   */
+  runs_on: string | null;
 };
 
 /**
@@ -471,6 +477,7 @@ function paneView(pane: SnapshotPane, source: ViewSource): PaneView {
     snapshot_at: source.snapshot_at,
     fetched_at: source.fetched_at,
     attached_pane: null,
+    runs_on: null,
   };
 }
 
