@@ -33,7 +33,7 @@ import type { StoreModule } from "./store-api.js";
 // follows, and session_start answers that by firing.
 type ExtensionAPI = {
   on(
-    event: "agent_settled" | "session_shutdown" | "session_start",
+    event: "agent_settled" | "session_info_changed" | "session_shutdown" | "session_start",
     handler: () => void | Promise<void>,
   ): void;
   // The runtime-reporting events: each reads `ctx`, and `message_end` reads the
@@ -553,6 +553,23 @@ export default function murmurPi(pi: ExtensionAPI): void {
       pendingWork.clear();
       pendingTotal = 0;
       dropStore();
+    });
+  });
+
+  // pi names a session after the claim -- an auto-namer after the first turn, or
+  // /name -- and the claim is the only place `meta()` is read, so `pi_session`
+  // stayed null for the life of every session named that way, and the picker and
+  // pane label fell back to the tmux session name. Re-claim: our own pid comes
+  // back `retained`, which rewrites the row's meta, then repaint the label.
+  pi.on("session_info_changed", () => {
+    void enqueue(async () => {
+      if (refused || state.kind !== "open" || !agentId) return;
+      try {
+        const seen = look();
+        if (claim(state.store, seen.location)) publish(seen);
+      } catch {
+        dropStore();
+      }
     });
   });
 

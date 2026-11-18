@@ -5,6 +5,13 @@ so it says what changed for a user rather than listing every commit.
 
 ## Unreleased
 
+**A pi session named after it started shows its name.** pi names most sessions
+once the first turn lands (an auto-namer, or `/name`), but the extension read
+the name only when it claimed the pane, so those rows kept `pi_session: null`
+and the picker, dash and pane label showed the tmux session name instead
+(several rows reading `aiv`). The extension now re-reads the name on pi's
+`session_info_changed` and repaints. Nothing changes on disk.
+
 ## 2.2.0
 
 **A mu remote worker shows the host it runs on.** A worker mu runs on another

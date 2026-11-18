@@ -165,15 +165,18 @@ test("re-claiming as the same pid retains the agent_id and the activity", () => 
   const again = s.claimAgent({
     location: location(),
     owner_pid: 100,
-    meta: meta({ role: "reviewer" }),
+    meta: meta({ role: "reviewer", pi_session: "Fix Auth" }),
     now: 3,
   });
 
   expect(again).toEqual({ outcome: "retained", agent_id: agentId });
+  // The meta is rewritten, which is how a session named after the claim
+  // reaches the row (the extension re-claims on session_info_changed).
   expect(s.localPanes()[0]?.agent).toMatchObject({
     agent_id: agentId,
     activity: "running",
     role: "reviewer",
+    pi_session: "Fix Auth",
     claimed_at: 1,
     updated_at: 3,
   });

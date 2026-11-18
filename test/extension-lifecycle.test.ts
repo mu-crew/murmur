@@ -31,7 +31,7 @@ type Claim = { outcome: "claimed" | "retained" | "replaced" | "refused"; agent_i
 
 type Rig = {
   handlers: Map<string, (event?: unknown) => void | Promise<void>>;
-  claims: { owner_pid: number; pane: string }[];
+  claims: { owner_pid: number; pane: string; pi_session: string | null }[];
   writes: { activity: string; agent_id: string; owner_pid: number }[];
   releases: { agent_id: string; owner_pid: number; location: { pane: string } }[];
   badges: [string, string | null][];
@@ -60,6 +60,8 @@ async function rig(
     setActivity?: boolean;
     /** Answer for the one-call read; omitted means an older mux with none. */
     view?: () => unknown;
+    /** pi's live session name; omitted means an unnamed session. */
+    sessionName?: () => string | undefined;
   } = {},
 ): Promise<Rig> {
   const tmuxReads: string[] = [];
@@ -80,8 +82,16 @@ async function rig(
     openStore: () => {
       opens += 1;
       return {
-        claimAgent: (claim: { owner_pid: number; location: { pane: string } }) => {
-          claims.push({ owner_pid: claim.owner_pid, pane: claim.location.pane });
+        claimAgent: (claim: {
+          owner_pid: number;
+          location: { pane: string };
+          meta: { pi_session: string | null };
+        }) => {
+          claims.push({
+            owner_pid: claim.owner_pid,
+            pane: claim.location.pane,
+            pi_session: claim.meta.pi_session,
+          });
           const answer = claimAnswers[Math.min(asked, claimAnswers.length - 1)];
           asked += 1;
           return answer?.outcome === "refused"
@@ -174,6 +184,7 @@ async function rig(
     events: {
       on: (channel: string, handler: (data: unknown) => void) => bus.set(channel, handler),
     },
+    getSessionName: () => options.sessionName?.(),
   } as never);
 
   return {
@@ -221,6 +232,35 @@ test("a claim publishes the pane at once, so an idle agent is labelled before an
   unmock();
 });
 
+test("a session named after the claim reaches the row and the label", async () => {
+  // pi names most sessions after the claim: an auto-namer once the first turn
+  // lands, or /name. The claim was the only place the name was read, so every
+  // such session kept `pi_session: null` for life and the picker showed the
+  // tmux session name instead -- five rows reading `aiv`.
+  let name: string | undefined;
+  const r = await rig(
+    [
+      { outcome: "claimed", agent_id: "a1" },
+      { outcome: "retained", agent_id: "a1" },
+    ],
+    {
+      sessionName: () => name,
+    },
+  );
+  await until(() => r.labels.length > 0);
+  expect(r.claims).toEqual([{ owner_pid: process.pid, pane: "%1", pi_session: null }]);
+
+  name = "Fix Auth";
+  const before = r.labels.length;
+  await r.handlers.get("session_info_changed")?.();
+  await until(() => r.claims.length > 1 && r.labels.length > before);
+
+  expect(r.claims[1]).toEqual({ owner_pid: process.pid, pane: "%1", pi_session: "Fix Auth" });
+  expect(r.labels.length).toBeGreaterThan(before);
+
+  unmock();
+});
+
 test("a reload re-claims the pane at once, leaving no unowned window to lose it in", async () => {
   // `session_shutdown` RELEASES the agent row -- it must, because pi fires the
   // same event for a real quit, and a row left behind survives until something
@@ -258,8 +298,8 @@ test("a reload re-claims the pane at once, leaving no unowned window to lose it 
   await until(() => r.claims.length === 2);
 
   expect(r.claims).toEqual([
-    { owner_pid: process.pid, pane: "%1" },
-    { owner_pid: process.pid, pane: "%1" },
+    { owner_pid: process.pid, pane: "%1", pi_session: null },
+    { owner_pid: process.pid, pane: "%1", pi_session: null },
   ]);
 
   unmock();
