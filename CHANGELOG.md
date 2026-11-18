@@ -5,6 +5,8 @@ so it says what changed for a user rather than listing every commit.
 
 ## Unreleased
 
+## 2.2.1
+
 **A pi session named after it started shows its name.** pi names most sessions
 once the first turn lands (an auto-namer, or `/name`), but the extension read
 the name only when it claimed the pane, so those rows kept `pi_session: null`
