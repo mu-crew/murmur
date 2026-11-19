@@ -20,7 +20,13 @@ beforeEach(() => {
 function addPeer(
   name: string,
   target: string,
-  panes: Array<{ pane: string; agent: string; driver?: Driver; server?: TmuxServer }>,
+  panes: Array<{
+    pane: string;
+    agent: string;
+    driver?: Driver;
+    server?: TmuxServer;
+    pending?: number;
+  }>,
 ): void {
   const store = openStore();
   store.addPeer(name, target, "fake-transport --command {attach}");
@@ -30,37 +36,39 @@ function addPeer(
     display_name: name,
     murmur_version: "0.5.0",
     generated_at: 1,
-    panes: panes.map(({ pane, agent, driver = "human", server = { kind: "default" } }) => ({
-      server,
-      pane: asPaneId(pane),
-      session: asSessionId("$1"),
-      window: asWindowId("@1"),
-      session_name: "agents",
-      window_name: agent,
-      agent: {
-        agent_id: `${name}-${pane}`,
-        activity: "running",
-        agent_name: agent,
-        pi_session: null,
-        workstream: null,
-        role: null,
-        cli: "pi",
-        harness: null,
-        driver,
-        model: null,
-        provider: null,
-        effort: null,
-        context_pct: null,
-        context_tokens: null,
-        context_window: null,
-        provider_effort: null,
-        usage: null,
-        pending: null,
-        claimed_at: 1,
-        updated_at: 1,
-      },
-      attention: [],
-    })),
+    panes: panes.map(
+      ({ pane, agent, driver = "human", server = { kind: "default" }, pending }) => ({
+        server,
+        pane: asPaneId(pane),
+        session: asSessionId("$1"),
+        window: asWindowId("@1"),
+        session_name: "agents",
+        window_name: agent,
+        agent: {
+          agent_id: `${name}-${pane}-${agent}`,
+          activity: "running",
+          agent_name: agent,
+          pi_session: null,
+          workstream: null,
+          role: null,
+          cli: "pi",
+          harness: null,
+          driver,
+          model: null,
+          provider: null,
+          effort: null,
+          context_pct: null,
+          context_tokens: null,
+          context_window: null,
+          provider_effort: null,
+          usage: null,
+          pending: pending ?? null,
+          claimed_at: 1,
+          updated_at: 1,
+        },
+        attention: [],
+      }),
+    ),
   };
   store.replacePeerSnapshot(name, { ok: true, at: 1, snapshot });
   store.close();
@@ -259,4 +267,57 @@ test("jump verb: a bad token exits 1 with one stderr line", () => {
   const result = cliResult("jump", "nonsense");
   expect(result.status).toBe(1);
   expect(result.stderr.trim().split("\n")).toHaveLength(1);
+});
+
+test("status --json pins the stable field types at the CLI boundary", () => {
+  addPeer("dev", "developer.example", [
+    { pane: "%1", agent: "alpha", pending: 2 },
+    { pane: "%1", agent: "beta", server: { kind: "label", value: "private" } },
+  ]);
+  const seeded = openStore();
+  seeded.replacePeerSnapshot("dev", { ok: false, at: 5, error: "Permission denied (publickey)." });
+  seeded.close();
+
+  const view = JSON.parse(cli("status", "--json", "--cached"));
+  expect(view.peers).toHaveLength(1);
+  const [peer] = view.peers;
+  expect(typeof peer.name).toBe("string");
+  expect(typeof peer.needs_session).toBe("boolean");
+  expect(peer.needs_session).toBe(true);
+  expect(typeof peer.fetched_at).toBe("number");
+
+  const byName = Object.fromEntries(
+    view.panes.map((p: { agent_name: string }) => [p.agent_name, p]),
+  );
+  const alpha = byName.alpha;
+  const beta = byName.beta;
+  for (const pane of [alpha, beta]) {
+    for (const key of [
+      "host_id",
+      "host",
+      "pane",
+      "window",
+      "session_name",
+      "window_name",
+      "render_state",
+      "label",
+      "jump_target",
+      "freshness",
+      "driver",
+    ]) {
+      expect(typeof pane[key], key).toBe("string");
+    }
+    expect(pane.local).toBe(false);
+    expect(typeof pane.visible).toBe("boolean");
+    expect(Array.isArray(pane.attention)).toBe(true);
+    expect(pane.runs_on).toBeNull();
+    expect(pane.attached_pane).toBeNull();
+    expect(typeof pane.updated_at).toBe("number");
+  }
+  expect(alpha.pending).toBe(2);
+  expect(beta.pending).toBeNull();
+  expect(alpha.server).toEqual({ kind: "default" });
+  expect(beta.server).toEqual({ kind: "label", value: "private" });
+  expect(alpha.render_state).toBe("working");
+  expect(alpha.jump_target).not.toBe(beta.jump_target);
 });
