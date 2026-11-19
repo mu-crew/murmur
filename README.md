@@ -19,6 +19,7 @@ agent over ssh without leaving it.
 | --- | --- |
 | `murmur status` | Attention-state rollups plus the total crew count for a tmux status bar |
 | `murmur pick` | fzf jump list — type to narrow, enter jumps, `ctrl-a` / `--all` toggles crew |
+| `murmur jump <target>` | Jump to the agent a `status --json` pane's `jump_target` names; what an external picker calls after selection |
 | `murmur dash` | Full-screen dashboard: watch, prompt, and stop local or remote agents |
 | `murmur sidepanel` | Compact agent list in a full-height pane beside the current tmux window |
 | `murmur rex-feed` | The status pill's agents as terminal program status (OSC 7501), for Rex |
@@ -28,6 +29,13 @@ over ssh (or your `--jump-command`). Orchestrated (`crew`) agents stay hidden
 from state rollups unless they are `blocked`, `error` or `crashed`, because their
 supervisor consumes anything else. `murmur status` also emits their total as a
 separate `crew` record, including those urgent agents.
+
+For scripts and other pickers, `murmur status --json` prints every pane in
+urgency order with derived `render_state`, `label`, `visible` and `jump_target`
+fields, and `--cached` reads the store without ever reaching a peer (pair it
+with a detached `murmur collect --quiet --floored`). Hand a pane's
+`jump_target` to `murmur jump`. The stable fields are listed in
+[ARCHITECTURE.md](ARCHITECTURE.md#contract).
 
 murmur can also notify you: an executable `~/.config/murmur/on-attention` runs
 once per new `done`, `blocked`, `error` or `crashed`, on any node. See
