@@ -232,6 +232,36 @@ test("a claim publishes the pane at once, so an idle agent is labelled before an
   unmock();
 });
 
+test("a session already named at load reaches the row once session_start fires", async () => {
+  // pi throws for action methods while it loads an extension, and the claim
+  // runs at load, so it recorded no name even for a session named long ago --
+  // a /reload of a named session left pi_session null, and session_start found
+  // the store already open and claimed nothing.
+  let loading = true;
+  const r = await rig(
+    [
+      { outcome: "claimed", agent_id: "a1" },
+      { outcome: "retained", agent_id: "a1" },
+    ],
+    {
+      sessionName: () => {
+        if (loading) throw new Error("Extension runtime not initialized");
+        return "Fix Auth";
+      },
+    },
+  );
+  await until(() => r.claims.length > 0);
+  expect(r.claims[0]?.pi_session).toBeNull();
+
+  loading = false;
+  await r.handlers.get("session_start")?.();
+  await until(() => r.claims.length > 1);
+
+  expect(r.claims.at(-1)).toEqual({ owner_pid: process.pid, pane: "%1", pi_session: "Fix Auth" });
+
+  unmock();
+});
+
 test("a session named after the claim reaches the row and the label", async () => {
   // pi names most sessions after the claim: an auto-namer once the first turn
   // lands, or /name. The claim was the only place the name was read, so every

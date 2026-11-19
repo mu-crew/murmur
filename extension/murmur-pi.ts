@@ -208,6 +208,8 @@ export default function murmurPi(pi: ExtensionAPI): void {
   let refused = false;
   /** This process's agent row, for the life of the process. */
   let agentId: string | null = null;
+  /** The pi session name the last successful claim recorded. */
+  let claimedName: string | null = null;
   /**
    * The last completed turn's assistant message, waiting to be written.
    *
@@ -281,7 +283,8 @@ export default function murmurPi(pi: ExtensionAPI): void {
    * A refusal closes the store and is permanent for the process (see `refused`).
    */
   const claim = (store: Store, location: Location = here()): boolean => {
-    const result = store.claimAgent({ location, owner_pid: process.pid, meta: meta() });
+    const claimMeta = meta();
+    const result = store.claimAgent({ location, owner_pid: process.pid, meta: claimMeta });
     if (result.outcome === "refused") {
       store.close();
       refused = true;
@@ -292,6 +295,7 @@ export default function murmurPi(pi: ExtensionAPI): void {
     // `retained` makes /reload a no-op: pi re-runs this factory in the same
     // process, and the store recognises our own pid.
     agentId = result.agent_id;
+    claimedName = claimMeta.pi_session;
     return true;
   };
 
@@ -556,21 +560,31 @@ export default function murmurPi(pi: ExtensionAPI): void {
     });
   });
 
-  // pi names a session after the claim -- an auto-namer after the first turn, or
-  // /name -- and the claim is the only place `meta()` is read, so `pi_session`
-  // stayed null for the life of every session named that way, and the picker and
-  // pane label fell back to the tmux session name. Re-claim: our own pid comes
-  // back `retained`, which rewrites the row's meta, then repaint the label.
+  /**
+   * Re-claim to rewrite this row's meta, then repaint the label.
+   *
+   * The name is the meta that changes: the claim made while pi loads the
+   * extension cannot read it (pi throws "Extension runtime not initialized" for
+   * action methods during loading, which `safeSessionName` turns into null),
+   * and pi names most sessions later still -- an auto-namer after the first
+   * turn, or /name. Our own pid comes back `retained`, whose UPDATE rewrites
+   * the meta, so this keeps the refused/nested rules in `claim`.
+   */
+  const refreshMeta = (): void => {
+    if (refused || state.kind !== "open" || !agentId) return;
+    // Only when the name moved: session_start runs this on every start and
+    // reload, and an unchanged row needs no write.
+    if (safeSessionName(pi) === claimedName) return;
+    try {
+      const seen = look();
+      if (claim(state.store, seen.location)) publish(seen);
+    } catch {
+      dropStore();
+    }
+  };
+
   pi.on("session_info_changed", () => {
-    void enqueue(async () => {
-      if (refused || state.kind !== "open" || !agentId) return;
-      try {
-        const seen = look();
-        if (claim(state.store, seen.location)) publish(seen);
-      } catch {
-        dropStore();
-      }
-    });
+    void enqueue(async () => refreshMeta());
   });
 
   // Reestablish, per pi's contract. A reload leaves this instance live with its
@@ -588,6 +602,8 @@ export default function murmurPi(pi: ExtensionAPI): void {
       // after shutdown, bounding the unowned window to two handler calls.
       // Publishing repaints what session_shutdown's publish removed.
       await claimAndPublish();
+      // The load-time claim recorded no name; pi's runtime is bound by now.
+      refreshMeta();
     });
   });
 }

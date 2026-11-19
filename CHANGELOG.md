@@ -5,6 +5,15 @@ so it says what changed for a user rather than listing every commit.
 
 ## Unreleased
 
+## 2.2.2
+
+**A pi session already named when it loads shows its name.** 2.2.1 picked up a
+name set while pi runs, but not one that existed when the extension loaded: pi
+refuses `getSessionName()` during loading, so the claim made then recorded no
+name, and `/reload` of a named session or a resumed one still showed the tmux
+session name. The extension now re-reads the name at `session_start` and
+claims again only when it differs. Nothing changes on disk.
+
 ## 2.2.1
 
 **A pi session named after it started shows its name.** pi names most sessions
