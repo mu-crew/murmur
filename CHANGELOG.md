@@ -3,7 +3,7 @@
 Notable changes per release. Written for someone deciding whether to upgrade,
 so it says what changed for a user rather than listing every commit.
 
-## Unreleased
+## 2.3.0
 
 **Documented the limits of jumping to named-server agents on a peer.** The README and
 ARCHITECTURE list what is guaranteed and five known limits (hand-started
