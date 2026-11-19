@@ -247,6 +247,21 @@ The remote jump inherits the tmux requirement, since it is `ssh -t <host> tmux
 attach`. tmux must be running on the far side, which is why a dead remote tmux
 server gets its own diagnosis rather than being reported as an unreachable host.
 
+**Named-server jump guarantees and limits.** For an agent on a named tmux server
+(`-L` / `-S`) on a peer, the jump is addressed by host, tmux server and pane, and
+a failure is one line; default-server jumps are unchanged. Murmur does not verify
+which pane the local client ends up showing, so some cases are accepted:
+
+- A hand-started `ssh` / `et` pane to a peer may be reused as the attachment even
+  when it shows another pane.
+- Server labels that hash alike can share a wrapper session.
+- Wrappers left by 2.2.x are not adopted or retired.
+- A custom jump template that redirects the attach is trusted.
+- Activity on another tmux client during the jump can change where it lands.
+
+Workaround: start peer connections through murmur (`PREFIX a`, which opens
+tsesh's agents view, or `murmur jump`) and keep the default jump template.
+
 The brands (`src/ids.ts`) are phantom types on `string`, so they cost nothing at
 runtime and are applied at the edges: `asPaneId` and friends are called where a
 bare string arrives — argv, a tmux query, the wire — and everything inside deals

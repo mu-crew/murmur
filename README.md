@@ -99,6 +99,20 @@ without one there is nothing to jump to. Remote agents need tmux on the remote
 too — the jump uses
 `ssh -t <host> env LC_CTYPE=C.UTF-8 tmux attach` unless you override it.
 
+Jumps to agents on a named tmux server (`tmux -L` / `-S`) on a peer are addressed
+by host, tmux server and pane (the `jump_target`), and a failure prints one
+line. Jumps on the default server behave as before. Known limits:
+
+- A hand-started `ssh` / `et` pane to a peer may be reused as the attachment
+  even when it shows another pane.
+- Server labels that hash alike can share a wrapper session.
+- Wrappers left behind by 2.2.x are not adopted or retired.
+- A custom jump template that redirects the attach is trusted.
+- Activity on another tmux client during the jump can change where it lands.
+
+To avoid these, start peer connections through murmur (`PREFIX a`, which opens
+tsesh's agents view, or `murmur jump`) rather than by hand, and keep the default jump template.
+
 Add focus hooks so looking at a finished agent clears its badge — see
 [docs/setup.md](docs/setup.md#tmux-focus-hooks). Wire Codex / Cursor /
 opencode notifications in the same file.

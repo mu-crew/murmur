@@ -5,6 +5,11 @@ so it says what changed for a user rather than listing every commit.
 
 ## Unreleased
 
+**Documented the limits of jumping to named-server agents on a peer.** The README and
+ARCHITECTURE list what is guaranteed and five known limits (hand-started
+attachments, alike-hashing server labels, 2.2.x wrappers, custom templates,
+concurrent tmux clients), with the workaround.
+
 **Reusing a healthy remote wrapper works again.** The retarget sent the pane id quoted
 twice, so tmux saw `'%1'`; since a failed retarget became an error, jumping to a
 second agent on a host with an open wrapper failed. Every `murmur jump` failure
