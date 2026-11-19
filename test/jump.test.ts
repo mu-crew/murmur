@@ -359,23 +359,60 @@ test("reusing a host's wrapper retargets it at the pane that was picked", () => 
   expect(remoteCommands.some((command) => /switch-client -t .*%42/.test(command))).toBe(true);
 });
 
-test("a wrapper reuse that cannot retarget still lands on the host", () => {
-  // Best-effort by design: the operator ends up on the right host looking at
-  // the wrong pane, which another jump fixes. Refusing to move would be worse.
+test("a wrapper reuse that cannot retarget fails instead of claiming success", () => {
+  // Landing on the host looking at the wrong pane, with ok: true, is the
+  // wrong-destination-claiming-success failure; the client must not move.
   peer("p", "remote-host");
   vi.stubEnv("TMUX", "/tmp/tmux-1000/default,123,0");
+  const switched: string[] = [];
 
   const result = jumpToAgent(
     store,
     view({ pane: asPaneId("%42") }),
-    fakeMux({ sessionNamed: () => true }),
+    fakeMux({
+      sessionNamed: () => true,
+      switchClient: (_client, session) => {
+        switched.push(session);
+        return true;
+      },
+    }),
     (_file, args) =>
       /switch-client/.test(args.at(-1) ?? "")
         ? { status: 1, stdout: "", failed: true }
         : ok("%42\n"),
   );
 
+  expect(result).toMatchObject({ ok: false, reason: "attach_failed" });
+  if (!result.ok) expect(result.message).not.toContain("\n");
+  expect(switched).toEqual([]);
+});
+
+test("a private server's pane never reuses the default server's wrapper", () => {
+  peer("p", "remote-host");
+  vi.stubEnv("TMUX", "/tmp/tmux-1000/default,123,0");
+  const asked: string[] = [];
+  const opened: string[] = [];
+
+  const result = jumpToAgent(
+    store,
+    view({ pane: asPaneId("%1"), server: { kind: "label", value: "private é" } }),
+    fakeMux({
+      // Only the default server's wrapper exists.
+      sessionNamed: (name: string) => {
+        asked.push(name);
+        return name === remoteSessionName("p", "remote-host");
+      },
+      newSession: (name: string) => {
+        opened.push(name);
+        return true;
+      },
+    }),
+    () => ok("%1\n"),
+  );
+
   expect(result).toEqual({ ok: true });
+  expect(asked[0]).not.toBe(remoteSessionName("p", "remote-host"));
+  expect(opened).toEqual(asked);
 });
 
 test("with no existing session, exactly one is opened for the peer", () => {

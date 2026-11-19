@@ -11,7 +11,7 @@ import {
 } from "./jump-command.js";
 import { type Mux, tmux } from "./mux.js";
 import type { Store } from "./store.js";
-import type { PeerRecord } from "./types.js";
+import { DEFAULT_TMUX_SERVER, type PeerRecord, type TmuxServer } from "./types.js";
 import type { PaneView } from "./view.js";
 
 /**
@@ -143,7 +143,24 @@ export function peerForHost(
   return target ? { peer, target } : null;
 }
 
-export function remoteSessionName(peerName: string, hostId?: string): string {
+export function remoteSessionName(
+  peerName: string,
+  hostId?: string,
+  server: TmuxServer = DEFAULT_TMUX_SERVER,
+): string {
+  const base = hostSessionName(peerName, hostId);
+  // The default server keeps its historical name. A wrapper holds ONE remote
+  // client, attached to ONE remote server, and `switch-client` cannot move it
+  // to another server's panes -- so reuse must key on the server as well.
+  if (server.kind === "default") return base;
+  let hash = 0;
+  for (const character of `${server.kind}:${server.value}`) {
+    hash = (Math.imul(hash, 31) + character.charCodeAt(0)) | 0;
+  }
+  return `${base.slice(0, -1)}-s${Math.abs(hash).toString(36).padStart(6, "0").slice(0, 6)}~`;
+}
+
+function hostSessionName(peerName: string, hostId?: string): string {
   const label = peerName.replace(/^[@$%=]+/, "").replaceAll(/[:.\s]+/g, "-");
   // The sanitised label is NOT injective -- `a:b` and `a.b` both become `a-b`,
   // and `@foo` becomes `foo`. Reuse is matched on this name, so two peers
@@ -499,7 +516,7 @@ export function jumpToAgent(
     // Named after the peer as configured, matching the picker's host column: a
     // self-reported display_name can be a container id, unrecognisable in a
     // session list.
-    const name = remoteSessionName(peer.name, agent.host_id);
+    const name = remoteSessionName(peer.name, agent.host_id, agent.server);
 
     // Reuse this host's wrapper rather than stacking one per jump -- three jumps
     // to bubba left three identical windows. Matched on name, the only handle
@@ -515,9 +532,7 @@ export function jumpToAgent(
       // exists to prevent, and the local attach had the identical bug.
       //
       // One extra round trip, on the reuse path only, over the socket the
-      // wrapper's own ssh already warmed. A failure here is not fatal: the
-      // switch below still lands the operator on the right HOST, which is
-      // better than refusing to move, so this reports rather than aborts.
+      // wrapper's own ssh already warmed. A failure here fails the jump.
       // The wrapper's ssh process and remote tmux client stay alive while the
       // local client is elsewhere, so reuse retargets that existing remote
       // client. No remote client-attached event occurs here; arming another
@@ -527,6 +542,16 @@ export function jumpToAgent(
         target,
         `${tmuxPrefix} switch-client -t ${shellQuote(shellQuote(agent.pane))}`,
       ]);
+      // Reported, and BEFORE the local switch: success with the client left on
+      // the wrong pane (or wrong server) is a jump that "worked" and went
+      // nowhere useful, and the client must not move on a failed retarget.
+      if (retarget.status !== 0 || retarget.failed) {
+        return {
+          ok: false,
+          reason: "attach_failed",
+          message: `could not retarget the existing ${name} session at ${agent.pane}.`,
+        };
+      }
       if (!mux.switchClient(client, name)) {
         return {
           ok: false,
@@ -534,13 +559,6 @@ export function jumpToAgent(
           message: `could not switch to the existing ${name} session.`,
         };
       }
-      // A failed retarget is NOT reported. `JumpResult`'s success case carries
-      // no message, and widening it for a warning would make every caller
-      // handle a third state for a case that leaves the operator on the right
-      // host looking at the wrong pane -- recoverable by jumping again. The
-      // limitation worth knowing is above; if this needs surfacing, the honest
-      // change is a partial-success variant, not a message smuggled into `ok`.
-      void retarget;
       return { ok: true };
     }
 

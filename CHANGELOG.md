@@ -5,6 +5,12 @@ so it says what changed for a user rather than listing every commit.
 
 ## Unreleased
 
+**A remote jump reuses a wrapper session only for the same tmux server, and fails when the retarget fails.**
+A jump to a private-server agent on a host whose default-server wrapper was open
+switched to that wrapper and reported success, landing on the wrong server. The
+wrapper is now named per host and server (the default keeps its name), and a
+failed retarget is an error with the client left where it was.
+
 **An attached-pane hint names the tmux server too.** A local pane attached to a remote
 host's private server was credited to the same-numbered pane on its default
 server, so a jump focused the wrong attachment and reported success. The hint
