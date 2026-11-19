@@ -5,6 +5,13 @@ so it says what changed for a user rather than listing every commit.
 
 ## Unreleased
 
+**Reusing a healthy remote wrapper works again.** The retarget sent the pane id quoted
+twice, so tmux saw `'%1'`; since a failed retarget became an error, jumping to a
+second agent on a host with an open wrapper failed. Every `murmur jump` failure
+now prints one line (U+2028/2029 and NEL count as line breaks, a corrupt
+identity or store included, no stack), and the `peer set --jump-command`
+remediation stays valid for a command with a backslash line continuation.
+
 **`murmur jump` failures are always one stderr line.** The unsupported-server remediation
 spans four lines and a stale target echoed its pane id verbatim, so a popup
 caller relaying stderr lost most of it. Messages are now joined onto one line

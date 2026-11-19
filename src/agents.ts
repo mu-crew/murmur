@@ -143,6 +143,19 @@ export function peerForHost(
   return target ? { peer, target } : null;
 }
 
+/**
+ * A shell command on one line, meaning the same thing: a backslash-newline
+ * continuation is a space, any other newline a `;`. The remediation is printed
+ * on one stderr line, and joining the lines with a space instead would turn a
+ * continuation into `\\ ` and the next line's indent into part of an argument.
+ */
+function singleLineShell(command: string): string {
+  return command
+    .replaceAll(/\\\r?\n[ \t]*/g, " ")
+    .replaceAll(/[ \t]*\r?\n\s*/g, "; ")
+    .trim();
+}
+
 export function remoteSessionName(
   peerName: string,
   hostId?: string,
@@ -397,7 +410,7 @@ export function jumpToAgent(
       reason: "unsupported_server",
       message:
         `murmur: ${peer.name}'s jump command uses {pane}, which cannot identify the tmux server holding ${agentLabel(agent)} (${agent.pane})\n\n` +
-        `update it:\n  murmur peer set ${/^[\w.-]+$/.test(peer.name) ? peer.name : quoteCommand(peer.name)} --jump-command ${quoteCommand(suggestedJumpCommand(peer.jump_command, target))}`,
+        `update it:\n  murmur peer set ${/^[\w.-]+$/.test(peer.name) ? peer.name : quoteCommand(peer.name)} --jump-command ${quoteCommand(singleLineShell(suggestedJumpCommand(peer.jump_command, target)))}`,
     };
   }
 
@@ -540,7 +553,7 @@ export function jumpToAgent(
       const retarget = run("ssh", [
         ...SSH_OPTIONS,
         target,
-        `${tmuxPrefix} switch-client -t ${shellQuote(shellQuote(agent.pane))}`,
+        `${tmuxPrefix} switch-client -t ${shellQuote(agent.pane)}`,
       ]);
       // Reported, and BEFORE the local switch: success with the client left on
       // the wrong pane (or wrong server) is a jump that "worked" and went

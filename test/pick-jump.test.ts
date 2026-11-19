@@ -682,3 +682,15 @@ test("a stale target whose pane holds a newline still prints one line", async ()
   expect(lines).toHaveLength(1);
   expect(process.exitCode).toBe(1);
 });
+
+test("Unicode line separators in a message do not make a second line", async () => {
+  agent("%7");
+  const token = jumpTarget({ host_id: here(), server: { kind: "default" }, pane: asPaneId("%7") });
+  const lines = stderrLines(() =>
+    jumpWith(token, {
+      jump: () => ({ ok: false, reason: "attach_failed", message: "a\u2028b\u2029c\u0085d\re" }),
+    }),
+  );
+  expect(lines).toHaveLength(1);
+  expect(lines[0]).not.toMatch(/[\u2028\u2029\u0085\r]/);
+});

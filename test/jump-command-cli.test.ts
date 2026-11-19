@@ -321,3 +321,13 @@ test("status --json pins the stable field types at the CLI boundary", () => {
   expect(alpha.render_state).toBe("working");
   expect(alpha.jump_target).not.toBe(beta.jump_target);
 });
+
+test("jump verb: an unreadable identity is one stderr line, no stack", () => {
+  addPeer("dev", "developer.example", [{ pane: "%1", agent: "w" }]);
+  const token = JSON.parse(cli("status", "--json", "--cached")).panes[0].jump_target;
+  writeFileSync(join(stateDir, "identity.json"), "{");
+  const result = cliResult("jump", token);
+  expect(result.status).toBe(1);
+  expect(result.stderr.trim().split(/\r?\n/)).toHaveLength(1);
+  expect(result.stderr).not.toContain("    at ");
+});

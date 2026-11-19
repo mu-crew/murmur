@@ -34,18 +34,21 @@ export type JumpDeps = {
  */
 /**
  * Exactly one line, whatever went in: the caller relays stderr through a popup
- * that closes on exit, so a second line is lost or breaks the relay. Multi-line
- * remediations are joined, and control characters in ids become `\ufffd`.
+ * that closes on exit, so a second line is lost or breaks the relay. Anything a
+ * reader may split on (LF, CR, VT, FF, NEL, U+2028, U+2029) separates parts that
+ * are joined with a space, and other control characters become `\ufffd`.
  */
-function fail(message: string): void {
+export function reportJumpFailure(message: string): void {
   const line = message
-    .split("\n")
+    .split(/[\n\r\v\f\u0085\u2028\u2029]+/)
     .map((part) => terminalText(part).trim())
     .filter(Boolean)
     .join(" ");
-  process.stderr.write(`${line}\n`);
+  process.stderr.write(`${line || "jump failed."}\n`);
   process.exitCode = 1;
 }
+
+const fail = reportJumpFailure;
 
 export function runJump(store: Store, identity: NodeIdentity, token: string, deps: JumpDeps): void {
   const mux = deps.mux ?? tmux;

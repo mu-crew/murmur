@@ -11,6 +11,7 @@ import {
   remoteSessionName,
 } from "../src/agents.js";
 import { asPaneId, asSessionId, asWindowId } from "../src/ids.js";
+import { reportJumpFailure } from "../src/jump-select.js";
 import { tmux } from "../src/mux.js";
 import { openStore, type Store } from "../src/store.js";
 import type { PaneView } from "../src/view.js";
@@ -1093,4 +1094,81 @@ test("outside tmux a local pane that is gone is pane_gone, and nothing is run", 
   );
   expect(result).toMatchObject({ ok: false, reason: "pane_gone" });
   expect(ran).toBe(0);
+});
+
+/** The argv a remote shell would hand tmux for a command ssh sent as one string. */
+function remoteArgv(command: string): string[] {
+  const out = execFileSync("sh", ["-c", `tmux() { printf '%s\\n' "$@"; }; ${command}`], {
+    encoding: "utf8",
+  });
+  return out.split("\n").slice(0, -1);
+}
+
+test("reusing a healthy wrapper retargets with the bare pane id after the remote shell", () => {
+  // Quoted twice, tmux saw `'%1'` and answered `can't find pane`: a healthy
+  // wrapper's reuse failed once a failed retarget became fatal.
+  peer("p", "remote-host");
+  vi.stubEnv("TMUX", "/tmp/tmux-1000/default,123,0");
+  const switched: string[] = [];
+
+  const result = jumpToAgent(
+    store,
+    view({ pane: asPaneId("%1") }),
+    fakeMux({
+      sessionNamed: () => true,
+      switchClient: (_client, session) => {
+        switched.push(session);
+        return true;
+      },
+    }),
+    (_file, args) => {
+      const command = args.at(-1) ?? "";
+      if (!/switch-client/.test(command)) return ok("%1\n");
+      const argv = remoteArgv(command);
+      return argv.at(-1) === "%1" ? ok("") : { status: 1, stdout: "", failed: false };
+    },
+  );
+
+  expect(result).toEqual({ ok: true });
+  expect(switched).toHaveLength(1);
+});
+
+test("the peer-set remediation survives a backslash line continuation", () => {
+  const legacy = "ssh -t \\\n  legacy.invalid 'tmux attach -t {pane}'";
+  peer("p", "remote-host", [], legacy);
+  const result = jumpToAgent(
+    store,
+    view({ server: { kind: "label", value: "private" } }),
+    fakeMux(),
+    () => ok("%9\n"),
+  );
+  expect(result).toMatchObject({ ok: false, reason: "unsupported_server" });
+  if (result.ok) return;
+  // What the user sees: the message as the one-line reporter prints it.
+  let line = "";
+  const spy = vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
+    line += String(chunk);
+    return true;
+  });
+  reportJumpFailure(result.message);
+  spy.mockRestore();
+  process.exitCode = 0;
+  expect(line.trim().split("\n")).toHaveLength(1);
+  const printed = line.split("update it:").at(1)?.trim() ?? "";
+  expect(printed).toContain("murmur peer set");
+  // Run what the user would paste: murmur prints its argument, then the
+  // suggested template is run with {attach} filled and an ssh shim logs argv.
+  const script = `murmur() { shift 4; printf '%s' "$1"; }; ${printed}`;
+  const template = execFileSync("sh", ["-c", script], { encoding: "utf8" });
+  const argv = execFileSync(
+    "sh",
+    [
+      "-c",
+      `ssh() { printf '%s\\n' "$@"; }; ${template.replace("{attach}", "'tmux -L private attach -t %1'")}`,
+    ],
+    { encoding: "utf8" },
+  )
+    .split("\n")
+    .slice(0, -1);
+  expect(argv).toEqual(["-t", "legacy.invalid", "tmux -L private attach -t %1"]);
 });
