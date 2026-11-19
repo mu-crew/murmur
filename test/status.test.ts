@@ -916,3 +916,37 @@ test("jump_target round-trips a server label with awkward characters", () => {
   expect(parseJumpTarget("garbage")).toBeNull();
   expect(parseJumpTarget("j1:!!")).toBeNull();
 });
+
+test("a local attachment is credited only to the pane on the server it names", () => {
+  store.addPeer("dev", "dev.example", "ssh -t dev {attach}");
+  const named = (agent_name: string, over: Partial<SnapshotPane>): SnapshotPane => {
+    const base = remotePane("%1", over);
+    return {
+      ...base,
+      agent: base.agent && { ...base.agent, agent_name, agent_id: `id-${agent_name}` },
+    };
+  };
+  store.replacePeerSnapshot("dev", {
+    ok: true,
+    at: 1_000,
+    snapshot: remoteSnapshot([
+      named("alpha", {}),
+      named("beta", { server: { kind: "label", value: "private é" } }),
+    ]),
+  });
+  const attached = (argv: string) => {
+    const result = status(store, IDENTITY, 1_000, () => false, undefined, {
+      mux: fakeMux({
+        localPaneProcesses: () => [
+          { pane: asPaneId("%55"), current_command: "ssh", arguments: argv },
+        ],
+      }),
+    });
+    return Object.fromEntries(result.panes.map((pane) => [pane.agent_name, pane.attached_pane]));
+  };
+  expect(attached("ssh dev tmux -L 'private é' attach -t %1")).toEqual({
+    alpha: null,
+    beta: "%55",
+  });
+  expect(attached("ssh dev tmux attach -t %1")).toEqual({ alpha: "%55", beta: null });
+});

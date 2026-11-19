@@ -5,6 +5,12 @@ so it says what changed for a user rather than listing every commit.
 
 ## Unreleased
 
+**An attached-pane hint names the tmux server too.** A local pane attached to a remote
+host's private server was credited to the same-numbered pane on its default
+server, so a jump focused the wrong attachment and reported success. The hint
+now needs the attach argv's `tmux -L/-S` selector to match the pane's server,
+and declines when it cannot tell.
+
 **`status --cached` no longer runs `ssh -O check`.** For a peer whose last attempt was
 refused on auth it probed for a warm socket, an ssh exec on the path meant to
 exec none. `needs_session` is now derived from the cached error alone there.

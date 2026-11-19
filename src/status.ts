@@ -5,6 +5,7 @@ import type { NodeIdentity } from "./identity.js";
 import { jumpTarget } from "./jump-target.js";
 import { type Mux, tmux } from "./mux.js";
 import type { Store } from "./store.js";
+import type { TmuxServer } from "./types.js";
 import {
   emptyCounts,
   freshness,
@@ -74,8 +75,36 @@ function namesTarget(command: string, target: string): boolean {
  * Either is sufficient. The word boundary is what keeps `%45` from matching
  * `%450` and `worker-1` from matching `worker-10`.
  */
-function attachesPane(command: string, agentName: string, pane: string): boolean {
-  return namesTarget(command, agentName) || namesTarget(command, pane);
+function attachesPane(
+  command: string,
+  agentName: string,
+  pane: string,
+  server: TmuxServer,
+): boolean {
+  return (
+    (namesTarget(command, agentName) || namesTarget(command, pane)) && namesServer(command, server)
+  );
+}
+
+/**
+ * Whether an attach argv addresses `server`, so a pane id shared by two servers
+ * on one host cannot be credited with the other's attachment.
+ *
+ * The argv is the rendered attach command, quoted zero to several levels deep,
+ * so quotes are flattened away before the `tmux -L|-S <value> attach` selector
+ * is read. No selector means the default server. A selector that cannot be
+ * read from a non-default pane's argv declines the match: a wrong "already
+ * attached" focuses the wrong place, a missing one only costs the fast path.
+ */
+function namesServer(command: string, server: TmuxServer): boolean {
+  const flat = (text: string) => text.replaceAll("'\\''", "").replaceAll(/['"\\]/g, "");
+  const selector = /\btmux\s+-([LS])\s+(.+?)\s+attach\b/.exec(flat(command));
+  if (server.kind === "default") return selector === null;
+  return (
+    selector !== null &&
+    selector[1] === (server.kind === "label" ? "L" : "S") &&
+    selector[2] === flat(server.value)
+  );
 }
 
 export type Status = {
@@ -232,7 +261,7 @@ export function status(
       const remote = attachable.find(
         (pane) =>
           commandsByPeer.get(pane.host_id)?.has(process.current_command) &&
-          attachesPane(process.arguments, pane.agent_name, pane.pane),
+          attachesPane(process.arguments, pane.agent_name, pane.pane, pane.server),
       );
       if (remote) remote.attached_pane = process.pane;
     }
