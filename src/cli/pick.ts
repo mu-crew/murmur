@@ -1,8 +1,8 @@
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { type JumpResult, jumpToAgent } from "../agents.js";
 import { ensureStringWidth } from "../ansi-width.js";
 import { hasWarmSocket } from "../channel.js";
-import { renderJumpCommand } from "../jump-command.js";
+import { runJump, spawnFzf } from "../jump-select.js";
 import { type Mux, tmux } from "../mux.js";
 import { COLOUR, GLYPH, headerRow, isVisible, pickerRow, RESET, sessionNotice } from "../paint.js";
 import { status, statusWithCollect } from "../status.js";
@@ -36,14 +36,6 @@ type PickDeps = {
   mux?: Mux;
   warm?: (target: string) => boolean;
 };
-
-const spawnFzf: NonNullable<PickDeps["fzf"]> = (args, input, env) =>
-  spawnSync("fzf", args, {
-    input,
-    encoding: "utf8",
-    stdio: ["pipe", "pipe", "inherit"],
-    env,
-  }).stdout ?? "";
 
 /**
  * Refresh the cache in the background, for the NEXT invocation.
@@ -226,70 +218,9 @@ export async function runPick(
   );
 
   const selection = stdout.trim().split("\n").at(-1) ?? "";
-  const [selectedHost, selected] = selection.split("\t");
-  if (!selected) return;
-  // A fresh read of the FULL list, not `view` and not `agents`. The rows fzf
-  // offered can have come from the ctrl-a reload subprocess, which
-  // collect into the same store, so a pane only they discovered is absent from
-  // this process's launch snapshot -- and filtering is a presentation concern
-  // that must not gate the action. Resolving against either made the freshest
-  // rows, exactly the ones a reload exists to reveal, display but not select:
-  // fzf returned a key, find() returned undefined, and enter silently did
-  // nothing.
-  //
-  // Matched on the WHOLE address. A pane id is unique per node and nothing more,
-  // so two machines routinely hold a `%1`, and matching the pane alone jumped to
-  // whichever the sort put first -- turning an ssh into a local window switch.
-  const latest = status(store, identity, Date.now(), warm, undefined, { mux: localMux });
-  const agent = latest.panes.find(
-    (candidate) => candidate.pane === selected && candidate.host_id === selectedHost,
-  );
-  // So a miss means the pane genuinely went away between the collect and the
-  // keypress. Worth saying, for the same reason as the `jump.ok` branch below:
-  // in a popup a silent return is indistinguishable from a dead key.
-  if (!agent) {
-    process.stderr.write(`${selected} is no longer here.\n`);
-    process.exitCode = 1;
-    return;
-  }
-  if (agent.attached_pane) {
-    if (!localMux.attach(agent.attached_pane)) {
-      process.stderr.write(`could not focus local attachment ${agent.attached_pane}.\n`);
-      process.exitCode = 1;
-    }
-    return;
-  }
-
-  if (!agent.local) {
-    const peer = store.peers().find((candidate) => candidate.host_id === agent.host_id);
-    const needsTap = latest.peers.find((candidate) => candidate.name === agent.host)?.needs_session;
-    if (peer && needsTap) {
-      const command = renderJumpCommand(peer.jump_command, agent);
-      const confirmed = fzf(
-        [
-          "--ansi",
-          "--layout",
-          "reverse",
-          "--prompt",
-          "tap required> ",
-          "--header",
-          `This jump may prompt for a hardware token tap.\n${command}\nenter jump   esc cancel`,
-          "--no-multi",
-        ],
-        "jump\tcontinue",
-        process.env,
-      );
-      if (confirmed.trim().split("\t")[0] !== "jump") return;
-    }
-  }
-
-  const jump = jumpTo(store, agent);
-  // A popup closes the moment this returns, so a bare failure looked exactly
-  // like "enter did nothing". Say what happened and fail loudly.
-  if (!jump.ok) {
-    process.stderr.write(`${jump.message}\n`);
-    process.exitCode = 1;
-  }
+  const [target] = selection.split("\t");
+  if (!target) return;
+  runJump(store, identity, target, { fzf, jump: jumpTo, mux: localMux, warm });
 }
 
 /** Print the row list only, for fzf's `reload` binding. */

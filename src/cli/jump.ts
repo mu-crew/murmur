@@ -1,0 +1,16 @@
+import type { Command } from "commander";
+
+/**
+ * `murmur jump <target>`: jump to the agent a `status --json` pane's
+ * `jump_target` names. The action loads lazily, like `pick`.
+ */
+export function registerJump(program: Command): void {
+  program
+    .command("jump")
+    .description("Jump to an agent by the jump_target from `status --json`")
+    .argument("<target>", "opaque panes[].jump_target token")
+    .action(async (target: string) => {
+      const { runJumpCommand } = await import("./jump-run.js");
+      runJumpCommand(target);
+    });
+}

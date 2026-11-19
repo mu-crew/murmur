@@ -43,6 +43,10 @@ them requires a major version:
     human agents plus crew that needs a human), and `jump_target` (opaque token
     for `murmur jump`; never parse it)
   - `peers[].name`, `needs_session`, `fetched_at`
+- `murmur jump <target>`: jumps to the agent a pane's `jump_target` names, with
+  the same fresh re-read, attachment focus and hardware-tap confirmation as
+  `murmur pick`. On failure it prints one line on stderr and exits 1 (the caller
+  relays it: a `display-popup -E` closes on exit)
 - environment variables read from agent panes: `MU_MANAGED_AGENT`,
   `MU_AGENT_NAME`, `MU_WORKSTREAM`, and `MU_ROLE`
 - the `on-attention` hook: its path in the config dir and the `MURMUR_KIND`,

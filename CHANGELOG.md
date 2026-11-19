@@ -5,6 +5,13 @@ so it says what changed for a user rather than listing every commit.
 
 ## Unreleased
 
+**`murmur jump <target>` jumps to an agent by the `jump_target` in `status
+--json`.** It is the second half of `murmur pick` extracted, so an external
+picker gets the same fresh re-read, attached-pane focus and hardware-tap prompt,
+and a failure is one stderr line with exit 1. `pick` now calls it. Both match on
+host, tmux server and pane: before, a private-server agent could resolve to a
+same-numbered pane on the default server.
+
 **`murmur status --json` publishes more stable fields, and derives the ones a
 picker needs.** Each pane now carries `render_state` (tmux vocabulary: `working`,
 not `running`), `label`, `visible` and `jump_target`, so a consumer such as

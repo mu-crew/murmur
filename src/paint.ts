@@ -3,6 +3,7 @@ import { visibleWidth } from "./ansi-width.js";
 import { warmSocketCommand } from "./channel.js";
 import { DASH_GLYPH, hostColor } from "./dash-paint.js";
 import { type GlanceRunner, type GlanceRunnerAsync, glance, glanceAsync } from "./glance.js";
+import { jumpTarget } from "./jump-target.js";
 import type { Status } from "./status.js";
 import type { Store } from "./store.js";
 import { age, isVisible, type PaneView, renderState } from "./view.js";
@@ -331,10 +332,11 @@ export function pickerRow(
   ]
     .filter(Boolean)
     .join(" ");
-  // Keyed on the PANE, not an agent id: the pane is the address and what jumps,
+  // Keyed on the whole address (host, server, pane) as an opaque jump target;
+  // the pane follows for readers. The pane is what jumps,
   // and an attention-only pane has no agent id -- so keying on one would make
   // exactly the rows that need a human unselectable.
-  return `${agent.host_id}\t${agent.pane}\t${label}`;
+  return `${jumpTarget(agent)}\t${agent.pane}\t${label}`;
 }
 
 export function previewText(

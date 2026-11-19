@@ -5,6 +5,8 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { isVisible, runPick } from "../src/cli/pick.js";
 import { createIdentity, loadIdentity } from "../src/identity.js";
 import { asPaneId, asSessionId, asWindowId } from "../src/ids.js";
+import { runJump } from "../src/jump-select.js";
+import { jumpTarget } from "../src/jump-target.js";
 import type { Mux } from "../src/mux.js";
 import { openStore, type Store } from "../src/store.js";
 import type { AgentMeta, Driver, Location } from "../src/types.js";
@@ -23,6 +25,11 @@ afterEach(() => {
   vi.unstubAllEnvs();
   process.exitCode = 0;
 });
+
+/** The row key fzf hands back for a default-server pane. */
+function key(host: string, pane: string): string {
+  return `${jumpTarget({ host_id: host, server: { kind: "default" }, pane: asPaneId(pane) })}\t${pane}\tlabel`;
+}
 
 /** This node's host_id, which is half of every row key fzf hands back. */
 function here(): string {
@@ -247,7 +254,7 @@ test("enter focuses an attached local pane instead of opening another remote ses
     store,
     {},
     {
-      fzf: () => "REMOTE\t%9\tlabel",
+      fzf: () => key("REMOTE", "%9"),
       jump: () => {
         jumped = true;
         return { ok: true };
@@ -296,7 +303,7 @@ test("a cold remote jump warns and still proceeds when confirmed", async () => {
           warnings.push(args.join("\n"));
           return "jump";
         }
-        return "REMOTE\t%9\tlabel";
+        return key("REMOTE", "%9");
       },
       jump: () => {
         jumped = true;
@@ -343,7 +350,7 @@ test("a cold remote jump can be cancelled after the warning", async () => {
           warned = true;
           return "";
         }
-        return "REMOTE\t%9\tlabel";
+        return key("REMOTE", "%9");
       },
       jump: () => {
         jumped = true;
@@ -372,7 +379,7 @@ test("a crew row revealed by ctrl-a can actually be jumped to", async () => {
   agent("%1");
   agent("%9", "orchestrated");
 
-  const { jumped, rows } = await pickReturning(`${here()}\t%9\tlabel`);
+  const { jumped, rows } = await pickReturning(key(here(), "%9"));
 
   // Precondition: this pane really is filtered out of the default display, so
   // the test exercises the gap rather than a coincidence.
@@ -391,7 +398,7 @@ test("selecting a pane that is genuinely gone says so instead of exiting silentl
   agent("%1");
   const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
   try {
-    const { jumped } = await pickReturning(`${here()}\t%404\tlabel`);
+    const { jumped } = await pickReturning(key(here(), "%404"));
 
     expect(jumped).toEqual([]);
     expect(process.exitCode).toBe(1);
@@ -413,7 +420,7 @@ test("an attention-only pane is selectable, which keying on an agent id would br
     driver: "human",
   });
 
-  const { jumped, rows } = await pickReturning(`${here()}\t%7\tlabel`);
+  const { jumped, rows } = await pickReturning(key(here(), "%7"));
 
   expect(rows.some((row) => row.split("\t")[1] === "%7")).toBe(true);
   expect(jumped).toEqual(["%7"]);
@@ -476,7 +483,7 @@ test("a selection is resolved on host AND pane, not on the pane alone", async ()
     store,
     {},
     {
-      fzf: () => "REMOTE\t%1\tlabel",
+      fzf: () => key("REMOTE", "%1"),
       jump: (_store, pane: PaneView) => {
         jumped.push(pane);
         return { ok: true };
@@ -567,4 +574,67 @@ test("an empty picker stays open with a message instead of flashing a popup shut
   await pick();
   expect(header(1)).toMatch(/No human agents .*1 crew/);
   expect(seen[1]?.args.join(" ")).toContain("ctrl-a:transform");
+});
+
+// --- `murmur jump`: the same post-selection code, reached without a picker ---
+
+async function jumpWith(token: string, deps: Partial<Parameters<typeof runJump>[3]> = {}) {
+  const identity = loadIdentity();
+  if (!identity) throw new Error("no identity");
+  const jumped: string[] = [];
+  runJump(store, identity, token, {
+    fzf: () => "",
+    jump: (_store, pane: PaneView) => {
+      jumped.push(pane.pane);
+      return { ok: true };
+    },
+    ...deps,
+  });
+  return jumped;
+}
+
+test("jump resolves a local agent's jump_target", async () => {
+  agent("%7");
+  const token = jumpTarget({
+    host_id: here(),
+    server: { kind: "default" },
+    pane: asPaneId("%7"),
+  });
+  expect(await jumpWith(token)).toEqual(["%7"]);
+  expect(process.exitCode ?? 0).toBe(0);
+});
+
+test("jump on a pane that is gone fails with one line and exit 1", async () => {
+  const write = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+  const token = jumpTarget({
+    host_id: here(),
+    server: { kind: "default" },
+    pane: asPaneId("%404"),
+  });
+  expect(await jumpWith(token)).toEqual([]);
+  expect(process.exitCode).toBe(1);
+  expect(write).toHaveBeenCalledWith("%404 is no longer here.\n");
+  write.mockRestore();
+});
+
+test("jump rejects a token that is not a jump target", async () => {
+  const write = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+  expect(await jumpWith("%7")).toEqual([]);
+  expect(process.exitCode).toBe(1);
+  write.mockRestore();
+});
+
+test("jump matches the tmux server, not only host and pane", async () => {
+  // Same host, same pane id, a different server: the old host+pane match jumped
+  // to whichever the sort put first.
+  agent("%3");
+  const token = jumpTarget({
+    host_id: here(),
+    server: { kind: "label", value: "private" },
+    pane: asPaneId("%3"),
+  });
+  const write = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+  expect(await jumpWith(token)).toEqual([]);
+  expect(process.exitCode).toBe(1);
+  write.mockRestore();
 });

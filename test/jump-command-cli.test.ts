@@ -246,3 +246,9 @@ test("status --cached never reaches a due peer", () => {
   expect(view.panes.map((pane: { pane: string }) => pane.pane)).toEqual(["%1"]);
   expect(() => readFileSync(log, "utf8")).toThrow();
 });
+
+test("jump verb: a bad token exits 1 with one stderr line", () => {
+  const result = cliResult("jump", "nonsense");
+  expect(result.status).toBe(1);
+  expect(result.stderr.trim().split("\n")).toHaveLength(1);
+});
