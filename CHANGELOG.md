@@ -5,6 +5,11 @@ so it says what changed for a user rather than listing every commit.
 
 ## Unreleased
 
+**`murmur jump` failures are always one stderr line.** The unsupported-server remediation
+spans four lines and a stale target echoed its pane id verbatim, so a popup
+caller relaying stderr lost most of it. Messages are now joined onto one line
+(the `update it:` command stays in it) and control characters are replaced.
+
 **A remote jump reuses a wrapper session only for the same tmux server, and fails when the retarget fails.**
 A jump to a private-server agent on a host whose default-server wrapper was open
 switched to that wrapper and reported success, landing on the wrong server. The

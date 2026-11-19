@@ -638,3 +638,47 @@ test("jump matches the tmux server, not only host and pane", async () => {
   expect(process.exitCode).toBe(1);
   write.mockRestore();
 });
+
+function stderrLines(run: () => unknown): string[] {
+  const writes: string[] = [];
+  const spy = vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
+    writes.push(String(chunk));
+    return true;
+  });
+  try {
+    run();
+  } finally {
+    spy.mockRestore();
+  }
+  return writes.join("").split("\n").slice(0, -1);
+}
+
+test("a multi-line jump failure reaches stderr as exactly one line", async () => {
+  agent("%7");
+  const token = jumpTarget({ host_id: here(), server: { kind: "default" }, pane: asPaneId("%7") });
+  const lines = stderrLines(() =>
+    jumpWith(token, {
+      jump: () => ({
+        ok: false,
+        reason: "unsupported_server",
+        message:
+          "murmur: dev's jump command uses {pane}\n\nupdate it:\n  murmur peer set dev --jump-command 'x'",
+      }),
+    }),
+  );
+  expect(lines).toHaveLength(1);
+  expect(lines[0]).toContain("update it:");
+  expect(lines[0]).toContain("murmur peer set dev");
+  expect(process.exitCode).toBe(1);
+});
+
+test("a stale target whose pane holds a newline still prints one line", async () => {
+  const token = jumpTarget({
+    host_id: "missing",
+    server: { kind: "default" },
+    pane: asPaneId("%123\nsecond line"),
+  });
+  const lines = stderrLines(() => jumpWith(token));
+  expect(lines).toHaveLength(1);
+  expect(process.exitCode).toBe(1);
+});

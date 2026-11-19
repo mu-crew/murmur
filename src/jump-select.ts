@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { type JumpResult, jumpToAgent } from "./agents.js";
+import { type JumpResult, jumpToAgent, terminalText } from "./agents.js";
 import { hasWarmSocket } from "./channel.js";
 import type { NodeIdentity } from "./identity.js";
 import { renderJumpCommand } from "./jump-command.js";
@@ -32,14 +32,28 @@ export type JumpDeps = {
  * host_id + server + pane, because a pane id is unique only per tmux server and
  * two machines (or two servers) routinely hold the same `%1`.
  */
+/**
+ * Exactly one line, whatever went in: the caller relays stderr through a popup
+ * that closes on exit, so a second line is lost or breaks the relay. Multi-line
+ * remediations are joined, and control characters in ids become `\ufffd`.
+ */
+function fail(message: string): void {
+  const line = message
+    .split("\n")
+    .map((part) => terminalText(part).trim())
+    .filter(Boolean)
+    .join(" ");
+  process.stderr.write(`${line}\n`);
+  process.exitCode = 1;
+}
+
 export function runJump(store: Store, identity: NodeIdentity, token: string, deps: JumpDeps): void {
   const mux = deps.mux ?? tmux;
   const warm = deps.warm ?? hasWarmSocket;
   const jumpTo = deps.jump ?? jumpToAgent;
   const address = parseJumpTarget(token);
   if (!address) {
-    process.stderr.write("not a valid jump target.\n");
-    process.exitCode = 1;
+    fail("not a valid jump target.");
     return;
   }
   const latest = status(store, identity, Date.now(), warm, undefined, { mux });
@@ -52,14 +66,12 @@ export function runJump(store: Store, identity: NodeIdentity, token: string, dep
   // A miss means the pane went away between the collect and the keypress. Said
   // out loud: in a popup a silent return is indistinguishable from a dead key.
   if (!agent) {
-    process.stderr.write(`${address.pane} is no longer here.\n`);
-    process.exitCode = 1;
+    fail(`${address.pane} is no longer here.`);
     return;
   }
   if (agent.attached_pane) {
     if (!mux.attach(agent.attached_pane)) {
-      process.stderr.write(`could not focus local attachment ${agent.attached_pane}.\n`);
-      process.exitCode = 1;
+      fail(`could not focus local attachment ${agent.attached_pane}.`);
     }
     return;
   }
@@ -91,8 +103,7 @@ export function runJump(store: Store, identity: NodeIdentity, token: string, dep
   // A popup closes the moment this returns, so a bare failure looked exactly
   // like "enter did nothing". Say what happened and fail loudly.
   if (!jump.ok) {
-    process.stderr.write(`${jump.message}\n`);
-    process.exitCode = 1;
+    fail(jump.message);
   }
 }
 
