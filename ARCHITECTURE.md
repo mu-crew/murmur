@@ -25,8 +25,9 @@ them requires a major version:
 - tmux window, session, and server options `@murmur_window_state`,
   `@murmur_window_has_agent`, `@murmur_session_state`, and
   `@murmur_count_<state>`
-- `murmur status --json` (and `--cached`, a store-only read that never reaches
-  a peer; pair it with a detached `murmur collect --quiet --floored` to warm the
+- `murmur status --json` (and `--cached`, a store-only read that execs nothing
+  touching ssh, so `peers[].needs_session` there means only "the last attempt was
+  refused on auth"; pair it with a detached `murmur collect --quiet --floored` to warm the
   cache for next time). `panes[]` is already in `viewSort` order (most urgent
   first): consumers must not re-sort. Fields:
   - from 1.0.0: `panes[].pane`, `local`, `agent_name`, `workstream`, `driver`,

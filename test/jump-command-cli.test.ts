@@ -229,6 +229,14 @@ test("missing exact agent fails with exit 2 and lists available candidates", () 
 
 test("status --cached never reaches a due peer", () => {
   addPeer("dev", "developer.example", [{ pane: "%1", agent: "w" }]);
+  // An auth-refused peer is what made the cached read probe `ssh -O check`.
+  const seeded = openStore();
+  seeded.replacePeerSnapshot("dev", {
+    ok: false,
+    at: 2,
+    error: "Permission denied (publickey).",
+  });
+  seeded.close();
   const bin = mkdtempSync(join(tmpdir(), "murmur-fake-ssh-"));
   const log = join(bin, "calls");
   writeFileSync(join(bin, "ssh"), `#!/bin/sh\necho "$@" >> "${log}"\nexit 255\n`);

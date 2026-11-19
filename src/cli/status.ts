@@ -27,7 +27,10 @@ export function registerStatus(program: Command): void {
         // peer costs a real ssh fetch of up to 4s that is only recorded once it
         // settles, so a caller that gives up early pays again on every open.
         const view = options.cached
-          ? status(store, identity)
+          ? // No warm-socket probe either: `ssh -O check` is an ssh exec. So
+            // `needs_session` here means "last attempt was refused on auth" and
+            // may stay true while a warm socket exists; `murmur jump` re-probes.
+            status(store, identity, Date.now(), () => false)
           : await statusWithCollect(store, identity, Date.now(), ssh, {
               floorMs: COLLECT_FLOOR_MS,
             });

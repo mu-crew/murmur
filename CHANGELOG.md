@@ -5,6 +5,10 @@ so it says what changed for a user rather than listing every commit.
 
 ## Unreleased
 
+**`status --cached` no longer runs `ssh -O check`.** For a peer whose last attempt was
+refused on auth it probed for a warm socket, an ssh exec on the path meant to
+exec none. `needs_session` is now derived from the cached error alone there.
+
 **`murmur jump <target>` jumps to an agent by the `jump_target` in `status
 --json`.** It is the second half of `murmur pick` extracted, so an external
 picker gets the same fresh re-read, attached-pane focus and hardware-tap prompt,
