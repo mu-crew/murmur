@@ -1,7 +1,7 @@
 import type { Command } from "commander";
 import { ssh } from "../channel.js";
 import { COLLECT_FLOOR_MS } from "../collector.js";
-import { status, statusWithCollect, tmuxStatus } from "../status.js";
+import { status, statusJson, statusWithCollect, tmuxStatus } from "../status.js";
 import { openStore } from "../store.js";
 import { requireIdentity } from "./identity-guard.js";
 
@@ -32,7 +32,7 @@ export function registerStatus(program: Command): void {
               floorMs: COLLECT_FLOOR_MS,
             });
         process.stdout.write(
-          options.json ? `${JSON.stringify(view, null, 2)}\n` : tmuxStatus(view),
+          options.json ? `${JSON.stringify(statusJson(view), null, 2)}\n` : tmuxStatus(view),
         );
       } finally {
         store.close();

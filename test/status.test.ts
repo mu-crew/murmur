@@ -6,7 +6,8 @@ import type { Channel } from "../src/channel.js";
 import { ssh } from "../src/channel.js";
 import type { NodeIdentity } from "../src/identity.js";
 import { asPaneId, asSessionId, asWindowId } from "../src/ids.js";
-import { status, statusWithCollect, tmuxStatus } from "../src/status.js";
+import { jumpTarget, parseJumpTarget } from "../src/jump-target.js";
+import { status, statusJson, statusWithCollect, tmuxStatus } from "../src/status.js";
 import { openStore, type Store } from "../src/store.js";
 import type {
   AgentMeta,
@@ -859,4 +860,59 @@ test("the warm-socket probe runs only for auth-class candidates", () => {
   });
 
   expect(probed).toEqual(["dev"]);
+});
+
+test("status --json contract: stable fields are present with their types", () => {
+  localAgent("%1", { activity: "running" });
+  localAgent("%2", { driver: "orchestrated" });
+  localAgent("%3", { attention: ["blocked"], driver: "orchestrated" });
+  const json = JSON.parse(
+    JSON.stringify(
+      statusJson(status(store, IDENTITY, Date.now(), () => false, {}, { mux: fakeMux() })),
+    ),
+  );
+  expect(Array.isArray(json.peers)).toBe(true);
+  expect(json.panes).toHaveLength(3);
+  for (const pane of json.panes) {
+    for (const key of [
+      "host_id",
+      "host",
+      "pane",
+      "window",
+      "label",
+      "jump_target",
+      "render_state",
+    ]) {
+      expect(typeof pane[key], key).toBe("string");
+    }
+    expect(typeof pane.local).toBe("boolean");
+    expect(typeof pane.visible).toBe("boolean");
+    expect(typeof pane.server.kind).toBe("string");
+    expect(Array.isArray(pane.attention)).toBe(true);
+    for (const key of ["session_name", "window_name", "runs_on", "pending", "attached_pane"]) {
+      expect(pane, key).toHaveProperty(key);
+    }
+  }
+  const byPane = Object.fromEntries(json.panes.map((pane: { pane: string }) => [pane.pane, pane]));
+  // tmux vocabulary: working, never running.
+  expect(byPane["%1"].render_state).toBe("working");
+  expect(byPane["%1"].visible).toBe(true);
+  expect(byPane["%2"].render_state).toBe("idle");
+  expect(byPane["%2"].visible).toBe(false);
+  // Crew that needs a human stays visible.
+  expect(byPane["%3"].render_state).toBe("blocked");
+  expect(byPane["%3"].visible).toBe(true);
+  expect(parseJumpTarget(byPane["%1"].jump_target)).toEqual({
+    host_id: "LOCAL",
+    server: { kind: "default" },
+    pane: "%1",
+  });
+});
+
+test("jump_target round-trips a server label with awkward characters", () => {
+  const server = { kind: "label" as const, value: "my server|/é" };
+  const token = jumpTarget({ host_id: "H", server, pane: asPaneId("%9") });
+  expect(parseJumpTarget(token)).toEqual({ host_id: "H", server, pane: "%9" });
+  expect(parseJumpTarget("garbage")).toBeNull();
+  expect(parseJumpTarget("j1:!!")).toBeNull();
 });

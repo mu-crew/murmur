@@ -349,6 +349,24 @@ export function freshness(
 }
 
 /**
+ * Whether an agent belongs in the default list.
+ *
+ * Orchestrated agents are hidden because their supervisor consumes the result:
+ * a `done` worker needs no acknowledgement from you, and a `working` one asks
+ * for nothing. `--all` shows them.
+ *
+ * The exceptions are `NEEDS_HUMAN` in view.ts, shared with the status bar's
+ * count rule so the two surfaces cannot disagree about which crew rows matter.
+ * Hiding those behind a flag meant the rows that needed a human were the ones a
+ * human could not see.
+ */
+export function isVisible(
+  agent: Pick<PaneView, "driver" | "activity" | "attention" | "pending">,
+): boolean {
+  return agent.driver === "human" || NEEDS_HUMAN.some((kind) => wants(agent, kind));
+}
+
+/**
  * One word for a pane. Attention wins over activity, because attention is a
  * request and activity is a description.
  *

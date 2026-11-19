@@ -1,11 +1,14 @@
+import { agentLabel } from "./agents.js";
 import { type Channel, hasWarmSocket, ssh } from "./channel.js";
 import { type CollectOptions, collect, needsInteractiveAuth } from "./collector.js";
 import type { NodeIdentity } from "./identity.js";
+import { jumpTarget } from "./jump-target.js";
 import { type Mux, tmux } from "./mux.js";
 import type { Store } from "./store.js";
 import {
   emptyCounts,
   freshness,
+  isVisible,
   type PaneView,
   paneViews,
   RENDER_PRIORITY,
@@ -105,6 +108,41 @@ export type Status = {
     needs_session: boolean;
   }[];
 };
+
+/** What `murmur status --json` prints for one pane: the pane plus derived fields. */
+export type StatusJsonPane = PaneView & {
+  /** `renderState` in tmux vocabulary: `working`, never `running`. */
+  render_state: "crashed" | "error" | "blocked" | "done" | "working" | "waiting" | "idle";
+  /** The one-line name a picker shows, through the `agentLabel` chain. */
+  label: string;
+  /** Whether the default (human) list shows this pane; `--all` is every pane. */
+  visible: boolean;
+  /** Opaque token for `murmur jump`; unique across hosts and tmux servers. */
+  jump_target: string;
+};
+
+export type StatusJson = Omit<Status, "panes"> & { panes: StatusJsonPane[] };
+
+/**
+ * The JSON document: `Status` plus per-pane fields derived here so a consumer
+ * does not re-implement murmur's rules. Additive over `Status`; `panes` keeps
+ * `viewSort` order.
+ */
+export function statusJson(view: Status): StatusJson {
+  return {
+    ...view,
+    panes: view.panes.map((pane) => {
+      const state = renderState(pane);
+      return {
+        ...pane,
+        render_state: state === "running" ? "working" : state,
+        label: agentLabel(pane),
+        visible: isVisible(pane),
+        jump_target: jumpTarget(pane),
+      };
+    }),
+  };
+}
 
 export function tmuxStatus(view: Status): string {
   // The crew rule lives in `statusRollup`, shared with the `@murmur_count_*`

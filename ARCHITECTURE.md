@@ -25,12 +25,24 @@ them requires a major version:
 - tmux window, session, and server options `@murmur_window_state`,
   `@murmur_window_has_agent`, `@murmur_session_state`, and
   `@murmur_count_<state>`
-- `murmur status --json` fields `panes[].pane`, `panes[].local`,
-  `panes[].agent_name`, `panes[].workstream`, `panes[].driver`,
-  `panes[].activity`, `panes[].attention`, `panes[].freshness`, and
-  `panes[].updated_at`; and the `murmur status --cached` flag, a store-only
-  read that never reaches a peer (pair it with a detached
-  `murmur collect --quiet --floored` to warm the cache for next time)
+- `murmur status --json` (and `--cached`, a store-only read that never reaches
+  a peer; pair it with a detached `murmur collect --quiet --floored` to warm the
+  cache for next time). `panes[]` is already in `viewSort` order (most urgent
+  first): consumers must not re-sort. Fields:
+  - from 1.0.0: `panes[].pane`, `local`, `agent_name`, `workstream`, `driver`,
+    `activity`, `attention`, `freshness`, `updated_at`
+  - address: `panes[].host_id`, `host`, `server` (`{kind: default|label|path,
+    value?}`; pane ids are unique only per host and server), `session_name`,
+    `window`, `window_name`
+  - state: `panes[].pending` (outstanding delegates; `waiting` needs it),
+    `runs_on` (where a mu remote worker runs), `attached_pane` (a local pane
+    already attached to this remote one)
+  - derived, so consumers do not re-implement murmur's rules: `panes[].render_state`
+    (`crashed|error|blocked|done|working|waiting|idle`, tmux vocabulary),
+    `label` (the display-name chain), `visible` (belongs in the default list:
+    human agents plus crew that needs a human), and `jump_target` (opaque token
+    for `murmur jump`; never parse it)
+  - `peers[].name`, `needs_session`, `fetched_at`
 - environment variables read from agent panes: `MU_MANAGED_AGENT`,
   `MU_AGENT_NAME`, `MU_WORKSTREAM`, and `MU_ROLE`
 - the `on-attention` hook: its path in the config dir and the `MURMUR_KIND`,

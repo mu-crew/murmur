@@ -5,7 +5,9 @@ import { DASH_GLYPH, hostColor } from "./dash-paint.js";
 import { type GlanceRunner, type GlanceRunnerAsync, glance, glanceAsync } from "./glance.js";
 import type { Status } from "./status.js";
 import type { Store } from "./store.js";
-import { age, NEEDS_HUMAN, type PaneView, renderState, wants } from "./view.js";
+import { age, isVisible, type PaneView, renderState } from "./view.js";
+
+export { isVisible };
 
 export const SIDE_PREVIEW_MIN_COLUMNS = 150;
 
@@ -75,22 +77,6 @@ export const DIM = "\u001b[2m";
 // register as the key legend, which is the confusion this exists to end.
 const UNDERLINE = "\u001b[4m";
 export const RESET = "\u001b[0m";
-
-/**
- * Whether an agent belongs in the default list.
- *
- * Orchestrated agents are hidden because their supervisor consumes the result:
- * a `done` worker needs no acknowledgement from you, and a `working` one asks
- * for nothing. `--all` shows them.
- *
- * The exceptions are `NEEDS_HUMAN` in view.ts, shared with the status bar's
- * count rule so the two surfaces cannot disagree about which crew rows matter.
- * Hiding those behind a flag meant the rows that needed a human were the ones a
- * human could not see.
- */
-export function isVisible(agent: PaneView): boolean {
-  return agent.driver === "human" || NEEDS_HUMAN.some((kind) => wants(agent, kind));
-}
 
 /**
  * Column widths, in one place because the header and the rows must agree. They

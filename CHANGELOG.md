@@ -5,6 +5,15 @@ so it says what changed for a user rather than listing every commit.
 
 ## Unreleased
 
+**`murmur status --json` publishes more stable fields, and derives the ones a
+picker needs.** Each pane now carries `render_state` (tmux vocabulary: `working`,
+not `running`), `label`, `visible` and `jump_target`, so a consumer such as
+tsesh no longer re-implements those rules. The address and state fields
+(`host_id`, `server`, `session_name`, `window`, `window_name`, `runs_on`,
+`pending`, `attached_pane`) and `peers[].name/needs_session/fetched_at` are now
+documented as stable, and `panes[]` order is documented. Nothing was renamed
+or removed.
+
 **`murmur status --cached` reads the store and never touches the network.** Plain
 `murmur status` fetches from any peer whose 30s floor has lapsed, up to 4s of
 ssh, and a caller that kills it early never advances the floor. `--cached` is
