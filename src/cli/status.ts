@@ -1,7 +1,7 @@
 import type { Command } from "commander";
 import { ssh } from "../channel.js";
 import { COLLECT_FLOOR_MS } from "../collector.js";
-import { statusWithCollect, tmuxStatus } from "../status.js";
+import { status, statusWithCollect, tmuxStatus } from "../status.js";
 import { openStore } from "../store.js";
 import { requireIdentity } from "./identity-guard.js";
 
@@ -10,7 +10,11 @@ export function registerStatus(program: Command): void {
     .command("status")
     .description("Show current agent status")
     .option("--json", "print JSON")
-    .action(async (options: { json?: boolean }) => {
+    .option(
+      "--cached",
+      "read the store only; never reach a peer (a caller refreshes with `collect`)",
+    )
+    .action(async (options: { json?: boolean; cached?: boolean }) => {
       const identity = requireIdentity();
       if (!identity) return;
       const store = openStore();
@@ -18,9 +22,15 @@ export function registerStatus(program: Command): void {
         // The one surface that passes a floor. A status-line poller re-runs
         // this on a timer -- possibly per attached client -- and a repaint is
         // not a reason to reach a machine.
-        const view = await statusWithCollect(store, identity, Date.now(), ssh, {
-          floorMs: COLLECT_FLOOR_MS,
-        });
+        //
+        // `--cached` skips even that: a picker must open in ~50ms, and a due
+        // peer costs a real ssh fetch of up to 4s that is only recorded once it
+        // settles, so a caller that gives up early pays again on every open.
+        const view = options.cached
+          ? status(store, identity)
+          : await statusWithCollect(store, identity, Date.now(), ssh, {
+              floorMs: COLLECT_FLOOR_MS,
+            });
         process.stdout.write(
           options.json ? `${JSON.stringify(view, null, 2)}\n` : tmuxStatus(view),
         );

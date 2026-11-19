@@ -5,6 +5,12 @@ so it says what changed for a user rather than listing every commit.
 
 ## Unreleased
 
+**`murmur status --cached` reads the store and never touches the network.** Plain
+`murmur status` fetches from any peer whose 30s floor has lapsed, up to 4s of
+ssh, and a caller that kills it early never advances the floor. `--cached` is
+the same read `murmur pick` uses at launch; a picker pairs it with a detached
+`murmur collect --quiet --floored`.
+
 ## 2.2.2
 
 **A pi session already named when it loads shows its name.** 2.2.1 picked up a

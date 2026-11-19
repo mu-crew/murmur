@@ -28,7 +28,9 @@ them requires a major version:
 - `murmur status --json` fields `panes[].pane`, `panes[].local`,
   `panes[].agent_name`, `panes[].workstream`, `panes[].driver`,
   `panes[].activity`, `panes[].attention`, `panes[].freshness`, and
-  `panes[].updated_at`
+  `panes[].updated_at`; and the `murmur status --cached` flag, a store-only
+  read that never reaches a peer (pair it with a detached
+  `murmur collect --quiet --floored` to warm the cache for next time)
 - environment variables read from agent panes: `MU_MANAGED_AGENT`,
   `MU_AGENT_NAME`, `MU_WORKSTREAM`, and `MU_ROLE`
 - the `on-attention` hook: its path in the config dir and the `MURMUR_KIND`,

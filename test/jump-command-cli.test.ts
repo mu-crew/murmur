@@ -226,3 +226,23 @@ test("missing exact agent fails with exit 2 and lists available candidates", () 
   expect(result.stderr).toContain('agent "missing" was not found on dev');
   expect(result.stderr).toContain("dev\tavailable\t%6");
 });
+
+test("status --cached never reaches a due peer", () => {
+  addPeer("dev", "developer.example", [{ pane: "%1", agent: "w" }]);
+  const bin = mkdtempSync(join(tmpdir(), "murmur-fake-ssh-"));
+  const log = join(bin, "calls");
+  writeFileSync(join(bin, "ssh"), `#!/bin/sh\necho "$@" >> "${log}"\nexit 255\n`);
+  chmodSync(join(bin, "ssh"), 0o755);
+  const result = spawnSync(
+    process.execPath,
+    [builtArtifact("cli.js"), "status", "--json", "--cached"],
+    {
+      env: { ...process.env, MURMUR_STATE_DIR: stateDir, PATH: `${bin}:${process.env.PATH ?? ""}` },
+      encoding: "utf8",
+    },
+  );
+  expect(result.status).toBe(0);
+  const view = JSON.parse(result.stdout);
+  expect(view.panes.map((pane: { pane: string }) => pane.pane)).toEqual(["%1"]);
+  expect(() => readFileSync(log, "utf8")).toThrow();
+});
