@@ -3,7 +3,7 @@
 Notable changes per release. Written for someone deciding whether to upgrade,
 so it says what changed for a user rather than listing every commit.
 
-## Unreleased
+## 2.5.0
 
 **`murmur pick` is gone.** The fzf picker moved to tsesh >= 1.0.0, whose agents
 view (`PREFIX a`) reads `murmur status --json --cached` and jumps through
