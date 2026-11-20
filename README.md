@@ -5,7 +5,9 @@
 murmur is two layers. Underneath is a small state protocol: each machine
 records what its own agents are doing, and peers pull each other's complete
 snapshots over ssh. On top are tmux HUDs that read the merged list: a status
-bar segment, a picker, a dashboard, and a side panel.
+bar segment, a dashboard, and a side panel. The fzf picker lives in
+tsesh's agents view (`PREFIX a`), which
+reads `murmur status --json` and jumps with `murmur jump`.
 
 ![murmur dash — cards on the left, pane glance on the right](docs/dash.png)
 
@@ -18,13 +20,12 @@ agent over ssh without leaving it.
 | Command | Job |
 | --- | --- |
 | `murmur status` | Attention-state rollups plus the total crew count for a tmux status bar |
-| `murmur pick` | fzf jump list — type to narrow, enter jumps, `ctrl-a` / `--all` toggles crew |
 | `murmur jump <target>` | Jump to the agent a `status --json` pane's `jump_target` names; what an external picker calls after selection |
 | `murmur dash` | Full-screen dashboard: watch, prompt, and stop local or remote agents |
 | `murmur sidepanel` | Compact agent list in a full-height pane beside the current tmux window |
 | `murmur rex-feed` | The status pill's agents as terminal program status (OSC 7501), for Rex |
 
-All four read the same list. Local jump is a window switch; remote jump opens
+They all read the same list. Local jump is a window switch; remote jump opens
 over ssh (or your `--jump-command`). Orchestrated (`crew`) agents stay hidden
 from state rollups unless they are `blocked`, `error` or `crashed`, because their
 supervisor consumes anything else. `murmur status` also emits their total as a
@@ -72,7 +73,7 @@ from and what each tool owns.
 | Across machines | Yes; peers exchange state snapshots over ssh | One host at a time; attach remotely with `herdr --remote` | One host | One orchestrator; remote agents run over ssh commands |
 | Git worktrees | No | Yes (`herdr worktree`) | Yes, its core feature | Per-agent VCS workspaces |
 | Places work | No | Agents drive panes through its CLI and socket API | Delegates tasks to worktree agents | Yes; typed task DAG with claims |
-| Agent HUD | Status segment, picker, dashboard, side panel | Built-in agent sidebar | Dashboard, sidebar, window-name status | Crew and task dashboard |
+| Agent HUD | Status segment, dashboard, side panel (picker via tsesh) | Built-in agent sidebar | Dashboard, sidebar, window-name status | Crew and task dashboard |
 
 They combine. murmur sees any pi agent running in a tmux pane, including the
 panes workmux creates and the agents mu spawns; mu marks its agents as crew.
@@ -128,7 +129,7 @@ client comes back on its own. See
 ```bash
 murmur peer add devbox
 murmur doctor            # is peering mutual? are the hooks right?
-bind -N "agent state picker" a display-popup -E -w 80% -h 60% "murmur pick"
+# PREFIX a is tsesh's agents view (tsesh >= 1.0.0); murmur no longer binds a picker
 bind -N "toggle murmur dash" G run-shell -b "murmur dash --goto"
 bind -N "agent side panel" C-m run-shell "murmur sidepanel"
 ```

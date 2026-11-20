@@ -327,15 +327,15 @@ export function status(
  * open" -- which looks like corruption rather than a race.
  *
  * Sync must never fail a command and on this path must never print either:
- * `status` runs on every tick and the picker's reload runs behind a popup, so
+ * `status` runs on every tick and a picker's refresh runs behind a popup, so
  * one sleeping laptop would write ssh diagnostics to stderr several times a
  * minute forever. `murmur collect`, run deliberately, is the only place that
  * prints.
  *
  * `floorMs` is how a caller says whether it is a TIMER or a PERSON. The status
  * bar passes COLLECT_FLOOR_MS so fetch rate stops tracking redraw rate. The
- * picker's rows path passes nothing: `^r` is a person asking now, and a refresh
- * key that skipped the fetch would be a key that silently does nothing.
+ * dash's manual refresh passes nothing: that is a person asking now, and a
+ * refresh key that skipped the fetch would be a key that silently does nothing.
  */
 export async function statusWithCollect(
   store: Store,

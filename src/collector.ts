@@ -582,7 +582,7 @@ export async function collect(
         const message = normalizeFailure(error instanceof Error ? error.message : String(error));
         store.replacePeerSnapshot(peer.name, { ok: false, error: message, at: now });
         // Returned, never printed. `collect` runs from `murmur status` on every
-        // tick and from `pick` inside a display-popup, so one sleeping laptop
+        // tick and from a picker inside a display-popup, so one sleeping laptop
         // wrote to stderr forever and corrupted both surfaces. Only the
         // `collect` command, which a human ran on purpose, prints.
         results.push({

@@ -622,3 +622,20 @@ test("paneOptionValues is empty when tmux cannot answer", () => {
   tmuxReplies.push("THROW:no server running");
   expect(tmux.paneOptionValues("@mu_host").size).toBe(0);
 });
+
+test("currentWindow is null outside tmux, even when a server is running", () => {
+  // The extension no-ops on a null location, so this is what keeps a pi started
+  // outside tmux out of the log. Asking tmux directly does not work: on a
+  // machine with a running server, `display-message` answers from any process
+  // and names whichever pane the server thinks is active — so a bare ssh login
+  // or a cron job would have recorded itself in an unrelated agent's pane and
+  // overwritten that agent's state.
+  const saved = process.env.TMUX_PANE;
+  try {
+    delete process.env.TMUX_PANE;
+    expect(tmux.currentWindow()).toBeNull();
+  } finally {
+    if (saved === undefined) delete process.env.TMUX_PANE;
+    else process.env.TMUX_PANE = saved;
+  }
+});

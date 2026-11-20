@@ -927,7 +927,7 @@ export function openStore(): Store {
     // WAIT on other processes -- `.immediate` for any writer's lock, the
     // TRUNCATE checkpoint for any reader still pinning the WAL -- up to
     // `busy_timeout`. Taken on every open, that wait was the slow tail of
-    // `murmur pick`: measured at ~300ms behind a held write lock and ~230ms
+    // opening the picker: measured at ~300ms behind a held write lock and ~230ms
     // behind a reader on a non-empty WAL, against ~70ms otherwise.
     //
     // Safe because a version change only ever comes from a rebuild, and a

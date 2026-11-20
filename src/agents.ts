@@ -507,7 +507,7 @@ export function jumpToAgent(
   const attach = renderJumpCommand(template, agent);
 
   // Hand the ssh to tmux as its own detached SESSION rather than running it
-  // here: `murmur pick` is usually a display-popup, and a popup is modal, so an
+  // here: a picker is usually a display-popup, and a popup is modal, so an
   // ssh started inside it dies the moment the picker exits and the remote pane
   // flashed and vanished.
   //

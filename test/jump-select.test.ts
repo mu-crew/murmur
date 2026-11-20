@@ -2,20 +2,19 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { isVisible, runPick } from "../src/cli/pick.js";
-import { createIdentity, loadIdentity } from "../src/identity.js";
+import { createIdentity, loadIdentity, type NodeIdentity } from "../src/identity.js";
 import { asPaneId, asSessionId, asWindowId } from "../src/ids.js";
 import { runJump } from "../src/jump-select.js";
 import { jumpTarget } from "../src/jump-target.js";
 import type { Mux } from "../src/mux.js";
 import { openStore, type Store } from "../src/store.js";
 import type { AgentMeta, Driver, Location } from "../src/types.js";
-import type { PaneView } from "../src/view.js";
+import { isVisible, type PaneView } from "../src/view.js";
 
 let store: Store;
 
 beforeEach(() => {
-  vi.stubEnv("MURMUR_STATE_DIR", mkdtempSync(join(tmpdir(), "murmur-pick-jump-")));
+  vi.stubEnv("MURMUR_STATE_DIR", mkdtempSync(join(tmpdir(), "murmur-jump-select-")));
   createIdentity("here");
   store = openStore();
 });
@@ -26,14 +25,20 @@ afterEach(() => {
   process.exitCode = 0;
 });
 
-/** The row key fzf hands back for a default-server pane. */
+/** The `jump_target` `status --json` prints for a default-server pane. */
 function key(host: string, pane: string): string {
-  return `${jumpTarget({ host_id: host, server: { kind: "default" }, pane: asPaneId(pane) })}\t${pane}\tlabel`;
+  return jumpTarget({ host_id: host, server: { kind: "default" }, pane: asPaneId(pane) });
 }
 
 /** This node's host_id, which is half of every row key fzf hands back. */
 function here(): string {
   return loadIdentity()?.host_id ?? "";
+}
+
+function identity(): NodeIdentity {
+  const loaded = loadIdentity();
+  if (!loaded) throw new Error("no identity");
+  return loaded;
 }
 
 function location(pane: string): Location {
@@ -107,88 +112,6 @@ function remotePane(pane: string) {
   };
 }
 
-/**
- * A picker whose fzf returns `selected`, recording what it was asked to jump to.
- *
- * No mux injection, and none is needed: `runPick` reads the cache and never
- * collects, so nothing reconciles these fixtures against the real tmux server
- * of whoever runs the suite. That coupling is what the injected mux existed to
- * break -- the fixtures were being deleted between the claim and the read, so
- * the suite passed with no tmux server and failed inside tmux.
- */
-async function pickReturning(selected: string): Promise<{ jumped: string[]; rows: string[] }> {
-  const jumped: string[] = [];
-  const rows: string[] = [];
-  await runPick(
-    store,
-    {},
-    {
-      fzf: (_args, input) => {
-        rows.push(...input.split("\n"));
-        return selected;
-      },
-      jump: (_store, pane: PaneView) => {
-        jumped.push(pane.pane);
-        return { ok: true };
-      },
-      collect: () => {},
-    },
-  );
-  return { jumped, rows };
-}
-
-test("the picker binds only jump and the crew toggle", async () => {
-  // The dash owns the glance now, so the picker is a jump list and nothing else.
-  // Every binding below was deleted rather than moved: a preview window that
-  // sshs per keypress, a refresh, a preview-layout cycle, an attach-again
-  // expect key, and four state filters plus ctrl aliases. They are asserted
-  // absent because a dead --bind string is invisible until someone presses it.
-  agent("%1");
-  let captured: string[] = [];
-  await runPick(
-    store,
-    {},
-    {
-      fzf: (args) => {
-        captured = args;
-        return "";
-      },
-      jump: () => ({ ok: true }),
-      collect: () => {},
-    },
-  );
-
-  const joined = captured.join(" ");
-  for (const gone of [
-    "--preview",
-    "--preview-window",
-    "--expect",
-    "ctrl-r",
-    "ctrl-p",
-    "alt-enter",
-    "alt-b",
-    "alt-w",
-    "alt-d",
-    "alt-x",
-    "ctrl-w",
-    "ctrl-d",
-    "ctrl-x",
-    "alt-a",
-  ]) {
-    expect(joined, gone).not.toContain(gone);
-  }
-  // The crew toggle survives: it is the one key that changes WHICH agents the
-  // list holds, which no amount of typing can do.
-  expect(joined).toContain("ctrl-a");
-
-  // Keep one line of furniture for the nonstandard population toggle.
-  const header = captured[captured.indexOf("--header") + 1] ?? "";
-  expect(header).toContain("ctrl-a crew");
-  expect(header).not.toContain("refresh");
-  expect(header).not.toContain("filter:");
-  expect(header).not.toContain("enter focus");
-});
-
 test("enter focuses an attached local pane instead of opening another remote session", async () => {
   agent("%1", "human", "worker-1");
   store.addPeer("dev", "dev.example", "et dev -c 'tmux attach -t {pane}'");
@@ -250,19 +173,14 @@ test("enter focuses an attached local pane instead of opening another remote ses
   } as unknown as Mux;
   let jumped = false;
 
-  await runPick(
-    store,
-    {},
-    {
-      fzf: () => key("REMOTE", "%9"),
-      jump: () => {
-        jumped = true;
-        return { ok: true };
-      },
-      collect: () => {},
-      mux,
+  runJump(store, identity(), key("REMOTE", "%9"), {
+    fzf: () => "",
+    jump: () => {
+      jumped = true;
+      return { ok: true };
     },
-  );
+    mux,
+  });
 
   expect(mux.attach).toHaveBeenCalledWith(attached);
   expect(jumped).toBe(false);
@@ -294,25 +212,20 @@ test("a cold remote jump warns and still proceeds when confirmed", async () => {
   const warnings: string[] = [];
   let jumped = false;
 
-  await runPick(
-    store,
-    {},
-    {
-      fzf: (args, _input) => {
-        if (args.some((arg) => arg.includes("hardware token"))) {
-          warnings.push(args.join("\n"));
-          return "jump";
-        }
-        return key("REMOTE", "%9");
-      },
-      jump: () => {
-        jumped = true;
-        return { ok: true };
-      },
-      collect: () => {},
-      warm: () => false,
+  runJump(store, identity(), key("REMOTE", "%9"), {
+    fzf: (args, _input) => {
+      if (args.some((arg) => arg.includes("hardware token"))) {
+        warnings.push(args.join("\n"));
+        return "jump";
+      }
+      return "";
     },
-  );
+    jump: () => {
+      jumped = true;
+      return { ok: true };
+    },
+    warm: () => false,
+  });
 
   expect(warnings).toHaveLength(1);
   expect(jumped).toBe(true);
@@ -341,77 +254,45 @@ test("a cold remote jump can be cancelled after the warning", async () => {
   let jumped = false;
   let warned = false;
 
-  await runPick(
-    store,
-    {},
-    {
-      fzf: (args) => {
-        if (args.some((arg) => arg.includes("hardware token"))) {
-          warned = true;
-          return "";
-        }
-        return key("REMOTE", "%9");
-      },
-      jump: () => {
-        jumped = true;
-        return { ok: true };
-      },
-      collect: () => {},
-      warm: () => false,
+  runJump(store, identity(), key("REMOTE", "%9"), {
+    fzf: (args) => {
+      if (args.some((arg) => arg.includes("hardware token"))) {
+        warned = true;
+        return "";
+      }
+      return "";
     },
-  );
+    jump: () => {
+      jumped = true;
+      return { ok: true };
+    },
+    warm: () => false,
+  });
 
   expect(warned).toBe(true);
   expect(jumped).toBe(false);
 });
 
-test("a crew row revealed by ctrl-a can actually be jumped to", async () => {
-  // The bug: `runPick` built its list ONCE, filtered by isVisible, and resolved
-  // fzf's answer against that filtered array. ctrl-a's reveal is a
-  // `reload(... pick --rows --all)` -- rows printed by a SUBPROCESS -- so the
-  // parent's array never learned about the crew pane whose row fzf was now
-  // displaying. find() returned undefined and the handler did a bare `return`:
-  // enter did nothing, exit 0, no message.
-  //
-  // Drives the parent WITHOUT --all (the state the user is in when they press
-  // ctrl-a) and hands back the hidden pane's key, which is what fzf does after a
-  // reveal.
+test("a crew pane hidden from the default view can still be jumped to", async () => {
+  // A selection is resolved against the FULL list, never the rows a caller
+  // displayed: filtering is presentation and must not gate the action. A picker
+  // that reveals crew rows on demand hands back a key for a pane its launch
+  // view hid, and resolving against the filtered list made enter a dead key.
   agent("%1");
   agent("%9", "orchestrated");
 
-  const { jumped, rows } = await pickReturning(key(here(), "%9"));
-
-  // Precondition: this pane really is filtered out of the default display, so
-  // the test exercises the gap rather than a coincidence.
+  // Precondition: this pane really is filtered out of the default view, so the
+  // test exercises the gap rather than a coincidence.
   expect(isVisible({ driver: "orchestrated", attention: [] } as unknown as PaneView)).toBe(false);
-  expect(rows.some((row) => row.split("\t")[1] === "%9")).toBe(false);
 
-  expect(jumped).toEqual(["%9"]);
+  expect(await jumpWith(key(here(), "%9"))).toEqual(["%9"]);
   expect(process.exitCode).not.toBe(1);
 });
 
-test("selecting a pane that is genuinely gone says so instead of exiting silently", async () => {
-  // Once the lookup resolves against the unfiltered list, a miss means the pane
-  // disappeared between the collect and the keypress. In a popup -- the normal
-  // way to run this -- the window closes the moment runPick returns, so a bare
-  // return is indistinguishable from a dead key.
-  agent("%1");
-  const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
-  try {
-    const { jumped } = await pickReturning(key(here(), "%404"));
-
-    expect(jumped).toEqual([]);
-    expect(process.exitCode).toBe(1);
-    expect(stderr.mock.calls.map(([text]) => String(text)).join("")).toContain("%404");
-  } finally {
-    stderr.mockRestore();
-  }
-});
-
-test("an attention-only pane is selectable, which keying on an agent id would break", async () => {
-  // A codex pane has no agent row and therefore no agent id. Keying the picker
-  // on one would make exactly the rows that need a human unselectable -- and
-  // those rows are the reason the notify verb exists.
+test("an attention-only pane is jumpable, which keying on an agent id would break", async () => {
+  // A codex pane has no agent row and therefore no agent id. Keying a jump on
+  // one would make exactly the rows that need a human unreachable -- and those
+  // rows are the reason the notify verb exists.
   store.requestAttention({
     kind: "blocked",
     location: location("%7"),
@@ -420,15 +301,12 @@ test("an attention-only pane is selectable, which keying on an agent id would br
     driver: "human",
   });
 
-  const { jumped, rows } = await pickReturning(key(here(), "%7"));
-
-  expect(rows.some((row) => row.split("\t")[1] === "%7")).toBe(true);
-  expect(jumped).toEqual(["%7"]);
+  expect(await jumpWith(key(here(), "%7"))).toEqual(["%7"]);
 });
 
 test("a selection is resolved on host AND pane, not on the pane alone", async () => {
-  // Pane ids are unique per NODE, so two machines routinely hold a `%1`. The row
-  // carries both columns for exactly this reason, and the selection is the whole
+  // Pane ids are unique per NODE, so two machines routinely hold a `%1`. The
+  // jump target carries both for exactly this reason, and it is the whole
   // address -- matching on the pane alone jumped to whichever `%1` the sort put
   // first, which is a local window switch standing in for an ssh.
   agent("%1");
@@ -479,104 +357,20 @@ test("a selection is resolved on host AND pane, not on the pane alone", async ()
   });
 
   const jumped: PaneView[] = [];
-  await runPick(
-    store,
-    {},
-    {
-      fzf: () => key("REMOTE", "%1"),
-      jump: (_store, pane: PaneView) => {
-        jumped.push(pane);
-        return { ok: true };
-      },
-      warm: () => true,
+  runJump(store, identity(), key("REMOTE", "%1"), {
+    fzf: () => "",
+    jump: (_store, pane: PaneView) => {
+      jumped.push(pane);
+      return { ok: true };
     },
-  );
+    warm: () => true,
+  });
 
   expect(jumped.map((pane) => pane.host_id)).toEqual(["REMOTE"]);
   expect(jumped[0]?.local).toBe(false);
 });
 
-test("the launch path paints without waiting for a collect", async () => {
-  // THE REGRESSION THIS FILE EXISTS TO CATCH TWICE OVER.
-  //
-  // v1 awaited a full collect before handing fzf a single row, so the screen was
-  // blank for the whole ssh fan-out -- 1-3s against a fleet with one dead peer.
-  // v2 moved the fetch to an fzf `start:reload`, which was worse in a way no
-  // test could see: a reload DISCARDS the rows fzf already has, so the list
-  // showed `0/0` and a spinner for the same duration. The fix is a detached
-  // child, and what makes it a fix is precisely that `runPick` never awaits it.
-  //
-  // Asserted by making the refresh hostile: if anything on the launch path waits
-  // for this, the test hangs rather than fails, and a hang is a louder signal
-  // than an assertion here.
-  agent("%1");
-  let started = false;
-  const rows: string[] = [];
-
-  await runPick(
-    store,
-    {},
-    {
-      fzf: (_args, input) => {
-        rows.push(...input.split("\n"));
-        // fzf must already have its rows by the time the refresh is asked for.
-        expect(started).toBe(true);
-        return "";
-      },
-      jump: () => ({ ok: true }),
-      // A refresh that never settles must not stop the picker painting. Returned
-      // rather than cast: a `=> void` callback may return a value, TS just
-      // ignores it -- which is the whole point, since `runPick` must ignore it
-      // too. `as unknown as void` said the same thing and tripped
-      // noConfusingVoidType, whose suggested fix (`undefined`) would have
-      // quietly removed the hang this test depends on.
-      collect: () => {
-        started = true;
-        return new Promise<void>(() => {});
-      },
-    },
-  );
-
-  expect(started).toBe(true);
-  expect(rows.some((row) => row.split("\t")[1] === "%1")).toBe(true);
-});
-
-test("an empty picker stays open with a message instead of flashing a popup shut", async () => {
-  // `display-popup -E` closes when the process exits, so printing "No agents"
-  // and returning showed the popup for a frame and nothing else. fzf holds it
-  // open on an empty list with the reason in the header, until esc.
-  const seen: { args: string[]; input: string }[] = [];
-  const pick = () =>
-    runPick(
-      store,
-      {},
-      {
-        fzf: (args, input) => {
-          seen.push({ args, input });
-          return "";
-        },
-        jump: () => ({ ok: true }),
-        collect: () => {},
-      },
-    );
-  const header = (n: number) => {
-    const args = seen[n]?.args ?? [];
-    return args[args.indexOf("--header") + 1] ?? "";
-  };
-
-  await pick();
-  expect(seen).toHaveLength(1);
-  expect(seen[0]?.input).toBe("");
-  expect(header(0)).toContain("No agents");
-
-  // Crew only: the message says how to reveal them, and the key it names is bound.
-  agent("%2", "orchestrated");
-  await pick();
-  expect(header(1)).toMatch(/No human agents .*1 crew/);
-  expect(seen[1]?.args.join(" ")).toContain("ctrl-a:transform");
-});
-
-// --- `murmur jump`: the same post-selection code, reached without a picker ---
+// --- tokens straight from `status --json`, as `murmur jump` takes them ---
 
 async function jumpWith(token: string, deps: Partial<Parameters<typeof runJump>[3]> = {}) {
   const identity = loadIdentity();

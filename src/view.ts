@@ -26,7 +26,7 @@ export type RenderState = "crashed" | "error" | "blocked" | "done" | "running" |
  * THE single ordering table: which state matters most, for sorting and for
  * choosing one word to show.
  *
- * `status.ts` and `pick.ts` import this rather than declaring their own copies,
+ * `status.ts` and the dash import this rather than declaring their own copies,
  * so no two surfaces can sort one list differently.
  */
 export const RENDER_PRIORITY: readonly RenderState[] = [
@@ -48,7 +48,7 @@ export const RENDER_PRIORITY: readonly RenderState[] = [
  * died. Everything else about an orchestrated agent is its supervisor's
  * business.
  *
- * `pick.ts` uses it for which crew rows are visible by default, `status.ts` for
+ * `isVisible` uses it for which crew rows are visible by default, `status.ts` for
  * which crew states reach the status bar. Two literals in two files answering
  * one question is how a row that needed a human became one a human could not
  * see.
@@ -639,7 +639,7 @@ function urgency(view: PaneView, state: RenderState, context: Resolved): number 
  * Which piece of work a row belongs to: the workstream mu set, else the tmux
  * session name.
  *
- * The same chain the picker's `stream` column prints, so "in my stream" means
+ * The same chain a picker's `stream` column prints, so "in my stream" means
  * exactly what the column a reader can see says, rather than a second answer
  * only the sort knows.
  */

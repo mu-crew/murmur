@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { expect, test } from "vitest";
 import { builtArtifact } from "./helpers/built.js";
@@ -7,7 +7,7 @@ import { builtArtifact } from "./helpers/built.js";
  * Every module Node loads before `murmur <anything>` runs: the static import
  * closure of `dist/cli.js`. Follows `import ... from "./x.js"` and bare
  * `import "./x.js"`, and deliberately not `import("./x.js")`, which is the
- * lazy path the dash, side panel and picker take. The one exception is a
+ * lazy path the dash and side panel take. The one exception is a
  * top-level `await import("./x.js")`: `dist/cli.js` loads the program that
  * way after enabling the compile cache, so it runs on every command.
  */
@@ -40,14 +40,4 @@ function stringWidthImporters(entry: string): string[] {
 
 test("no module every command loads imports string-width", () => {
   expect(stringWidthImporters(builtArtifact("cli.js"))).toEqual([]);
-});
-
-test("the picker does not load string-width for ASCII rows", () => {
-  // Loading it was the largest single cost of opening `murmur pick` (~50ms of
-  // regex and segmenter construction on a loaded host), for rows that are
-  // almost always plain ASCII. `ansi-width.ts` requires it on first non-ASCII
-  // text instead, which this static walk deliberately does not follow.
-  const chunk = readdirSync(builtArtifact()).find((file) => /^pick-[\w-]+\.js$/.test(file));
-  expect(chunk).toBeDefined();
-  expect(stringWidthImporters(builtArtifact(chunk as string))).toEqual([]);
 });

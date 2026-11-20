@@ -1,9 +1,7 @@
 import { agentLabel, agentLocation, terminalText } from "./agents.js";
-import { visibleWidth } from "./ansi-width.js";
 import { warmSocketCommand } from "./channel.js";
 import { DASH_GLYPH, hostColor } from "./dash-paint.js";
 import { type GlanceRunner, type GlanceRunnerAsync, glance, glanceAsync } from "./glance.js";
-import { jumpTarget } from "./jump-target.js";
 import type { Status } from "./status.js";
 import type { Store } from "./store.js";
 import { age, isVisible, type PaneView, renderState } from "./view.js";
@@ -37,8 +35,8 @@ function tailLines(text: string, maxLines: number): string {
   return lines.slice(-maxLines).join("\n");
 }
 
-// Back-compatible name used by pick/status renderers. The map lives with the
-// dash vocabulary so every murmur surface paints one state with one symbol.
+// The state glyphs, under the name the preview and notice use. The map lives
+// with the dash vocabulary so every murmur surface paints one state with one symbol.
 export const GLYPH = DASH_GLYPH;
 
 // Mirrors the window-glyph colours: red needs you now, peach needs you soon,
@@ -52,15 +50,6 @@ export const COLOUR: Record<string, string> = {
   waiting: "\u001b[34m",
   idle: "\u001b[90m",
 };
-// Built from a char class rather than written literally: a bare \u001b in a
-// regex trips biome's noControlCharactersInRegex, and the rule is right that
-// an invisible byte in a pattern is a hazard.
-const ANSI_PATTERN = `${String.fromCharCode(27)}\\[[0-9;]*m`;
-// Anchored, and non-global on purpose: `exec` on a /g/ regex carries lastIndex
-// between calls, so one shared global regex inside a loop silently skips
-// sequences.
-const ANSI_AT_START = new RegExp(`^${ANSI_PATTERN}`);
-const ANSI_AT_END = new RegExp(`(?:${ANSI_PATTERN})+$`);
 /**
  * A host in its accent, as truecolor SGR: the same color the dash, the side
  * panel and the notification hook give it, so a host reads the same
@@ -73,55 +62,7 @@ function hostSgr(host: string): string {
 }
 const BOLD = "\u001b[1m";
 export const DIM = "\u001b[2m";
-// For the column header only, so the grid's labels read as attached to the grid
-// rather than as another line of preamble. Dim would have put them in the same
-// register as the key legend, which is the confusion this exists to end.
-const UNDERLINE = "\u001b[4m";
 export const RESET = "\u001b[0m";
-
-/**
- * Column widths, in one place because the header and the rows must agree. They
- * were duplicated as literals in two functions and had already drifted by a
- * column once.
- */
-const COLUMNS = {
-  marker: 2,
-  name: 30,
-  state: 10, // state glyph + space + eight-character state word
-  stream: 13,
-  streamWide: 18, // when no host column is shown
-  host: 14,
-} as const;
-
-/**
- * The column header fzf pins above the list.
- *
- * Built from COLUMNS so it cannot drift from the rows.
- *
- * UNDERLINED, not dim, and that is the whole distinction from the key legend
- * above it. This docstring used to claim it was dim and nothing made it so --
- * neither header line carried an escape code, so fzf painted the column labels
- * and the keybindings in one indistinguishable block. A column header is a
- * label FOR the grid beneath it and belongs visually attached to it; the legend
- * is a different kind of thing and now reads as one.
- *
- * The padding still happens outside the styling: `pad` counts visible columns,
- * but wrapping each cell would put an escape sequence between every column and
- * the grid has to line up with rows that style per cell.
- */
-export function headerRow(showHost: boolean): string {
-  const labels = [
-    " ".repeat(COLUMNS.marker),
-    pad("agent", COLUMNS.name),
-    pad("state", COLUMNS.state),
-    pad("stream", showHost ? COLUMNS.stream : COLUMNS.streamWide),
-    showHost ? pad("host", COLUMNS.host) : "",
-    "age / flags",
-  ]
-    .filter(Boolean)
-    .join(" ");
-  return `${UNDERLINE}${labels}${RESET}`;
-}
 
 /** How many gated peers the header names before it stops. */
 const NOTICE_PEERS = 3;
@@ -129,12 +70,10 @@ const NOTICE_PEERS = 3;
 /**
  * The header line for peers that need an interactive session, or null.
  *
- * The header, not the prompt or a row, and each rejection matters: the prompt is
- * where `alt-a` stores the crew-toggle state via `$FZF_PROMPT`, so a
- * variable-length string there would collide with it; a synthetic row would
- * break the invariant that every row is a jumpable pane; and the preview is
- * unreachable when the peer contributes no rows at all -- which is exactly when
- * a lapsed session leaves the reader blind.
+ * A header line rather than a row: a synthetic row would break the invariant
+ * that every row is a jumpable pane, and a glance is unreachable when the peer
+ * contributes no rows at all -- which is exactly when a lapsed session leaves
+ * the reader blind.
  *
  * Sorted oldest-first because that is the peer whose rows are most likely to
  * mislead, and TRIMMED with no counter: a truncated list plus a count is more
@@ -159,8 +98,8 @@ export function sessionNotice(peers: Status["peers"], now = Date.now()): string 
         age(now - oldest.fetched_at) || "just now";
 
   // BOLD and `blocked`'s yellow, not DIM. This is the one header line that asks
-  // the reader to DO something, and DIM is this file's code for furniture -- the
-  // keybinding legend and the column header wear it. Rendering an action in the
+  // the reader to DO something, and DIM is this file's code for furniture --
+  // secondary facts and labels wear it. Rendering an action in the
   // same weight as scenery is how it goes unread, which is the whole failure the
   // notice exists to prevent.
   //
@@ -198,145 +137,6 @@ function timestamp(ts: number): string {
     minute: "2-digit",
     second: "2-digit",
   });
-}
-
-/**
- * Fit a cell to exactly `width` visible columns, padding or truncating.
- *
- * Padding counts VISIBLE length: a value wrapped in bold plus reset carries
- * nine escape bytes, and `padEnd` counts them, padding nine short and shearing
- * every column to its right.
- *
- * Truncating bounds the other end. `pad` only ever grew a string, so one long
- * agent name (36 chars in a 30-wide column) pushed host and flags right and
- * broke the grid for that row -- and long pi session names are the normal case.
- * The walk copies escape sequences through without counting them, so a cut
- * never lands inside one, which would leak the colour into the rest of the line
- * and drop the reset that ends it.
- *
- * Both ends count TERMINAL CELLS via `visibleWidth`, not code points: an agent
- * name or workstream carrying CJK or emoji is twice as wide on screen as its
- * code-point count says, so a code-point pad sheared every column to its right
- * by exactly the number of wide characters to its left.
- */
-function pad(value: string, width: number): string {
-  const visible = visibleWidth(value);
-  if (visible <= width) return value + " ".repeat(width - visible);
-
-  // Room for the ellipsis, which is one column wide.
-  const budget = Math.max(0, width - 1);
-  let out = "";
-  let shown = 0;
-  let index = 0;
-  while (index < value.length && shown < budget) {
-    const sequence = ANSI_AT_START.exec(value.slice(index));
-    if (sequence) {
-      out += sequence[0];
-      index += sequence[0].length;
-      continue;
-    }
-    // Iterated per CODE POINT, so an astral character (every emoji) is never
-    // split into its surrogate halves, and charged its real cell width -- a
-    // wide one that would straddle the budget stops the walk instead.
-    const character = String.fromCodePoint(value.codePointAt(index) ?? 0);
-    const cells = visibleWidth(character);
-    if (shown + cells > budget) break;
-    out += character;
-    index += character.length;
-    shown += cells;
-  }
-  // Copy any trailing escapes (the reset) so the cell closes its own styling.
-  const tail = value.slice(index).match(ANSI_AT_END);
-  return `${out}\u2026${tail?.[0] ?? ""}${" ".repeat(Math.max(0, width - budget - 1))}`;
-}
-
-/**
- * One fzf row: two hidden key columns -- host and pane -- then the label.
- *
- * Keyed on host and pane rather than a tmux target, because a target only means
- * something on the agent's own host; resolving it is `jumpToAgent`'s job once a
- * selection comes back. See the return statement for why the pane, not an
- * agent id.
- */
-export function pickerRow(
-  agent: PaneView,
-  showHost: boolean,
-  current: boolean,
-  local = agent.local,
-): string {
-  // One derivation, shared with the status bar: attention first, then activity.
-  const state = renderState(agent);
-  const colour = COLOUR[state] ?? "";
-  const glyph = GLYPH[state] ?? "?";
-  const marker = current ? `${BOLD}\u25c6${RESET}` : " "; // ◆ you are here
-  // Richest name first, through the ONE chain in `agentLabel` rather than a copy
-  // of its first links: mu names agents, pi names sessions, tmux names windows,
-  // and all three travel in the snapshot so a local and a remote row read the
-  // same. `agentLabel` shortens a session name to its leaf, so a local copy of
-  // the chain would print the full path beside a preview printing the leaf.
-  const name = agentLabel(agent);
-  // "here" rather than this machine's hostname: the reader knows which machine
-  // they are on and needs to see which rows are not it, and the difference is
-  // not cosmetic -- a local row is a keystroke away, a remote one costs an ssh
-  // and a nested tmux. Both forms start in the same column, so the arrows form a
-  // vertical run you can scan without reading a word.
-  // A mu remote worker reads as the host it runs on, with the arrow, though its
-  // pane (and so the jump) is here: "via here" in the flags says that part.
-  const shownHost = agent.runs_on ?? agent.host;
-  const host = showHost
-    ? local && !agent.runs_on
-      ? `${hostSgr(agent.host)}  here${RESET}`
-      : `${hostSgr(shownHost)}\u2192 ${terminalText(shownHost)}${RESET}`
-    : "";
-  // Workstream if mu set one, otherwise the tmux session name: both answer
-  // "which piece of work is this", and only mu-spawned agents have a workstream.
-  // The session name is also what tms shows and what fingers search on -- a
-  // session `hacking/murmur` holding a pi whose window is named `Python` was
-  // unfindable by typing `murmur`.
-  const group = agent.workstream ?? agent.session_name;
-  // Never the same string twice in one row. Both columns fall back to the
-  // session name, so an unnamed pi printed `hacking/murmur  hacking/murmur` and
-  // spent thirteen columns saying nothing. Blank is honest: the name column
-  // already carries the only fact there is.
-  const workstream = group && group !== name ? `${DIM}${terminalText(group)}${RESET}` : "";
-  // Attention and activity simultaneously. A running agent with `blocked`
-  // attention is expected, and the row has room to say so rather than picking
-  // one word and hiding the other.
-  const extra = agent.attention.map((entry) => entry.kind).filter((kind) => kind !== state);
-  const flags = [
-    agent.driver === "orchestrated" ? "crew" : "",
-    // Freshness belongs to the NODE, stated rather than inferred from an age: a
-    // stale node keeps its last-known fields, and the reader must be told so.
-    agent.freshness === "stale" ? "stale host" : "",
-    agent.attached_pane ? `attached here ${agent.attached_pane}` : "",
-    local && agent.runs_on ? "via here" : "",
-    ...extra,
-    agent.activity === "running" && state !== "running" ? "running" : "",
-    age(agent.updated_at === null ? null : Date.now() - agent.updated_at),
-  ]
-    .filter(Boolean)
-    .join(" ");
-  // The state word is IN the label, not a hidden column: fzf's --with-nth
-  // re-indexes fields, so any --nth excluding the label broke plain name
-  // matching (typing "glance" returned 0/4). Eight columns to make the filters
-  // and text search share one field set, and the word is worth reading anyway.
-  const label = [
-    pad(marker, COLUMNS.marker),
-    // No `terminalText` here: `agentLabel` already sanitised it, and wrapping it
-    // again implied this value was raw.
-    pad(`${BOLD}${name}${RESET}`, COLUMNS.name),
-    `${colour}${glyph} ${pad(state, COLUMNS.state - 2)}${RESET}`,
-    pad(workstream, showHost ? COLUMNS.stream : COLUMNS.streamWide),
-    showHost ? pad(host, COLUMNS.host) : "",
-    flags ? `${DIM}${flags}${RESET}` : "",
-  ]
-    .filter(Boolean)
-    .join(" ");
-  // Keyed on the whole address (host, server, pane) as an opaque jump target;
-  // the pane follows for readers. The pane is what jumps,
-  // and an attention-only pane has no agent id -- so keying on one would make
-  // exactly the rows that need a human unselectable.
-  return `${jumpTarget(agent)}\t${agent.pane}\t${label}`;
 }
 
 export function previewText(

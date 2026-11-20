@@ -44,9 +44,8 @@ them requires a major version:
     human agents plus crew that needs a human), and `jump_target` (opaque token
     for `murmur jump`; never parse it)
   - `peers[].name`, `needs_session`, `fetched_at`
-- `murmur jump <target>`: jumps to the agent a pane's `jump_target` names, with
-  the same fresh re-read, attachment focus and hardware-tap confirmation as
-  `murmur pick`. On failure it prints one line on stderr and exits 1 (the caller
+- `murmur jump <target>`: jumps to the agent a pane's `jump_target` names, after
+  a fresh re-read, with attachment focus and hardware-tap confirmation. On failure it prints one line on stderr and exits 1 (the caller
   relays it: a `display-popup -E` closes on exit)
 - environment variables read from agent panes: `MU_MANAGED_AGENT`,
   `MU_AGENT_NAME`, `MU_WORKSTREAM`, and `MU_ROLE`
@@ -65,7 +64,7 @@ hook harness ── murmur hook ── inbox ─┘   ▲ drained by every reade
                                             │
                                     ssh murmur export
                                             │
-                                collector ── view ── status / pick / dash / sidepanel
+                                collector ── view ── status / dash / sidepanel / jump
                                                        │
                                      jump: local switch, or ssh -t
 ```
@@ -81,9 +80,11 @@ panes. `murmur export` prints that state as a single complete JSON document — 
 and renders the union as an attention-sorted list. No daemon, no listening
 socket, no master node.
 
-Four paint surfaces share that list: `status` (counts), `pick` (fzf jump),
-`dash` (cards + pane glance), and `sidepanel` (a compact list in the current
-tmux window). Jump is the same whether you left from pick, dash, or sidepanel.
+Three paint surfaces share that list: `status` (counts), `dash` (cards + pane
+glance), and `sidepanel` (a compact list in the current tmux window). An
+external picker, such as tsesh's agents view, reads `status --json` and hands
+the selection to `murmur jump`. Jump is the same whether you left from the
+dash, the side panel, or `murmur jump`.
 Dash can also send a buffered prompt to the selected pane without leaving the
 dashboard.
 
@@ -118,7 +119,7 @@ above zero.
 
 Why three and not one. A crashed agent on an unreachable host is crashed *and*
 stale, on different axes; a running agent that a notifier flagged as blocked is
-both, and the picker shows both. Every attempt to collapse these produced a
+both, and the dash shows both. Every attempt to collapse these produced a
 question with no answer, and one of them shipped: a focus hook that could
 overwrite an agent's state replaced `working` with `blocked` on live panes and
 nulled the owner metadata while all three processes were running. The fix is
@@ -214,8 +215,8 @@ never evidence of life. tmux says the same thing with its sigils, `$25` / `@75`
 so that passing one where another is meant does not compile.
 
 The extension resolves its pane from `$TMUX_PANE` and returns early without one,
-so a pi started in a plain terminal records nothing and never appears in the
-picker. That is the honest outcome rather than a gap: with no pane there is no
+so a pi started in a plain terminal records nothing and never appears in any
+list. That is the honest outcome rather than a gap: with no pane there is no
 address, and a row you cannot jump to is worse than no row.
 
 Two nearby calls look contradictory and are not:
@@ -544,7 +545,7 @@ copied when it creates the store for the first time (migration, not minting; see
 [State directory](#state-directory)). `createIdentity` is called only by `murmur
 init`; `setDisplayName` backs `murmur init --name` on an existing node and keeps
 its `host_id`. Every command that needs a `host_id` — `export`, `collect`,
-`status`, `pick`, `doctor` — calls `loadIdentity()` and fails with `murmur is
+`status`, `doctor` — calls `loadIdentity()` and fails with `murmur is
 not initialised on this node; run: murmur init`. A node that came into existence
 as a side effect of a status-bar tick has an identity nobody chose. `peer` reads
 identity opportunistically instead: `peer add` uses it only to refuse adding
@@ -1112,12 +1113,12 @@ crash.
 `paneViews(store, identity, now)` builds `PaneView[]` from `store.localPanes()`
 and each cached peer snapshot, through one mapping function. `renderState`
 picks one word, `viewSort` orders the list, and `RENDER_PRIORITY` is the single
-ordering table `status`, `pick`, and `dash` import rather than restating.
+ordering table `status` and `dash` import rather than restating.
 
 `dash` can reorder for display (`priority` is `viewSort`; `node` is local then
 host A–Z; `age` is freshest first). The side panel uses the saved dashboard
 order and visibility preferences. Those settings do not change
-`RENDER_PRIORITY` or what `status` and `pick` show.
+`RENDER_PRIORITY` or what `status` shows.
 
 `identity` is required and non-null, because every caller is a command that
 already fails without one. Optional-chaining it is what previously classed every
@@ -1138,7 +1139,7 @@ already in the snapshot, so this needs no configuration and no new schema:
 | age of the **rendered kind** | the main key | `attention.requested_at` per kind, not the pane's `updated_at`, which is the max over every fact on the pane |
 | direction of age | `crashed`/`blocked` oldest first, everything else newest first | a request for a human *starves*; a result is *news* |
 | extra attention kinds | +15 min each | a pane that crashed *and* was flagged blocked is two requests deep |
-| your stream | +10 min | the workstream mu set, else the tmux session name — the same chain the picker's `stream` column prints |
+| your stream | +10 min | the workstream mu set, else the tmux session name |
 | local | +2 min | a keypress, against an ssh and a nested tmux attach |
 | **the pane you are in** | last in its band | you do not need a picker to reach your own cursor |
 | **stale host** | after every fresh row in its band | its fields are last-known and may be hours dead |
@@ -1176,8 +1177,8 @@ file yet. Both are follow-on work, not gaps in this.
 
 On a REACHABLE peer, `stale` is transient by construction and you will rarely
 see it: every surface that can render it also refreshes it. `murmur status`
-collects inline before it reads, and `pick` paints from cache while starting a
-floored collect behind it, so the state exists only in the gap between the
+collects inline before it reads, and the dash and side panel paint from cache
+and collect on the floor while open, so the state exists only in the gap between the
 collect floor (30s ± 10s) and `STALENESS_MS` (60s) — and any read landing in
 that gap closes it. The flag is durable only for a peer murmur cannot reach,
 which is what it is for.
@@ -1196,7 +1197,7 @@ rendered as live, because the *replica* really was current:
 
 `snapshot_at` is the third and belongs to the peer too: when that node *built*
 the document. A peer polled one second ago can be serving a three-hour-old
-fact, so `peer list` and `status --json` report both, and the picker shows the
+fact, so `peer list` and `status --json` report both, and a row shows the
 pane's own age rather than ours.
 
 `age()` and `freshness()` are the only two places a duration becomes text or a
@@ -1253,18 +1254,16 @@ murmur replaced a 1500-line script that was the daily local tool. Zero peers is
 therefore the common case:
 
 - the extension claims its pane and reports activity
-- status, pick, dash, and sidepanel read `localPanes()` through the same mapping
+- status, dash, and sidepanel read `localPanes()` through the same mapping
   a peer snapshot goes through
 - the collector, whenever it runs, iterates the peer list, finds nothing, and
   reconciles once
 
 The surfaces differ in *when* that collect happens:
 
-- **pick never waits for one.** It paints from the cached read
-  (`status(store, identity)`) and starts a collect in a DETACHED child
-  afterwards, for the next invocation. See `spawnCollect` in `src/cli/pick.ts`
-  and the commit that made it so, "paint the picker from cache, collect behind
-  it, not before it".
+- **`status --cached` never waits for one.** It reads the store only; an
+  external picker pairs it with a detached `murmur collect --quiet --floored`
+  so the next invocation finds a warm cache.
 - **dash and sidepanel paint from cache too**, then refresh on a
   `COLLECT_FLOOR_MS` interval while they stay open (`src/cli/dash.tsx` and
   `src/cli/sidepanel.tsx`).
@@ -1303,7 +1302,7 @@ hosts only. Not wired up, because no peer in use needs it.
 **A node being down is the common case, so nothing routine reports it.** A fleet
 normally has a laptop asleep and a box switched off. The collector used to write
 two lines of ssh diagnostics per failed peer, and it runs from `murmur status`
-on every status-bar tick and from `murmur pick` inside a display-popup — so one
+on every status-bar tick and from a picker inside a display-popup — so one
 sleeping node wrote to stderr several times a minute, forever, and into a UI.
 
 Failures now travel in `collect`'s return value. `murmur collect`, which a human
@@ -1397,7 +1396,7 @@ paths to a pane's host are not alike:
 | surface | needs |
 |---|---|
 | collect | `ssh <target> murmur export` |
-| glance (pick preview / dash pane glance) | `ssh <target> tmux capture-pane -e` |
+| glance (dash pane glance) | `ssh <target> tmux capture-pane -e` |
 | jump | `ssh <target>`, interactively |
 
 **A card renders only from collected state; a capture serves one selected pane.**
@@ -1432,7 +1431,7 @@ agent an orchestrator placed want opposite treatment: when the orchestrated one
 finishes, its supervisor consumes the result and nobody needs to acknowledge
 anything. Same facts, opposite attention. So an orchestrated pi agent raises no
 `done` at all (a notify-only harness cannot tell, so it records `done` with
-`driver = orchestrated` and the surfaces treat it as crew), and its rows are hidden from status, pick, dash, and sidepanel
+`driver = orchestrated` and the surfaces treat it as crew), and its rows are hidden from status, dash, and sidepanel
 unless its attention includes `blocked` or `crashed` — the two kinds only a
 human can answer. That list is `NEEDS_HUMAN`, shared by every surface, because
 it was two literals in two files. That duplication once hid a row that needed a
@@ -1600,8 +1599,9 @@ That boundary is narrower than it once read. "tmux wrappers" and "TUI
 rendering" were listed here as untested and both now are:
 `test/mux-targets.test.ts` drives a real tmux server for target syntax, moved
 panes and pane-addressed switching; `test/jump.test.ts` asserts wrapper
-creation, its session options and the return home; and `test/pick-row.test.ts`
-asserts what a row renders. What remains untested is sitting in the result --
+creation, its session options and the return home; and
+`test/dash-view.test.ts` and `test/sidepanel-view.test.ts` assert what a row
+renders. What remains untested is sitting in the result --
 attaching by hand and looking at a terminal.
 
 New tests are verified by breaking the code they cover and watching them fail. A
@@ -1688,12 +1688,11 @@ each was cheaper to accept than to solve:
    hammering. The jitter is drawn per peer per call and is what stops the floor
    becoming a synchroniser — a bare floor makes a fleet converge on hitting one
    machine in the same instant, permanently. A floor is passed by the two
-   unattended callers: `murmur status`, which tmux re-runs on a tick, and the
-   picker's launch-time background refresh, which runs on every popup open and
-   would otherwise fan out ssh per keystroke. The picker itself paints from
-   cache and never waits for a collect. `murmur collect` and the picker's `^r`
-   are a person asking now, so neither floors — a refresh key that skipped the
-   fetch would be a key that silently does nothing.
+   unattended callers: `murmur status`, which tmux re-runs on a tick, and
+   `murmur collect --floored`, the background refresh an external picker starts
+   on every popup open, which would otherwise fan out ssh per keystroke. Plain
+   `murmur collect` is a person asking now, so it does not floor — a refresh
+   that skipped the fetch would be a command that silently does nothing.
 4. **No nested agents.** A second live process in one pane is refused and
    reports nothing. A pane shows at most one agent.
 5. **No remote liveness inference.** `owner_pid` never crosses the wire, so a
@@ -1715,7 +1714,7 @@ each was cheaper to accept than to solve:
    open.** Every ssh murmur runs sets `BatchMode=yes` ("never prompt", not
    "never authenticate"), so a host wanting a prompt per connection is reached
    only over an existing master. Ambient collects skip such a peer instead of
-   failing on every tick, keep its cached snapshot, and the picker header names
+   failing on every tick, keep its cached snapshot, and the dash header names
    the fix, `ssh -MNf -S <ControlPath> <host>`: `-N -f` so it holds no session
    slot, `-M -S` so the socket lands where `SSH_OPTIONS` reads, since OpenSSH
    defaults to neither. Eternal Terminal cannot be that master, but it can

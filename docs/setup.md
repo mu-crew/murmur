@@ -392,7 +392,7 @@ discarded, and these variables set:
 | Variable | Value |
 | --- | --- |
 | `MURMUR_KIND` | `done`, `blocked`, `error` or `crashed` |
-| `MURMUR_AGENT` | the agent name, as the picker shows it |
+| `MURMUR_AGENT` | the agent name, as the dash shows it |
 | `MURMUR_HOST` | the peer name, or this node's display name |
 | `MURMUR_LOCAL` | `1` for this node, `0` for a peer |
 | `MURMUR_PANE` | the pane id on its node |
@@ -415,7 +415,7 @@ notify-send -u "$urgency" "murmur: $MURMUR_AGENT $MURMUR_KIND" \
 
 A host's color is a crc32 of its short name over eight Catppuccin accents, the
 same hash the mu-crew dotfiles publish as `@mu_crew_host_color`, so one host is one
-color in the status bar, the dash, the side panel, the picker and your
+color in the status bar, the dash, the side panel and your
 notifications. For a peer the name
 is the one given to `peer add`.
 
@@ -462,21 +462,18 @@ sees every spoke; **spokes do not see each other** — `export` publishes local
 panes only. A pair that was not demonstrably up reads `unknown`, not
 unreachable.
 
-Asleep or powered-off nodes are normal. `status`, `pick`, `dash`, and
+Asleep or powered-off nodes are normal. `status`, `dash`, and
 `sidepanel` stay silent about that. `murmur peer list` has LAST SEEN; `murmur collect` (run on purpose)
 prints one line per peer it could not reach.
 
-Bind a popup picker:
+murmur has no picker of its own. tsesh >= 1.0.0 binds one to `PREFIX a`: its
+agents view lists `murmur status --json --cached` and hands the selected
+pane's `jump_target` to `murmur jump`. Any other picker can do the same:
 
-```tmux
-bind -N "agent state picker" a display-popup -E -w 80% -h 60% "murmur pick"
+```sh
+murmur status --json --cached | jq -r '.panes[] | select(.visible) | .jump_target'
+murmur jump '<jump_target>'
 ```
-
-Rows use the shared picker prefix `marker · 30-column agent · state · context`, matching the `tms` session picker while retaining Murmur's state word, stream, host, age, and flags.
-
-Typing in pick matches agent name, workstream or tmux session, host, and the
-state word as literal substrings — so `blocked` narrows without a dedicated
-binding.
 
 ## One key to the dash and back
 
@@ -551,14 +548,15 @@ rex window new crew -- murmur rex-feed
   as `murmur status` does. Ctrl-C clears every record it set.
 
 The records belong to the feed's pane, so Rex lists them there; selecting one
-does not jump to the agent. Use `murmur pick` or the dash for that.
+does not jump to the agent. Use the dash, or `murmur jump`, for that.
 
-### pick and dash in a Rex pane
+### dash and jump in a Rex pane
 
-Both run in a Rex pane outside tmux. A jump opens the agent in a new tab of
+`murmur dash` and `murmur jump` both run in a Rex pane outside tmux. A jump opens the agent in a new tab of
 the current Rex session, named after the agent (`linuxpc · dotfiles` for a
 remote one): `tmux attach -t <pane>` for a local agent, the peer's jump
-command for a remote one. The picker or dash stays where it was. Closing the
+command for a remote one. The dash, or whatever called `murmur jump`, stays
+where it was. Closing the
 tab, or detaching, ends the attach.
 
 That tab shows no program status of its own: the agent runs inside tmux, and
@@ -570,7 +568,7 @@ does), but murmur cannot see it.
 The dash's glance and prompt input (`i`) work as in tmux: both address the
 agent's pane, not a client. Still tmux-only: `murmur sidepanel` (it lays out
 a tmux window) and `murmur dash --goto` (a tmux key binding). In a plain
-terminal outside both, the picker attaches in place and the dash refuses to
+terminal outside both, `murmur jump` attaches in place and the dash refuses to
 start.
 
 ## Jump command override
@@ -595,11 +593,11 @@ with a trailing `~`:
 
 Both are per-session. Leaving the remote returns you to the window you jumped
 from and destroys the wrapper. Jumping to the same host twice reuses one
-session. Outside tmux, pick/dash run ssh directly and you land back at your
+session. Outside tmux, `dash` and `jump` run ssh directly and you land back at your
 shell on exit.
 
 Inside the wrapper the local tmux has no prefix. Escape hatch (root table —
-not `M-b` / other Alt letters that would eat picker's own filters):
+not `M-b` / other Alt letters a picker or the remote may want):
 
 ```tmux
 bind -n M-Escape if-shell -F '#{m:*~,#{session_name}}' detach-client

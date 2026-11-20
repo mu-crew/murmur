@@ -3,6 +3,14 @@
 Notable changes per release. Written for someone deciding whether to upgrade,
 so it says what changed for a user rather than listing every commit.
 
+## Unreleased
+
+**`murmur pick` is gone.** The fzf picker moved to tsesh >= 1.0.0, whose agents
+view (`PREFIX a`) reads `murmur status --json --cached` and jumps through
+murmur. Replace a `display-popup ... "murmur pick"` binding with tsesh's.
+`murmur jump <jump_target>` stays for scripts and other pickers, and the dash
+and side panel are unchanged.
+
 ## 2.3.0
 
 **Documented the limits of jumping to named-server agents on a peer.** The README and

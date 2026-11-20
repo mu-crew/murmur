@@ -4,6 +4,7 @@ import { ATTENTION_PRIORITY, type AttentionKind } from "../src/types.js";
 import {
   age,
   freshness,
+  isVisible,
   NEEDS_HUMAN,
   type PaneAttention,
   type PaneView,
@@ -527,4 +528,42 @@ test("the delegate count is shown whenever it is non-zero", () => {
   expect(pendingSummary(view({ pending: 3, activity: "running" }))).toBe("3 delegates");
   expect(pendingSummary(view({ pending: 0 }))).toBe("");
   expect(pendingSummary(view({ pending: null }))).toBe("");
+});
+
+test("crew agents are hidden unless they need a human", () => {
+  // `driver` exists to separate "an agent you are talking to" from "an agent an
+  // orchestrator placed", and the surfaces hide the latter because its supervisor
+  // consumes the result. Applied wholesale that was wrong in two cases: an
+  // orchestrator cannot answer a question meant for a human, and it may never
+  // retry a worker that died. Those rows needed a human and were the ones a
+  // human could not see.
+  //
+  // The question is asked of ATTENTION, independently of activity, so a crew
+  // agent that is busy AND blocked is visible.
+  const crew = (attention: PaneView["attention"]) =>
+    isVisible({ ...view(), driver: "orchestrated", attention });
+  const human = (attention: PaneView["attention"]) =>
+    isVisible({ ...view(), driver: "human", attention });
+
+  expect(crew(at(["blocked"]))).toBe(true);
+  expect(crew(at(["crashed"]))).toBe(true);
+  expect(crew(at(["done"]))).toBe(false);
+  expect(crew([])).toBe(false);
+  // Busy and blocked at once: one fact does not hide the other.
+  expect(
+    isVisible({
+      ...view(),
+      driver: "orchestrated",
+      activity: "running",
+      attention: at(["blocked"]),
+    }),
+  ).toBe(true);
+  // A crew pane that crashed AND is blocked answers to either kind, so the
+  // widened `attention` cannot hide a row behind whichever word it renders as.
+  expect(crew(at(["crashed", "blocked"]))).toBe(true);
+
+  // A human-driven pane is always visible, whatever it is doing.
+  for (const kinds of [["blocked"], ["crashed"], ["done"], []] as AttentionKind[][]) {
+    expect(human(at(kinds))).toBe(true);
+  }
 });

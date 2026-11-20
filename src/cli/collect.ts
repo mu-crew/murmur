@@ -32,7 +32,7 @@ export function registerCollect(program: Command): void {
 
         // The ONLY place a peer failure is printed. `collect` is run by a human
         // or a timer that wants the answer, unlike `status` (every status-bar
-        // tick) and `pick` (inside a display-popup), both of which used to print
+        // tick) and a picker (inside a display-popup), both of which used to print
         // the same thing and could not stop.
         //
         // One line per peer, on stderr so a caller can still parse stdout, and

@@ -554,7 +554,7 @@ test("the wrapper session hides the local status bar and disables the local pref
 test("the wrapper returns the originating client to where the jump started", () => {
   // The return is part of the wrapper's own command, so leaving the remote --
   // by any means -- lands you back where you were. It must name the client
-  // explicitly: `murmur pick` runs in a popup, which is a client of its own
+  // explicitly: a picker runs in a popup, which is a client of its own
   // that dies with the picker, so a bare switch-client would move the wrong
   // one. The origin must also be read BEFORE the wrapper exists, or it would
   // record the wrapper as home and the return would be a no-op.

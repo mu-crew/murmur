@@ -18,12 +18,11 @@ export type JumpDeps = {
 };
 
 /**
- * The post-selection half of the picker: resolve an opaque `jump_target` against
+ * The post-selection half of a picker: resolve an opaque `jump_target` against
  * a FRESH read, confirm a possible hardware tap, and jump.
  *
- * Shared by `murmur pick` and `murmur jump`, so an external picker (tsesh) and
- * the built-in one cannot disagree. Failures are a single stderr line and exit
- * code 1: under `display-popup -E` the popup closes on exit, so the caller is
+ * Behind `murmur jump`, which an external picker (tsesh) calls after a
+ * selection. Failures are a single stderr line and exit code 1: under `display-popup -E` the popup closes on exit, so the caller is
  * expected to relay that line (e.g. `tmux display-message`).
  *
  * A fresh read of the FULL list, never the rows that were displayed: rows can

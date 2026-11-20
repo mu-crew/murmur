@@ -164,7 +164,7 @@ export function requireDashTmux(
 ): boolean {
   if (env.TMUX || outsideTmux(env) === "rex") return true;
   writeError(
-    "murmur dash must run inside tmux or a Rex pane; start tmux and run it again, or use murmur pick.\n",
+    "murmur dash must run inside tmux or a Rex pane; start tmux and run it again, or pick an agent in tsesh's agents view.\n",
   );
   process.exitCode = 1;
   return false;

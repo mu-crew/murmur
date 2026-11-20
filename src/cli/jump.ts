@@ -2,7 +2,7 @@ import type { Command } from "commander";
 
 /**
  * `murmur jump <target>`: jump to the agent a `status --json` pane's
- * `jump_target` names. The action loads lazily, like `pick`.
+ * `jump_target` names. The action loads lazily, like `dash`.
  */
 export function registerJump(program: Command): void {
   program

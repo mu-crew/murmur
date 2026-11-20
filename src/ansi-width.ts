@@ -29,7 +29,7 @@ const SINGLE_CELL = /^[ -~\u00b7\u2014\u2026\u2192\u25c6]*$/;
  *
  * `string-width` builds `\p{RGI_Emoji}` and an `Intl.Segmenter` when it loads,
  * which measured ~50ms on a loaded host -- the largest single cost of opening
- * `murmur pick`, whose rows are almost always plain ASCII. Those characters are
+ * a list of agents, whose rows are almost always plain ASCII. Those characters are
  * one cell each in string-width too (a test pins the agreement), so that case
  * is answered here and the library is required on the first string
  * that holds anything else. That `require` of an ES module needs

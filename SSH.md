@@ -26,7 +26,7 @@ ssh_config already sets `ControlMaster auto` and a matching `ControlPath`, a
 plain `ssh dev` does the same.
 
 While no master lives, the peer is skipped, its cached rows keep their age,
-and the picker names the fix (`murmur doctor` has the full list):
+and the dash header names the fix (`murmur doctor` has the full list):
 
 ```
 ! dev: re-auth needed (last seen 2h) — ssh -MNf -S ~/.ssh/control/%r@%h:%p dev
@@ -103,6 +103,6 @@ reachability, **`error`** is the current attempt. Branch on the error, never on
 presence in the list; `--json` exits 0 with peers down, since sleeping machines
 are normal.
 
-`murmur status` and `murmur pick` poll and stay silent. `murmur collect` dials
+`murmur status`, the dash and the side panel poll and stay silent. `murmur collect` dials
 and prints one line per unreachable host: run it to ask "can I reach this host
 right now".
