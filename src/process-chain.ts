@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { type Harness, harnessFromArgv, runMode } from "./harnesses.js";
+import { helperPath } from "./helper-path.js";
 import type { TmuxServer } from "./types.js";
 
 /**
@@ -54,7 +55,7 @@ export function parseProcessTable(output: string): Map<number, ProcessRow> {
 /** One `ps` for the whole table, or null when it cannot be read. */
 export function readProcessTable(): Map<number, ProcessRow> | null {
   try {
-    const output = execFileSync("ps", ["-A", "-o", "pid=,ppid=,lstart=,args="], {
+    const output = execFileSync(helperPath("ps"), ["-A", "-o", "pid=,ppid=,lstart=,args="], {
       encoding: "utf8",
       timeout: 3000,
       maxBuffer: 64 * 1024 * 1024,
@@ -78,12 +79,16 @@ export function processStartTimes(pids: readonly number[]): Map<number, number> 
   if (wanted.length === 0) return times;
   let output: string;
   try {
-    output = execFileSync("ps", ["-o", "pid=,ppid=,lstart=,args=", "-p", wanted.join(",")], {
-      encoding: "utf8",
-      timeout: 3000,
-      stdio: ["ignore", "pipe", "ignore"],
-      env: { ...process.env, LC_ALL: "C" },
-    });
+    output = execFileSync(
+      helperPath("ps"),
+      ["-o", "pid=,ppid=,lstart=,args=", "-p", wanted.join(",")],
+      {
+        encoding: "utf8",
+        timeout: 3000,
+        stdio: ["ignore", "pipe", "ignore"],
+        env: { ...process.env, LC_ALL: "C" },
+      },
+    );
   } catch (error) {
     // `ps -p` exits 1 when a pid is gone, still listing the live ones.
     const stdout = (error as { stdout?: unknown }).stdout;

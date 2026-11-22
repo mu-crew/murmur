@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { type JumpResult, jumpToAgent, terminalText } from "./agents.js";
 import { hasWarmSocket } from "./channel.js";
+import { findHelper } from "./helper-path.js";
 import type { NodeIdentity } from "./identity.js";
 import { renderJumpCommand } from "./jump-command.js";
 import { parseJumpTarget } from "./jump-target.js";
@@ -110,10 +111,15 @@ export function runJump(store: Store, identity: NodeIdentity, token: string, dep
 }
 
 /** Runs fzf on the caller's tty, stderr inherited, the way the picker does. */
-export const spawnFzf: JumpDeps["fzf"] = (args, input, env) =>
-  spawnSync("fzf", args, {
-    input,
-    encoding: "utf8",
-    stdio: ["pipe", "pipe", "inherit"],
-    env,
-  }).stdout ?? "";
+export const spawnFzf: JumpDeps["fzf"] = (args, input, env) => {
+  const executable = findHelper("fzf", env);
+  if (executable === null) return "";
+  return (
+    spawnSync(executable, args, {
+      input,
+      encoding: "utf8",
+      stdio: ["pipe", "pipe", "inherit"],
+      env,
+    }).stdout ?? ""
+  );
+};

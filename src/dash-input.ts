@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { peerForHost, shellQuote } from "./agents.js";
 import { SSH_OPTIONS } from "./channel.js";
+import { helperPath } from "./helper-path.js";
 import type { Store } from "./store.js";
 import type { PaneView } from "./view.js";
 
@@ -143,7 +144,9 @@ export function buildEscapeDelivery(pane: PaneView, target: string | null): Inpu
 
 const runInput: InputRunner = (delivery) =>
   new Promise((resolve, reject) => {
-    const child = spawn(delivery.command, delivery.args, { stdio: ["pipe", "ignore", "pipe"] });
+    const child = spawn(helperPath(delivery.command), delivery.args, {
+      stdio: ["pipe", "ignore", "pipe"],
+    });
     let error = "";
     child.stderr.setEncoding("utf8");
     child.stderr.on("data", (chunk: string) => {

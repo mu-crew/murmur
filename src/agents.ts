@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { SSH_OPTIONS } from "./channel.js";
+import { findHelper } from "./helper-path.js";
 import { asPaneId } from "./ids.js";
 import {
   currentJumpCommand,
@@ -231,7 +232,9 @@ export const PROBE_TIMEOUT_MS = 10_000;
  */
 export function makeSpawnRunner(probeTimeoutMs: number = PROBE_TIMEOUT_MS): Runner {
   return (file, args, inherit = false) => {
-    const result = spawnSync(file, args, {
+    const executable = findHelper(file);
+    if (executable === null) return { status: null, stdout: "", failed: true };
+    const result = spawnSync(executable, args, {
       encoding: "utf8",
       // `inherit` means the user is SITTING IN this process -- the outside-tmux
       // ssh attach -- and a session a human is working in must have no deadline.

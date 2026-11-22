@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { helperPath } from "./helper-path.js";
 import { asPaneId, asWindowId, type PaneId, type WindowId } from "./ids.js";
 import { reflowSidepanelAdded, reflowSidepanelRemoved } from "./sidepanel-layout.js";
 import { SIDEPANEL_MIN_WIDTH, sidepanelWidth } from "./sidepanel-view.js";
@@ -19,7 +20,7 @@ const productionTmux: SidepanelTmux = {
     try {
       return {
         ok: true,
-        stdout: execFileSync("tmux", args, {
+        stdout: execFileSync(helperPath("tmux"), args, {
           encoding: "utf8",
           timeout: 3000,
           stdio: ["ignore", "pipe", "pipe"],

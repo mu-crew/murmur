@@ -1,5 +1,6 @@
 import { execFile, execFileSync } from "node:child_process";
 import { promisify } from "node:util";
+import { helperPath } from "./helper-path.js";
 
 const execFileAsync = promisify(execFile);
 const CONTROL_PATH = "~/.ssh/control/%r@%h:%p";
@@ -135,7 +136,7 @@ const MAX_EXPORT_BYTES = 64 * 1024 * 1024;
 
 export const ssh: Channel = {
   async exec(target, argv) {
-    const { stdout } = await execFileAsync("ssh", [...SSH_OPTIONS, target, ...argv], {
+    const { stdout } = await execFileAsync(helperPath("ssh"), [...SSH_OPTIONS, target, ...argv], {
       encoding: "utf8",
       timeout: EXEC_TIMEOUT_MS,
       maxBuffer: MAX_EXPORT_BYTES,
@@ -146,7 +147,7 @@ export const ssh: Channel = {
 
 export function hasWarmSocket(target: string): boolean {
   try {
-    execFileSync("ssh", [...SSH_OPTIONS, "-O", "check", target], { stdio: "ignore" });
+    execFileSync(helperPath("ssh"), [...SSH_OPTIONS, "-O", "check", target], { stdio: "ignore" });
     return true;
   } catch {
     return false;

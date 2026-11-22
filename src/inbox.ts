@@ -2,6 +2,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { readdirSync, readFileSync, rmdirSync, rmSync, statSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { publishAgentStates } from "./agent-state.js";
+import { findHelper, helperPath } from "./helper-path.js";
 import { asPaneId, asSessionId, asWindowId } from "./ids.js";
 import { type InboxEvent, parseInboxEvent } from "./inbox-event.js";
 import { inboxDir } from "./inbox-file.js";
@@ -73,7 +74,7 @@ export interface InboxHost {
 
 function runTmux(server: TmuxServer | undefined, args: string[]): string | null {
   try {
-    return execFileSync("tmux", tmuxArgs(server, args), {
+    return execFileSync(helperPath("tmux"), tmuxArgs(server, args), {
       encoding: "utf8",
       timeout: 3000,
       stdio: ["ignore", "pipe", "ignore"],
@@ -102,14 +103,15 @@ export const SOCKET_PROBE_BUDGET_MS = 1500;
  * output goes to /dev/null, so the pipe closes as soon as the last client
  * exits; it is stopped, with its `sleep`, once they all have.
  */
-const PROBE_SCRIPT = `budget=$1; shift
+const PROBE_SCRIPT = `tmux=$1; sleeper=$2; budget=$3; shift 3
 i=0; pids=
 for s do
-  tmux -S "$s" list-sessions -F "$i #{pid}" </dev/null 2>/dev/null &
+  "$tmux" -S "$s" list-sessions -F "$i #{pid}" </dev/null 2>/dev/null &
   pids="$pids $!"; i=$((i + 1))
 done
-( trap 'kill $nap 2>/dev/null; exit 0' TERM
-  sleep "$budget" & nap=$!
+( [ -n "$sleeper" ] || exit 0
+  trap 'kill $nap 2>/dev/null; exit 0' TERM
+  "$sleeper" "$budget" & nap=$!
   wait $nap && kill -9 $pids ) </dev/null >/dev/null 2>&1 &
 killer=$!
 i=0
@@ -130,16 +132,23 @@ export function probeSockets(
 ): Map<string, number | null> {
   const answers = new Map<string, number | null>();
   if (sockets.length === 0) return answers;
+  const tmuxPath = findHelper("tmux");
+  if (tmuxPath === null) return new Map(sockets.map((socket) => [socket, null]));
+  const sleepPath = findHelper("sleep") ?? "";
   const seconds = (Math.max(budgetMs, 1) / 1000).toFixed(3);
   let out = "";
   try {
     // The outer timeout is a backstop for a shell that never gets to wait.
-    const result = spawnSync("/bin/sh", ["-c", PROBE_SCRIPT, "sh", seconds, ...sockets], {
-      encoding: "utf8",
-      timeout: budgetMs + 1000,
-      killSignal: "SIGKILL",
-      stdio: ["ignore", "pipe", "ignore"],
-    });
+    const result = spawnSync(
+      "/bin/sh",
+      ["-c", PROBE_SCRIPT, "sh", tmuxPath, sleepPath, seconds, ...sockets],
+      {
+        encoding: "utf8",
+        timeout: budgetMs + 1000,
+        killSignal: "SIGKILL",
+        stdio: ["ignore", "pipe", "ignore"],
+      },
+    );
     out = typeof result.stdout === "string" ? result.stdout : "";
   } catch {
     out = "";

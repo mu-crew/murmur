@@ -1,6 +1,6 @@
 import { mkdtempSync, readdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import {
   type InboxModeApi,
@@ -277,7 +277,7 @@ test("in the store-free mode the extension never loads the store, claims or asks
   const started = "Wed Nov  5 10:00:00 2026";
   vi.doMock("node:child_process", () => ({
     execFileSync: (command: string) => {
-      if (command !== "ps") {
+      if (basename(command) !== "ps") {
         tmuxCalls.push(command);
         return "";
       }

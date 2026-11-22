@@ -1,8 +1,9 @@
 import { spawn } from "node:child_process";
 import { accessSync, constants } from "node:fs";
-import { join } from "node:path";
+import { resolve } from "node:path";
 import { agentLabel } from "./agents.js";
 import { DASH_COLOR, DASH_GLYPH, hostColor } from "./dash-paint.js";
+import { findHelper } from "./helper-path.js";
 import { configDir } from "./paths.js";
 import type { Store } from "./store.js";
 import type { AttentionKind } from "./types.js";
@@ -96,7 +97,9 @@ export type AlertRunner = (hook: string, event: AlertEvent) => void;
  * exit code ignored -- a broken hook must not break the status bar.
  */
 export const runHook: AlertRunner = (hook, event) => {
-  const child = spawn(hook, [], {
+  const executable = findHelper(hook);
+  if (executable === null) return;
+  const child = spawn(executable, [], {
     detached: true,
     stdio: "ignore",
     env: {
@@ -119,7 +122,7 @@ export const runHook: AlertRunner = (hook, event) => {
 
 /** The hook path, or null when none is installed or it is not executable. */
 export function alertHook(dir = configDir()): string | null {
-  const path = join(dir, ALERT_HOOK);
+  const path = resolve(dir, ALERT_HOOK);
   try {
     accessSync(path, constants.X_OK);
     return path;

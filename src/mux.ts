@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { readFileSync, realpathSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { DASH_PANE_OPTION, JUMP_CLIENT_OPTION, JUMP_HOOK_INDEX } from "./goto.js";
+import { helperPath } from "./helper-path.js";
 import {
   asPaneId,
   asSessionId,
@@ -209,7 +210,7 @@ export function tmuxServerAbsent(stderr: string): boolean {
 
 function runTmux(args: string[], server?: TmuxServer): string | null {
   try {
-    return execFileSync("tmux", tmuxArgs(server, args), {
+    return execFileSync(helperPath("tmux"), tmuxArgs(server, args), {
       encoding: "utf8",
       timeout: 3000,
       stdio: ["ignore", "pipe", "ignore"],
@@ -507,11 +508,15 @@ export const tmux: Mux = {
   livePanes(server?: TmuxServer) {
     let out: string;
     try {
-      out = execFileSync("tmux", tmuxArgs(server, ["list-panes", "-a", "-F", "#{pane_id}"]), {
-        encoding: "utf8",
-        timeout: 3000,
-        stdio: ["ignore", "pipe", "pipe"],
-      }).trim();
+      out = execFileSync(
+        helperPath("tmux"),
+        tmuxArgs(server, ["list-panes", "-a", "-F", "#{pane_id}"]),
+        {
+          encoding: "utf8",
+          timeout: 3000,
+          stdio: ["ignore", "pipe", "pipe"],
+        },
+      ).trim();
     } catch (error) {
       const stderr = String((error as { stderr?: unknown }).stderr ?? "");
       return tmuxServerAbsent(stderr) ? new Set() : null;
@@ -587,7 +592,7 @@ export const tmux: Mux = {
       const remaining = deadline - Date.now();
       if (remaining <= 0) break;
       try {
-        listing += `${execFileSync("ps", ["ww", "-o", "pid=,command=", ...pids], {
+        listing += `${execFileSync(helperPath("ps"), ["ww", "-o", "pid=,command=", ...pids], {
           encoding: "utf8",
           timeout: remaining,
           stdio: ["ignore", "pipe", "ignore"],

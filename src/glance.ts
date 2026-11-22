@@ -2,6 +2,7 @@ import { execFileSync, spawn } from "node:child_process";
 import { peerForHost, shellQuote } from "./agents.js";
 import { endLinesWithReset, scan, sgrOnly } from "./ansi.js";
 import { SSH_OPTIONS } from "./channel.js";
+import { helperPath } from "./helper-path.js";
 import { tmux, tmuxArgs } from "./mux.js";
 import type { Store } from "./store.js";
 import type { PaneView } from "./view.js";
@@ -99,7 +100,7 @@ export type GlanceRunner = (target: string, argv: string[]) => string;
 const STDOUT_MAX_BYTES = 1024 * 1024;
 
 const sshRunner: GlanceRunner = (target, argv) =>
-  execFileSync("ssh", [...SSH_OPTIONS, target, ...argv], {
+  execFileSync(helperPath("ssh"), [...SSH_OPTIONS, target, ...argv], {
     encoding: "utf8",
     timeout: 3000,
     stdio: ["ignore", "pipe", "ignore"],
@@ -114,7 +115,7 @@ const sshRunnerAsync: GlanceRunnerAsync = (target, argv) =>
     // ignored), so remote shell diagnostics would count against maxBuffer and
     // fail a good capture. Ignoring stdin and stderr here matches the sync
     // runner; stdout keeps the same 1 MiB cap and 3 s timeout, both rejecting.
-    const child = spawn("ssh", [...SSH_OPTIONS, target, ...argv], {
+    const child = spawn(helperPath("ssh"), [...SSH_OPTIONS, target, ...argv], {
       stdio: ["ignore", "pipe", "ignore"],
     });
     const chunks: Buffer[] = [];
