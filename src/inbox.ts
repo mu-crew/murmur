@@ -18,6 +18,7 @@ import {
 import { type ProcessTable, readProcessTable, treeRuns } from "./process-chain.js";
 import { loadSocketCache, type SocketCache, type SocketStat } from "./socket-cache.js";
 import type { Store } from "./store.js";
+import { splitTmuxFields, tmuxFormat, tmuxText } from "./tmux-format.js";
 import type { InboxDelivery, IngestSummary, LiveCheck, Location, TmuxServer } from "./types.js";
 
 // The write side lives in its own module, so a writer loads none of the drain.
@@ -354,14 +355,23 @@ export function tmuxInboxHost(options: TmuxInboxHostOptions = {}): InboxHost {
         "list-panes",
         "-a",
         "-F",
-        "#{pane_pid}\t#{pane_id}\t#{session_id}\t#{window_id}\t#{session_name}\t#{window_name}\t#{?automatic-rename,1,0}\t#{&&:#{pane_active},#{&&:#{window_active},#{session_attached}}}",
+        tmuxFormat(
+          "#{pane_pid}",
+          "#{pane_id}",
+          "#{session_id}",
+          "#{window_id}",
+          tmuxText("session_name"),
+          tmuxText("window_name"),
+          "#{?automatic-rename,1,0}",
+          "#{&&:#{pane_active},#{&&:#{window_active},#{session_attached}}}",
+        ),
       ]);
       let result: Map<number, InboxPane> | null = null;
       if (out !== null) {
         result = new Map();
         for (const line of out.split("\n")) {
           const [pid, pane, session, window, sessionName, windowName, autoRename, active] =
-            line.split("\t");
+            splitTmuxFields(line);
           if (!pid || !pane || !session || !window) continue;
           result.set(Number(pid), {
             location: {

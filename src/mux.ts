@@ -11,6 +11,7 @@ import {
   type SessionId,
   type WindowId,
 } from "./ids.js";
+import { splitTmuxFields, tmuxFormat, tmuxText } from "./tmux-format.js";
 import type { Location, TmuxServer } from "./types.js";
 import { RENDER_PRIORITY, type RenderState, type StateCounts } from "./view.js";
 
@@ -184,11 +185,17 @@ export type PaneAddress = { server_pid: number; root_pid: number; socket: string
  */
 export function paneAddress(pane: string, server: TmuxServer): PaneAddress | null {
   const out = runTmux(
-    ["display-message", "-p", "-t", pane, "#{pid}\t#{pane_pid}\t#{socket_path}"],
+    [
+      "display-message",
+      "-p",
+      "-t",
+      pane,
+      tmuxFormat("#{pid}", "#{pane_pid}", tmuxText("socket_path")),
+    ],
     server,
   );
   if (out === null) return null;
-  const [serverPid, rootPid, socket] = out.split("\t");
+  const [serverPid, rootPid, socket] = splitTmuxFields(out);
   const server_pid = Number(serverPid);
   const root_pid = Number(rootPid);
   if (!(server_pid > 0) || !(root_pid > 0) || !socket) return null;
@@ -429,10 +436,17 @@ export const tmux: Mux = {
       "-t",
       pane,
       "-p",
-      "#{session_id}\t#{window_id}\t#{session_name}\t#{window_name}\t#{?automatic-rename,1,0}\t#{socket_path}",
+      tmuxFormat(
+        "#{session_id}",
+        "#{window_id}",
+        tmuxText("session_name"),
+        tmuxText("window_name"),
+        "#{?automatic-rename,1,0}",
+        tmuxText("socket_path"),
+      ),
     ]);
     const [session, window, sessionName, windowName, autoRename, socketPath] =
-      fields?.split("\t") ?? [];
+      fields === null ? [] : splitTmuxFields(fields);
     if (!session || !window || !socketPath) return null;
     return {
       server: deriveTmuxServer(socketPath),
@@ -458,13 +472,19 @@ export const tmux: Mux = {
       "-t",
       pane,
       "-F",
-      "#{pane_id}\t#{session_id}\t#{window_id}\t#{session_name}\t#{window_name}\t#{?automatic-rename,1,0}\t#{socket_path}\t#{&&:#{pane_active},#{&&:#{window_active},#{session_attached}}}",
+      tmuxFormat(
+        "#{pane_id}",
+        "#{session_id}",
+        "#{window_id}",
+        tmuxText("session_name"),
+        tmuxText("window_name"),
+        "#{?automatic-rename,1,0}",
+        tmuxText("socket_path"),
+        "#{&&:#{pane_active},#{&&:#{window_active},#{session_attached}}}",
+      ),
     ]);
     if (out === null) return null;
-    const rows = out
-      .split("\n")
-      .filter(Boolean)
-      .map((line) => line.split("\t"));
+    const rows = out.split("\n").filter(Boolean).map(splitTmuxFields);
     // A window linked twice into one session lists our pane twice, once per link,
     // and only the active link says focused. display-message resolves the active
     // link, so prefer that row; rows that disagree on where the pane lives are
@@ -528,9 +548,12 @@ export const tmux: Mux = {
   // the format expands to the empty string on a pane without the option.
   paneOptionValues(option: string, server?: TmuxServer) {
     const values = new Map<PaneId, string>();
-    const out = runTmux(["list-panes", "-a", "-F", `#{pane_id}\t#{${option}}`], server);
+    const out = runTmux(
+      ["list-panes", "-a", "-F", tmuxFormat("#{pane_id}", tmuxText(option))],
+      server,
+    );
     for (const line of out?.split("\n") ?? []) {
-      const [pane, value] = line.split("\t");
+      const [pane, value] = splitTmuxFields(line);
       if (pane && value) values.set(asPaneId(pane), value);
     }
     return values;
@@ -543,11 +566,11 @@ export const tmux: Mux = {
       "list-panes",
       "-a",
       "-F",
-      "#{pane_id}\t#{pane_current_command}\t#{pane_pid}",
+      tmuxFormat("#{pane_id}", tmuxText("pane_current_command"), "#{pane_pid}"),
     ]);
     if (!out) return [];
     const rows = out.split("\n").flatMap((line) => {
-      const [pane, currentCommand, pid] = line.split("\t");
+      const [pane, currentCommand, pid] = splitTmuxFields(line);
       // A pid is all digits, and it is interpolated into a `ps` argument list
       // or a `/proc/<pid>` path -- so this is the argv boundary and the guard
       // against path traversal, checked rather than trusted.
@@ -633,14 +656,18 @@ export const tmux: Mux = {
 
   publishTargets(window, server?: TmuxServer) {
     const out = runTmux(
-      ["list-panes", "-s", "-t", window, "-F", "#{session_id}\t#{window_id}\t#{pane_id}"],
+      [
+        "list-panes",
+        "-s",
+        "-t",
+        window,
+        "-F",
+        tmuxFormat("#{session_id}", "#{window_id}", "#{pane_id}"),
+      ],
       server,
     );
     if (out === null) return null;
-    const rows = out
-      .split("\n")
-      .filter(Boolean)
-      .map((line) => line.split("\t"));
+    const rows = out.split("\n").filter(Boolean).map(splitTmuxFields);
     const session = rows[0]?.[0];
     return {
       session: session ? asSessionId(session) : null,

@@ -36,9 +36,9 @@ afterAll(() => {
 test("a publish to a real tmux server writes every option in one pass", () => {
   rig("new-session", "-d", "-s", "publish", "-x", "120", "-y", "40", "sleep 300");
   rig("split-window", "-d", "-t", "publish", "sleep 300");
-  const rows = rig("list-panes", "-t", "publish", "-F", "#{session_id}\t#{window_id}\t#{pane_id}")
+  const rows = rig("list-panes", "-t", "publish", "-F", "#{session_id}|#{window_id}|#{pane_id}")
     .split("\n")
-    .map((line) => line.split("\t"));
+    .map((line) => line.split("|"));
   const [session = "", window = "", agent = ""] = rows[0] ?? [];
   const shell = rows[1]?.[2] ?? "";
 

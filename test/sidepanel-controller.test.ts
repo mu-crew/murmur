@@ -44,16 +44,16 @@ test("origin prefers TMUX_PANE and resolves its exact window and pane", () => {
   expect(sidepanelOrigin({}, outside)).toBeNull();
   expect(outside.calls).toEqual([]);
 
-  const tmux = scriptedTmux([ok("@7\t%2")]);
+  const tmux = scriptedTmux([ok("@7|%2")]);
   expect(sidepanelOrigin({ TMUX: "socket,1,0", TMUX_PANE: "%2" }, tmux)).toEqual({
     window: asWindowId("@7"),
     pane: asPaneId("%2"),
   });
-  expect(tmux.calls).toEqual([["display-message", "-t", "%2", "-p", "#{window_id}\t#{pane_id}"]]);
+  expect(tmux.calls).toEqual([["display-message", "-t", "%2", "-p", "#{window_id}|#{pane_id}"]]);
 });
 
 test("origin asks tmux for the invoking client's active pane under run-shell", () => {
-  const tmux = scriptedTmux([ok("%4"), ok("@7\t%4")]);
+  const tmux = scriptedTmux([ok("%4"), ok("@7|%4")]);
 
   expect(sidepanelOrigin({ TMUX: "socket,1,0" }, tmux)).toEqual({
     window: asWindowId("@7"),
@@ -61,26 +61,28 @@ test("origin asks tmux for the invoking client's active pane under run-shell", (
   });
   expect(tmux.calls).toEqual([
     ["display-message", "-p", "#{pane_id}"],
-    ["display-message", "-t", "%4", "-p", "#{window_id}\t#{pane_id}"],
+    ["display-message", "-t", "%4", "-p", "#{window_id}|#{pane_id}"],
   ]);
 });
 
 test("origin rejects failed, malformed, or retargeted pane resolution", () => {
   expect(sidepanelOrigin({ TMUX_PANE: "%2" }, scriptedTmux([fail("gone")]))).toBeNull();
   expect(sidepanelOrigin({ TMUX_PANE: "%2" }, scriptedTmux([ok("@1")]))).toBeNull();
-  expect(sidepanelOrigin({ TMUX_PANE: "%2" }, scriptedTmux([ok("@1\t%3")]))).toBeNull();
+  expect(sidepanelOrigin({ TMUX_PANE: "%2" }, scriptedTmux([ok("@1|%3")]))).toBeNull();
 });
 
 test("findSidepanel searches only the target window for the exact role", () => {
-  const tmux = scriptedTmux([ok("%2\tother\n%9\tsidepanel")]);
+  const tmux = scriptedTmux([ok("%2|other\n%9|sidepanel")]);
   expect(findSidepanel(asWindowId("@1"), tmux)).toBe(asPaneId("%9"));
-  expect(tmux.calls).toEqual([["list-panes", "-t", "@1", "-F", "#{pane_id}\t#{@murmur_role}"]]);
+  expect(tmux.calls).toEqual([
+    ["list-panes", "-t", "@1", "-F", "#{pane_id}|#{s/~/~0/;s/[|]/~1/:@murmur_role}"],
+  ]);
 
-  expect(findSidepanel(asWindowId("@2"), scriptedTmux([ok("%8\tside-panel")]))).toBeNull();
+  expect(findSidepanel(asWindowId("@2"), scriptedTmux([ok("%8|side-panel")]))).toBeNull();
 });
 
 test("duplicate marked panes fail safely instead of choosing one", () => {
-  const tmux = scriptedTmux([ok("@1\t%2"), ok("%8\tsidepanel\n%9\tsidepanel")]);
+  const tmux = scriptedTmux([ok("@1|%2"), ok("%8|sidepanel\n%9|sidepanel")]);
   expect(toggleSidepanel(["node", "cli"], { TMUX_PANE: "%2" }, tmux)).toEqual({
     ok: false,
     message: "multiple side panels found in window @1",
@@ -199,17 +201,17 @@ test("focus failure reports the error but leaves the valid marked panel open", (
 });
 
 test("close verifies the panel role and window before reading layout", () => {
-  const wrongWindow = scriptedTmux([ok("@2\t%9\tsidepanel")]);
+  const wrongWindow = scriptedTmux([ok("@2|%9|sidepanel")]);
   expect(closeSidepanel(asWindowId("@1"), asPaneId("%9"), wrongWindow).ok).toBe(false);
   expect(wrongWindow.calls).toHaveLength(1);
 
-  const wrongRole = scriptedTmux([ok("@1\t%9\tother")]);
+  const wrongRole = scriptedTmux([ok("@1|%9|other")]);
   expect(closeSidepanel(asWindowId("@1"), asPaneId("%9"), wrongRole).ok).toBe(false);
   expect(wrongRole.calls).toHaveLength(1);
 });
 
 test("close reads the live layout then queues kill before layout application", () => {
-  const tmux = scriptedTmux([ok("@1\t%9\tsidepanel"), ok(openLayout), ok()]);
+  const tmux = scriptedTmux([ok("@1|%9|sidepanel"), ok(openLayout), ok()]);
   expect(closeSidepanel(asWindowId("@1"), asPaneId("%9"), tmux)).toEqual({ ok: true });
   expect(tmux.calls[2]).toEqual([
     "kill-pane",
@@ -225,14 +227,14 @@ test("close reads the live layout then queues kill before layout application", (
 
 test("close leaves the panel open when layout read or parsing fails", () => {
   for (const layoutResult of [fail("read denied"), ok("bad")]) {
-    const tmux = scriptedTmux([ok("@1\t%9\tsidepanel"), layoutResult]);
+    const tmux = scriptedTmux([ok("@1|%9|sidepanel"), layoutResult]);
     expect(closeSidepanel(asWindowId("@1"), asPaneId("%9"), tmux).ok).toBe(false);
     expect(tmux.calls.some((args) => args[0] === "kill-pane")).toBe(false);
   }
 });
 
 test("a failed queued close reports tmux's error", () => {
-  const tmux = scriptedTmux([ok("@1\t%9\tsidepanel"), ok(openLayout), fail("layout rejected")]);
+  const tmux = scriptedTmux([ok("@1|%9|sidepanel"), ok(openLayout), fail("layout rejected")]);
   expect(closeSidepanel(asWindowId("@1"), asPaneId("%9"), tmux)).toEqual({
     ok: false,
     message: "could not close side panel: layout rejected",
@@ -241,8 +243,8 @@ test("a failed queued close reports tmux's error", () => {
 
 test("toggle opens when absent and closes the marked panel when present", () => {
   const opening = scriptedTmux([
-    ok("@1\t%2"),
-    ok("%2\t"),
+    ok("@1|%2"),
+    ok("%2|"),
     ok("120"),
     ok("%9"),
     ok(),
@@ -253,9 +255,9 @@ test("toggle opens when absent and closes the marked panel when present", () => 
   expect(toggleSidepanel(["node"], { TMUX_PANE: "%2" }, opening)).toEqual({ ok: true });
 
   const closing = scriptedTmux([
-    ok("@1\t%2"),
-    ok("%2\t\n%9\tsidepanel"),
-    ok("@1\t%9\tsidepanel"),
+    ok("@1|%2"),
+    ok("%2|\n%9|sidepanel"),
+    ok("@1|%9|sidepanel"),
     ok(openLayout),
     ok(),
   ]);

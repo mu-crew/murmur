@@ -2,11 +2,12 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, expect, test } from "vitest";
+import { afterAll, expect, test, vi } from "vitest";
 import { remoteSessionName } from "../src/agents.js";
 import { DASH_PANE_OPTION, JUMP_CLIENT_OPTION } from "../src/goto.js";
 import { asPaneId, asSessionId, asWindowId } from "../src/ids.js";
-import { exactPaneTarget, exactSession, tmux } from "../src/mux.js";
+import { tmuxInboxHost } from "../src/inbox.js";
+import { exactPaneTarget, exactSession, paneAddress, tmux } from "../src/mux.js";
 import { openStore } from "../src/store.js";
 
 // A private tmux server, so nothing here can touch the developer's session.
@@ -113,6 +114,59 @@ test("a claim on a real labeled server survives export liveness", () => {
     if (previous === undefined) delete process.env.MURMUR_STATE_DIR;
     else process.env.MURMUR_STATE_DIR = previous;
     rig("kill-session", "-t", exactSession("private-live"));
+  }
+});
+
+test("multi-field tmux reads preserve names, socket paths and option values containing pipes", () => {
+  const socket = join(TMUX_ROOT, "format|~1");
+  const server = { kind: "path", value: socket } as const;
+  const sessionName = "work|~1";
+  const windowName = "edit|~0";
+  const run = (...args: string[]) =>
+    execFileSync("tmux", ["-S", socket, "-f", "/dev/null", ...args], {
+      encoding: "utf8",
+      timeout: 10_000,
+      stdio: ["ignore", "pipe", "pipe"],
+    }).trim();
+
+  try {
+    // tmux 3.8 rewrites a literal tab in a format to '_' in the C locale.
+    vi.stubEnv("LC_ALL", "C");
+    run("new-session", "-d", "-s", sessionName, "-n", windowName, "sleep 300");
+    const pane = asPaneId(run("display-message", "-p", "#{pane_id}"));
+    const window = asWindowId(run("display-message", "-p", "#{window_id}"));
+    const session = asSessionId(run("display-message", "-p", "#{session_id}"));
+    const serverPid = Number(run("display-message", "-p", "#{pid}"));
+    const rootPid = Number(run("display-message", "-p", "#{pane_pid}"));
+    run("set-option", "-p", "-t", pane, "@test", "a|~0|~1");
+    const location = {
+      server,
+      pane,
+      session,
+      window,
+      session_name: sessionName,
+      window_name: windowName,
+    };
+    expect(paneAddress(pane, server)).toEqual({ server_pid: serverPid, root_pid: rootPid, socket });
+    expect(tmuxInboxHost({ cache: null }).panes(server)?.get(rootPid)?.location).toEqual(location);
+    expect(tmux.paneOptionValues("@test", server)).toEqual(new Map([[pane, "a|~0|~1"]]));
+    expect(tmux.publishTargets(window, server)).toEqual({
+      session,
+      windowPanes: [pane],
+      sessionPanes: [pane],
+    });
+
+    vi.stubEnv("TMUX", `${socket},${serverPid},0`);
+    vi.stubEnv("TMUX_PANE", pane);
+    expect(tmux.currentWindow()).toEqual(location);
+    expect(tmux.currentView()?.location).toEqual(location);
+  } finally {
+    vi.unstubAllEnvs();
+    try {
+      run("kill-server");
+    } catch {
+      // Already gone, or never started.
+    }
   }
 });
 

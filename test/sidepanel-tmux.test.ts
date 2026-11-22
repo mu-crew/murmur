@@ -74,13 +74,13 @@ function panes(window: WindowId): PaneGeometry[] {
     "-t",
     window,
     "-F",
-    `#{pane_id}\t#{pane_left}\t#{pane_top}\t#{pane_width}\t#{pane_height}\t#{${SIDEPANEL_ROLE_OPTION}}`,
+    `#{pane_id}|#{pane_left}|#{pane_top}|#{pane_width}|#{pane_height}|#{${SIDEPANEL_ROLE_OPTION}}`,
   );
   return output
     .split("\n")
     .filter(Boolean)
     .map((line) => {
-      const [id, left, top, width, height, role = ""] = line.split("\t");
+      const [id, left, top, width, height, role = ""] = line.split("|");
       if (!id || !left || !top || !width || !height) throw new Error(`bad pane row: ${line}`);
       return {
         id: asPaneId(id),
@@ -99,9 +99,9 @@ function dimensions(window: WindowId): { width: number; height: number } {
     "-t",
     window,
     "-p",
-    "#{window_width}\t#{window_height}",
+    "#{window_width}|#{window_height}",
   )
-    .split("\t")
+    .split("|")
     .map(Number);
   if (!width || !height) throw new Error("missing window dimensions");
   return { width, height };

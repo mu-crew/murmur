@@ -66,7 +66,7 @@ test("tmux argv selects default, label, and path servers without a shell", () =>
 
 test("currentWindow records the socket-derived server", () => {
   const socket = `${conventionalTmuxDirectory()}/mule`;
-  tmuxReplies.push(`$1\t@2\twork\treviewer\t0\t${socket}`);
+  tmuxReplies.push(`$1|@2|work|reviewer|0|${socket}`);
   process.env.TMUX_PANE = "%34";
   try {
     expect(tmux.currentWindow()).toMatchObject({
@@ -83,7 +83,7 @@ test("currentView answers location, targets and focus from one list-panes", () =
   tmuxCalls.length = 0;
   tmuxReplies.length = 0;
   const row = (pane: string, window: string, active: string) =>
-    [pane, "$1", window, "work", "reviewer", "0", socket, active].join("\t");
+    [pane, "$1", window, "work", "reviewer", "0", socket, active].join("|");
   tmuxReplies.push([row("%3", "@2", "0"), row("%34", "@2", "1"), row("%9", "@5", "0")].join("\n"));
   process.env.TMUX_PANE = "%34";
   try {
@@ -111,7 +111,7 @@ test("currentView prefers the active link of a window linked twice in one sessio
   tmuxCalls.length = 0;
   tmuxReplies.length = 0;
   const row = (pane: string, window: string, active: string) =>
-    [pane, "$1", window, "work", "reviewer", "0", socket, active].join("\t");
+    [pane, "$1", window, "work", "reviewer", "0", socket, active].join("|");
   // The same pane listed once per link; the second link is the active one.
   tmuxReplies.push([row("%0", "@1", "0"), row("%0", "@1", "1")].join("\n"));
   process.env.TMUX_PANE = "%0";
@@ -137,7 +137,7 @@ test("currentView is null outside a pane, when tmux fails, and when our pane is 
   try {
     tmuxReplies.push("THROW:can't find pane: %34");
     expect(tmux.currentView()).toBeNull();
-    tmuxReplies.push(`%9\t$1\t@5\twork\tw\t0\t${conventionalTmuxDirectory()}/mule\t0`);
+    tmuxReplies.push(`%9|$1|@5|work|w|0|${conventionalTmuxDirectory()}/mule|0`);
     expect(tmux.currentView()).toBeNull();
   } finally {
     delete process.env.TMUX_PANE;
@@ -248,7 +248,7 @@ const COUNTS = {
 test("publishTargets reads the window's panes and its whole session in one call", () => {
   tmuxCalls.length = 0;
   tmuxReplies.length = 0;
-  tmuxReplies.push("$2\t@7\t%1\n$2\t@8\t%5\n$2\t@7\t%6\n");
+  tmuxReplies.push("$2|@7|%1\n$2|@8|%5\n$2|@7|%6\n");
 
   expect(tmux.publishTargets(asWindowId("@7"), { kind: "label", value: "mule" })).toEqual({
     session: "$2",
@@ -258,7 +258,7 @@ test("publishTargets reads the window's panes and its whole session in one call"
   expect(tmuxCalls).toEqual([
     [
       ...["-L", "mule", "list-panes", "-s", "-t", "@7"],
-      ...["-F", "#{session_id}\t#{window_id}\t#{pane_id}"],
+      ...["-F", "#{session_id}|#{window_id}|#{pane_id}"],
     ],
   ]);
 });
@@ -496,7 +496,7 @@ test("publishAgentStates is one tmux read and one tmux write", async () => {
   });
   tmuxCalls.length = 0;
   tmuxReplies.length = 0;
-  tmuxReplies.push("$1\t@1\t%1\n$1\t@1\t%2\n$1\t@2\t%3\n");
+  tmuxReplies.push("$1|@1|%1\n$1|@1|%2\n$1|@2|%3\n");
 
   try {
     expect(publishAgentStates(asWindowId("@1"), tmux, store)).toBe(true);
@@ -540,7 +540,7 @@ test.skipIf(!existsSync(`/proc/${process.pid}/cmdline`))(
     Object.defineProperty(process, "platform", { value: "linux" });
     tmuxCalls.length = 0;
     tmuxReplies.length = 0;
-    tmuxReplies.push(`%1\tnode\t${process.pid}\n%2\tzsh\t999999999\n`);
+    tmuxReplies.push(`%1|node|${process.pid}\n%2|zsh|999999999\n`);
     try {
       expect(tmux.localPaneProcesses()).toEqual([
         {
@@ -570,7 +570,7 @@ function asDarwin<T>(body: () => T): T {
 test("localPaneProcesses runs no ps when no pane's command is a candidate", () => {
   tmuxCalls.length = 0;
   tmuxReplies.length = 0;
-  tmuxReplies.push("%1\tzsh\t11\n%2\tpython\t12\n");
+  tmuxReplies.push("%1|zsh|11\n%2|python|12\n");
   expect(asDarwin(() => tmux.localPaneProcesses(new Set(["ssh"])))).toEqual([]);
   expect(tmuxCalls).toHaveLength(1);
 });
@@ -578,11 +578,7 @@ test("localPaneProcesses runs no ps when no pane's command is a candidate", () =
 test("localPaneProcesses runs ps once per candidate pid, only for candidates", () => {
   tmuxCalls.length = 0;
   tmuxReplies.length = 0;
-  tmuxReplies.push(
-    "%1\tssh\t11\n%2\tzsh\t12\n%3\tssh\t13\n",
-    "11 ssh dev -t a\n",
-    "13 ssh dev -t b\n",
-  );
+  tmuxReplies.push("%1|ssh|11\n%2|zsh|12\n%3|ssh|13\n", "11 ssh dev -t a\n", "13 ssh dev -t b\n");
   expect(asDarwin(() => tmux.localPaneProcesses(new Set(["ssh"])))).toEqual([
     { pane: asPaneId("%1"), current_command: "ssh", arguments: "ssh dev -t a" },
     { pane: asPaneId("%3"), current_command: "ssh", arguments: "ssh dev -t b" },
@@ -596,7 +592,7 @@ test("localPaneProcesses runs ps once per candidate pid, only for candidates", (
 test("localPaneProcesses batches one ps for many candidates, and unfiltered keeps every pane", () => {
   tmuxCalls.length = 0;
   tmuxReplies.length = 0;
-  const rows = [1, 2, 3, 4, 5].map((n) => `%${n}\tssh\t${n}0`).join("\n");
+  const rows = [1, 2, 3, 4, 5].map((n) => `%${n}|ssh|${n}0`).join("\n");
   tmuxReplies.push(rows, "10 a\n20 b\n30 c\n40 d\n50 e\n");
   expect(asDarwin(() => tmux.localPaneProcesses())).toHaveLength(5);
   expect(tmuxCalls).toHaveLength(2);
@@ -607,14 +603,16 @@ test("paneOptionValues reads one option for every pane in one call, on the named
   tmuxCalls.length = 0;
   tmuxReplies.length = 0;
   // tmux expands an unset option to the empty string: that pane has none.
-  tmuxReplies.push("%1\tlinuxpc\n%2\t\n%3\tdev0\n");
+  tmuxReplies.push("%1|linuxpc\n%2|\n%3|dev0\n");
   expect(tmux.paneOptionValues("@mu_host", { kind: "label", value: "mule" })).toEqual(
     new Map([
       [asPaneId("%1"), "linuxpc"],
       [asPaneId("%3"), "dev0"],
     ]),
   );
-  expect(tmuxCalls).toEqual([["-L", "mule", "list-panes", "-a", "-F", "#{pane_id}\t#{@mu_host}"]]);
+  expect(tmuxCalls).toEqual([
+    ["-L", "mule", "list-panes", "-a", "-F", "#{pane_id}|#{s/~/~0/;s/[|]/~1/:@mu_host}"],
+  ]);
 });
 
 test("paneOptionValues is empty when tmux cannot answer", () => {

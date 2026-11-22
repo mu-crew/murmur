@@ -3,6 +3,7 @@ import { helperPath } from "./helper-path.js";
 import { asPaneId, asWindowId, type PaneId, type WindowId } from "./ids.js";
 import { reflowSidepanelAdded, reflowSidepanelRemoved } from "./sidepanel-layout.js";
 import { SIDEPANEL_MIN_WIDTH, sidepanelWidth } from "./sidepanel-view.js";
+import { splitTmuxFields, tmuxFormat, tmuxText } from "./tmux-format.js";
 
 export const SIDEPANEL_ROLE_OPTION = "@murmur_role";
 export const SIDEPANEL_ROLE = "sidepanel";
@@ -46,11 +47,11 @@ function panelRows(window: WindowId, tmux: SidepanelTmux): PaneId[] | null {
     "-t",
     window,
     "-F",
-    `#{pane_id}\t#{${SIDEPANEL_ROLE_OPTION}}`,
+    tmuxFormat("#{pane_id}", tmuxText(SIDEPANEL_ROLE_OPTION)),
   ]);
   if (!result.ok) return null;
   return result.stdout.split("\n").flatMap((line) => {
-    const [pane, role] = line.split("\t");
+    const [pane, role] = splitTmuxFields(line);
     return pane && role === SIDEPANEL_ROLE ? [asPaneId(pane)] : [];
   });
 }
@@ -66,9 +67,15 @@ export function sidepanelOrigin(
     rawPane = active.stdout;
   }
   if (!rawPane) return null;
-  const result = tmux.run(["display-message", "-t", rawPane, "-p", "#{window_id}\t#{pane_id}"]);
+  const result = tmux.run([
+    "display-message",
+    "-t",
+    rawPane,
+    "-p",
+    tmuxFormat("#{window_id}", "#{pane_id}"),
+  ]);
   if (!result.ok) return null;
-  const [window, pane, extra] = result.stdout.split("\t");
+  const [window, pane, extra] = splitTmuxFields(result.stdout);
   if (!window || pane !== rawPane || extra !== undefined) return null;
   return { window: asWindowId(window), pane: asPaneId(pane) };
 }
@@ -182,10 +189,10 @@ export function closeSidepanel(
     "-t",
     panel,
     "-p",
-    `#{window_id}\t#{pane_id}\t#{${SIDEPANEL_ROLE_OPTION}}`,
+    tmuxFormat("#{window_id}", "#{pane_id}", tmuxText(SIDEPANEL_ROLE_OPTION)),
   ]);
   if (!identity.ok) return { ok: false, message: detail("could not verify side panel", identity) };
-  const [actualWindow, actualPane, role] = identity.stdout.split("\t");
+  const [actualWindow, actualPane, role] = splitTmuxFields(identity.stdout);
   if (actualWindow !== window || actualPane !== panel || role !== SIDEPANEL_ROLE) {
     return { ok: false, message: `pane ${panel} is not the side panel for window ${window}` };
   }
