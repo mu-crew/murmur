@@ -11,6 +11,9 @@ deleted working directory and stale cache entries, so the dash, side panel,
 inbox, jump and alert paths no longer fail when the cwd is gone or a cached
 helper path has moved.
 
+**Works on tmux 3.8.** tmux 3.8 stopped passing tabs through format output, so
+murmur's tmux queries misparsed. They now use an escaped-pipe delimiter.
+
 ## 2.5.0
 
 **`murmur pick` is gone.** The fzf picker moved to tsesh >= 1.0.0, whose agents
