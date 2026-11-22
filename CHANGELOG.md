@@ -3,6 +3,14 @@
 Notable changes per release. Written for someone deciding whether to upgrade,
 so it says what changed for a user rather than listing every commit.
 
+## 2.5.1
+
+**Spawned helpers resolve reliably.** murmur now resolves local helper
+binaries before starting a child process, and that resolution survives a
+deleted working directory and stale cache entries, so the dash, side panel,
+inbox, jump and alert paths no longer fail when the cwd is gone or a cached
+helper path has moved.
+
 ## 2.5.0
 
 **`murmur pick` is gone.** The fzf picker moved to tsesh >= 1.0.0, whose agents
