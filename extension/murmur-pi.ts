@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { publishAgentStates } from "../src/agent-state.js";
+import { helperPath } from "../src/helper-path.js";
 import { type PublishTargets, tmux } from "../src/mux.js";
 import type { Store } from "../src/store.js";
 import {
@@ -78,7 +79,7 @@ function focused(pane: string): boolean {
   try {
     return (
       execFileSync(
-        "tmux",
+        helperPath("tmux"),
         [
           "display-message",
           "-t",

@@ -10,40 +10,64 @@ let searchPath: string | undefined;
 let searchCwd: string | undefined;
 let directories: string[] = [];
 
+function currentDirectory(): string | undefined {
+  try {
+    return process.cwd();
+  } catch {
+    // A deleted working directory: relative paths cannot resolve, as in the kernel.
+    return undefined;
+  }
+}
+
+function probe(candidate: string): Lookup | null {
+  try {
+    const stat = statSync(candidate, { throwIfNoEntry: false });
+    if (!stat) return null;
+    if (!stat.isFile()) return { code: "EACCES" };
+    accessSync(candidate, constants.X_OK);
+    return { executable: candidate };
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EACCES" ? { code: "EACCES" } : null;
+  }
+}
+
 function lookup(file: string, path: string): Lookup {
   if (isAbsolute(file)) return { executable: file };
-  const cwd = process.cwd();
-  if (file.includes("/")) return { executable: `${cwd}/${file}` };
-  if (path !== searchPath || cwd !== searchCwd) {
+  if (file.includes("/")) {
+    const cwd = currentDirectory();
+    return cwd === undefined ? { code: "ENOENT" } : { executable: `${cwd}/${file}` };
+  }
+  // The cwd only matters when PATH has a relative (or empty) entry.
+  const relative = path.split(delimiter).some((dir) => !isAbsolute(dir));
+  const cwd = relative ? (currentDirectory() ?? null) : "";
+  const cwdKey = cwd ?? undefined;
+  if (path !== searchPath || (cwdKey ?? "\0") !== searchCwd) {
     searchPath = path;
-    searchCwd = cwd;
+    searchCwd = cwdKey ?? "\0";
     // Do not normalize `..`: the kernel resolves it after following symlinks.
     directories = path
       .split(delimiter)
-      .map((dir) => (isAbsolute(dir) ? dir : dir ? `${cwd}/${dir}` : cwd));
+      .flatMap((dir) =>
+        isAbsolute(dir) ? [dir] : cwd === null ? [] : [dir ? `${cwd}/${dir}` : cwd],
+      );
     cache.clear();
   }
   const cached = cache.get(file);
-  if (cached) return cached;
+  if (cached && "executable" in cached && probe(cached.executable) !== null) return cached;
+  cache.delete(file);
 
+  // Misses are not cached: a helper installed later is found without a restart.
   let result: Lookup = { code: "ENOENT" };
   for (const dir of directories) {
     const candidate = `${dir}${dir.endsWith("/") ? "" : "/"}${file}`;
-    try {
-      const stat = statSync(candidate, { throwIfNoEntry: false });
-      if (!stat) continue;
-      if (!stat.isFile()) {
-        result = { code: "EACCES" };
-        continue;
-      }
-      accessSync(candidate, constants.X_OK);
-      result = { executable: candidate };
+    const found = probe(candidate);
+    if (!found) continue;
+    result = found;
+    if ("executable" in found) {
+      cache.set(file, found);
       break;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "EACCES") result = { code: "EACCES" };
     }
   }
-  cache.set(file, result);
   return result;
 }
 
