@@ -1,3 +1,4 @@
+import { CLIENT_IDENTITY_FORMAT } from "./routing.js";
 import type { PaneIdentity, PeerRecord, TmuxServer } from "./types.js";
 
 export const ATTACH_PLACEHOLDER = "{attach}";
@@ -36,7 +37,7 @@ export function suggestedJumpCommand(template: string, target: string): string {
 
 /**
  * `tmux attach` to the pane. Each of `marks` names a server-global option the
- * attaching client records itself in, as `#{client_name} #{client_created}`:
+ * attaching client records itself in, as `CLIENT_IDENTITY_FORMAT`:
  * commands after `attach` in the same list run as the client that just
  * attached, so only an attach that happened can mark, and only its own client.
  */
@@ -49,7 +50,7 @@ export function tmuxAttachCommand(
       ? ""
       : ` ${server.kind === "label" ? "-L" : "-S"} ${shellQuote(server.value)}`;
   const mark = marks
-    .map((option) => ` ';' set-option -gF ${option} '#{client_name} #{client_created}'`)
+    .map((option) => ` ';' set-option -gF ${option} '${CLIENT_IDENTITY_FORMAT}'`)
     .join("");
   return `tmux${selector} attach -t ${shellQuote(pane)}${mark}`;
 }

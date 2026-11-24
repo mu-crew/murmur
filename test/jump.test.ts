@@ -605,7 +605,7 @@ test("the wrapper returns the originating client to where the jump started", () 
   // be shell-inert, so this asserts the STRUCTURE that protects the next value
   // rather than a rescue this one needs.
   const mark = (option: string) =>
-    ` ';' set-option -gF ${option} '#{client_name} #{client_created}'`;
+    ` ';' set-option -gF ${option} '#{client_name} #{client_pid} #{client_created}'`;
   const attach = `tmux attach -t '%9'${mark(JUMP_CLIENT_OPTION)}${mark("@murmur_wrapper_X")}`;
   expect(command.replace(/@murmur_wrapper_[0-9a-f]{12}/, "@murmur_wrapper_X")).toBe(
     `ssh -t 'p' env LC_CTYPE=C.UTF-8 ${shellQuote(attach)}; ` +
@@ -1050,8 +1050,14 @@ test("against a real tmux a failed wrapper marks nobody, and a started one marks
     );
     expect(started).toEqual({ ok: true });
     const client = rig.attachClient(wrapper);
-    const created = rig.remote("display-message", "-p", "-c", client, "#{client_created}");
-    expect(rig.marker()).toBe(`${client} ${created}`);
+    const identity = rig.remote(
+      "display-message",
+      "-p",
+      "-c",
+      client,
+      "#{client_name} #{client_pid} #{client_created}",
+    );
+    expect(rig.marker()).toBe(identity);
   } finally {
     rig.cleanup();
   }
@@ -1105,6 +1111,67 @@ test("against a real tmux reuse moves the wrapper's own client, not another on t
     );
     expect(sessions.get(own)).toBe("chosen");
     expect(sessions.get(human)).toBe("human");
+  } finally {
+    rig.cleanup();
+  }
+});
+
+test("against a real tmux a human reattached on the wrapper's tty in the same second is not moved", () => {
+  // tmux reports client_created in seconds and recycles tty names, so a
+  // wrapper that detached and an ordinary attach on the same terminal within
+  // that second share `name created`. Only the client pid tells them apart.
+  const rig = realRemote();
+  try {
+    for (const session of ["agents", "human", "chosen"]) {
+      rig.remote("new-session", "-d", "-s", session, "sleep 300");
+    }
+    const paneOf = (session: string) =>
+      asPaneId(rig.remote("list-panes", "-t", `=${session}:`, "-F", "#{pane_id}"));
+    peer("p", "remote-host", [], "sh -c {attach}");
+    vi.stubEnv("TMUX", "/tmp/tmux-1000/default,123,0");
+    const server = { kind: "label" as const, value: rig.label };
+    const options = new Map<string, string>();
+    let wrapper = "";
+    const mux = fakeMux({
+      sessionNamed: () => wrapper !== "",
+      newSession: (_name, command) => {
+        wrapper = command;
+        return true;
+      },
+      setSessionOption: (_session, option, value) => {
+        options.set(option, value);
+      },
+      sessionOption: (_session, option) => options.get(option) ?? null,
+      killSession: () => true,
+    });
+    expect(jumpToAgent(store, view({ server, pane: paneOf("agents") }), mux, rig.run)).toEqual({
+      ok: true,
+    });
+
+    // The wrapper, then a human attach, on ONE terminal; retried until the
+    // two clients land in the same second, the case being pinned.
+    const sessionOf = (client: string) =>
+      rig.remote("display-message", "-p", "-c", client, "#{session_name}");
+    const createdOf = (client: string) =>
+      rig.remote("display-message", "-p", "-c", client, "#{client_created}");
+    let human = "";
+    for (let attempt = 0; attempt < 8 && human === ""; attempt += 1) {
+      const own = rig.attachClient(`${wrapper}; TMUX= ${rig.ordinaryAttach("human")}`);
+      const ownCreated = createdOf(own);
+      rig.remote("detach-client", "-t", own);
+      const deadline = Date.now() + 5_000;
+      while (Date.now() < deadline) {
+        const clients = rig.remote("list-clients", "-F", "#{client_name} #{session_name}");
+        if (clients.split("\n").includes(`${own} human`)) break;
+        execFileSync("sleep", ["0.05"]);
+      }
+      if (createdOf(own) === ownCreated) human = own;
+      else rig.remote("detach-client", "-t", own);
+    }
+    expect(human).not.toBe("");
+
+    jumpToAgent(store, view({ server, pane: paneOf("chosen") }), mux, rig.run);
+    expect(sessionOf(human)).toBe("human");
   } finally {
     rig.cleanup();
   }

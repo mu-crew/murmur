@@ -455,9 +455,9 @@ test("the jump attach marks exactly its own client, and an ordinary attach is un
     expect(settle(() => rig("show-options", "-gqv", JUMP_CLIENT_OPTION) !== "")).toBe(true);
 
     const marker = rig("show-options", "-gqv", JUMP_CLIENT_OPTION);
-    const client = rig("list-clients", "-F", "#{client_name} #{client_created}");
-    // `name created`, matching gotoDecision's comparison exactly. The creation
-    // time is in the marker because a tty path is recycled by the OS.
+    const client = rig("list-clients", "-F", "#{client_name} #{client_pid} #{client_created}");
+    // tty, pid and creation, matching gotoDecision's comparison exactly: a tty
+    // path is recycled, and a creation second repeats on a fast reconnect.
     expect(marker).toBe(client);
 
     // A SECOND, ordinary client attaching does not get marked -- the

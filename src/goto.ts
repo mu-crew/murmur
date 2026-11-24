@@ -19,11 +19,11 @@ export const DASH_PANE_OPTION = "@murmur_dash_pane";
  * the same machine is not murmur-controlled and must keep the ordinary switch
  * behaviour.
  *
- * Stored as `#{client_name} #{client_created}` rather than the name alone. A
- * client name is a tty path, which the OS recycles, so a marker left behind by
- * a dead jump would otherwise make a later, unrelated client detach itself on
- * PREFIX G. The creation time makes the identity unforgeable by coincidence,
- * which is also why nothing has to clear this option on detach.
+ * Stored as `CLIENT_IDENTITY_FORMAT` (tty, pid, creation) rather than the name
+ * alone. A tty is recycled, and a creation second repeats on a fast reconnect,
+ * so a marker left behind by a dead jump would otherwise make a later,
+ * unrelated client detach itself on PREFIX G. The pid separates them, which is
+ * also why nothing has to clear this option on detach.
  */
 export const JUMP_CLIENT_OPTION = "@murmur_jump_client";
 
@@ -67,7 +67,7 @@ export function parseReturnMarker(raw: string | null, created: string): Place | 
 
 export type GotoWorld = {
   insideTmux: boolean;
-  /** This client as `name created`, or null if tmux would not name it. */
+  /** This client as `CLIENT_IDENTITY_FORMAT`, or null if tmux would not name it. */
   client: string | null;
   /** The `@murmur_jump_client` marker, in the same shape. */
   jumpClient: string | null;
@@ -120,7 +120,7 @@ export function gotoDecision(world: GotoWorld): GotoDecision {
   }
 
   if (world.client && world.jumpClient === world.client) {
-    // The option carries `name created`; `detach-client -t` takes the name.
+    // The option carries the whole identity; `detach-client -t` takes the name.
     const [name] = world.client.split(" ");
     if (name) return { kind: "detach", client: name };
   }
@@ -161,7 +161,7 @@ export type GotoOptions = {
 /** Read the world from tmux, decide, and act. The CLI layer only prints. */
 export function runGoto(mux: Mux, env: NodeJS.ProcessEnv, options: GotoOptions): GotoResult {
   const client = mux.clientIdentity();
-  const [clientName, created] = client?.split(" ") ?? [];
+  const [clientName, , created] = client?.split(" ") ?? [];
   const marker = clientName && created ? returnOption(clientName) : null;
   const dashPane = mux.dashPane();
   const here = mux.clientLocation();

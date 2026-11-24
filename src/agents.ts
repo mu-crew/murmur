@@ -13,6 +13,7 @@ import {
   unsupportedServerMessage,
 } from "./jump-command.js";
 import { type Mux, tmux } from "./mux.js";
+import { CLIENT_IDENTITY_FORMAT } from "./routing.js";
 import type { Store } from "./store.js";
 import { DEFAULT_TMUX_SERVER, type PeerRecord, type TmuxServer } from "./types.js";
 import type { PaneView } from "./view.js";
@@ -512,14 +513,15 @@ export function jumpToAgent(
       // WRAPPER_CLIENT_OPTION). A bare `switch-client -t` lets tmux pick a
       // client: with another operator attached to that host it moved theirs,
       // reported success, and left the wrapper where it was. The recorded
-      // `name created` must still be a live client, since tty names recycle.
+      // client (tty, pid, creation) must still be live, checked in the same
+      // remote shell that switches it: tty and second alone recur.
       // `sh -c`, so a non-POSIX login shell on the remote parses none of it.
       const recorded = mux.sessionOption(name, WRAPPER_CLIENT_OPTION);
       if (recorded && WRAPPER_OPTION.test(recorded)) {
         const script =
           `m=$(${tmuxPrefix} show-options -gqv ${recorded}) && [ -n "$m" ] && ` +
-          `${tmuxPrefix} list-clients -F ${shellQuote("#{client_name} #{client_created}")} | grep -Fqx -- "$m" && ` +
-          `${tmuxPrefix} switch-client -c "\${m% *}" -t ${shellQuote(agent.pane)}`;
+          `${tmuxPrefix} list-clients -F ${shellQuote(CLIENT_IDENTITY_FORMAT)} | grep -Fqx -- "$m" && ` +
+          `${tmuxPrefix} switch-client -c "\${m%% *}" -t ${shellQuote(agent.pane)}`;
         const retarget = run("ssh", [...SSH_OPTIONS, target, `sh -c ${shellQuote(script)}`]);
         // Reported, and BEFORE the local switch: the client must not move on
         // a retarget that did not happen.

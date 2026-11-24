@@ -4,13 +4,24 @@
  * one tmux server of one host; a tmux client only while the same process
  * holds it. Each check here answers "is this provably that one", never "could
  * it be": a wrong match focuses, moves or kills someone else's thing, a missing
- * one only costs a fast path or a hint. See ARCHITECTURE § A tmux server and pane id are the agent's address.
+ * one only costs a fast path or a hint. See ARCHITECTURE § A tmux server and
+ * pane id are the agent's address.
  *
  * The host half (an ssh argv's effective route) is `connectsToPeer` in
  * attachment.ts.
  */
 
 import type { TmuxServer } from "./types.js";
+
+/**
+ * A tmux client, as one value: tty, client process and creation second. The
+ * tty is recycled and the second repeats on a fast reconnect -- a wrapper that
+ * detached and a human attached on the same terminal shared `name created`, so
+ * a retarget moved the human. The pid is unique while the client lives. Every
+ * writer and reader of a client marker uses this format, so they compare one
+ * string; a marker from an older murmur matches nothing, which declines.
+ */
+export const CLIENT_IDENTITY_FORMAT = "#{client_name} #{client_pid} #{client_created}";
 
 /** tmux global flags that take no value and do not choose the server. */
 const NO_VALUE_FLAGS = /^-[2CDlNuv]+$/;

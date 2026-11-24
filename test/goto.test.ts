@@ -19,7 +19,7 @@ const OPTIONS = { initialised: true, dashCommand: ["node", "murmur", "dash"] };
 function world(over: Partial<GotoWorld> = {}): GotoWorld {
   return {
     insideTmux: true,
-    client: "/dev/ttys001 100",
+    client: "/dev/ttys001 4242 100",
     jumpClient: null,
     dashPane: DASH,
     livePanes: new Set([DASH, WORK.pane]),
@@ -43,7 +43,7 @@ test("the client murmur attached for a remote jump detaches instead of switching
   // originating local client back to the wrapper's restore command, which is
   // what returns the operator to the dash they came from.
   const decision = gotoDecision(
-    world({ jumpClient: "/dev/ttys001 100", dashPane: asPaneId("%3") }),
+    world({ jumpClient: "/dev/ttys001 4242 100", dashPane: asPaneId("%3") }),
   );
   expect(decision).toEqual({ kind: "detach", client: "/dev/ttys001" });
 });
@@ -59,12 +59,11 @@ test("an ordinary login to a machine murmur has jumped to still switches", () =>
 });
 
 test("a marker for the same tty from an earlier client does not detach", () => {
-  // Marker carries client_created precisely so a reused tty cannot inherit a
-  // dead jump's identity: same name, different creation time, not us.
-  expect(gotoDecision(world({ jumpClient: "/dev/ttys001 99" }))).toEqual({
-    kind: "switch",
-    pane: DASH,
-  });
+  // Marker carries the pid and creation time precisely so a reused tty cannot
+  // inherit a dead jump's identity, even when it reattached in the same second.
+  for (const jumpClient of ["/dev/ttys001 4242 99", "/dev/ttys001 4141 100"]) {
+    expect(gotoDecision(world({ jumpClient }))).toEqual({ kind: "switch", pane: DASH });
+  }
 });
 
 test("no dash running opens one", () => {
@@ -122,7 +121,7 @@ test("back with no recorded place stays in the dash and says so", () => {
 
 test("detach outranks back inside a murmur jump session", () => {
   const decision = gotoDecision(
-    world({ here: IN_DASH, returnTo: WORK, jumpClient: "/dev/ttys001 100" }),
+    world({ here: IN_DASH, returnTo: WORK, jumpClient: "/dev/ttys001 4242 100" }),
   );
   expect(decision).toEqual({ kind: "detach", client: "/dev/ttys001" });
 });
@@ -148,7 +147,7 @@ test("outside tmux the command refuses", () => {
 test("a client tmux cannot name can still switch to the dash", () => {
   // No client name means no way to match the jump marker, so the ordinary
   // switch is the honest answer rather than a refusal.
-  expect(gotoDecision(world({ client: null, jumpClient: "/dev/ttys001 100" }))).toEqual({
+  expect(gotoDecision(world({ client: null, jumpClient: "/dev/ttys001 4242 100" }))).toEqual({
     kind: "switch",
     pane: DASH,
   });
@@ -161,7 +160,7 @@ test("runGoto switches to the live dash pane", () => {
     fakeMux({
       dashPane: () => DASH,
       livePanes: () => new Set([DASH]),
-      clientIdentity: () => "/dev/ttys001 100",
+      clientIdentity: () => "/dev/ttys001 4242 100",
       clientLocation: () => WORK,
       setOption: (name, value) => {
         options[name] = value;
@@ -186,7 +185,7 @@ test("runGoto in the dash switches back to the recorded pane", () => {
     fakeMux({
       dashPane: () => DASH,
       livePanes: () => new Set([DASH, WORK.pane]),
-      clientIdentity: () => "/dev/ttys001 100",
+      clientIdentity: () => "/dev/ttys001 4242 100",
       clientLocation: () => IN_DASH,
       option: (name) => (name === "@murmur_return__dev_ttys001" ? "100 %2 @2" : null),
       setOption: () => {
@@ -208,7 +207,7 @@ test("runGoto with no dash opens one, marks it at once and switches to it", () =
   const events: string[] = [];
   const result = runGoto(
     fakeMux({
-      clientIdentity: () => "/dev/ttys001 100",
+      clientIdentity: () => "/dev/ttys001 4242 100",
       clientLocation: () => WORK,
       openDash: (session, command) => {
         events.push(`open ${session} ${command.join(" ")}`);
@@ -234,8 +233,8 @@ test("runGoto detaches the marked jump client and never attaches", () => {
     fakeMux({
       dashPane: () => DASH,
       livePanes: () => new Set([DASH]),
-      clientIdentity: () => "/dev/ttys001 100",
-      jumpClientMarker: () => "/dev/ttys001 100",
+      clientIdentity: () => "/dev/ttys001 4242 100",
+      jumpClientMarker: () => "/dev/ttys001 4242 100",
       attach: (pane) => {
         attached.push(pane);
         return true;
@@ -258,7 +257,7 @@ test("a failed tmux call is reported rather than swallowed", () => {
     fakeMux({
       dashPane: () => DASH,
       livePanes: () => new Set([DASH]),
-      clientIdentity: () => "/dev/ttys001 100",
+      clientIdentity: () => "/dev/ttys001 4242 100",
       attach: () => false,
     }),
     { TMUX: "x" },
@@ -271,8 +270,8 @@ test("a failed tmux call is reported rather than swallowed", () => {
     fakeMux({
       dashPane: () => DASH,
       livePanes: () => new Set([DASH]),
-      clientIdentity: () => "/dev/ttys001 100",
-      jumpClientMarker: () => "/dev/ttys001 100",
+      clientIdentity: () => "/dev/ttys001 4242 100",
+      jumpClientMarker: () => "/dev/ttys001 4242 100",
       detachClient: () => false,
     }),
     { TMUX: "x" },

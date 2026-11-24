@@ -11,6 +11,7 @@ import {
   type SessionId,
   type WindowId,
 } from "./ids.js";
+import { CLIENT_IDENTITY_FORMAT } from "./routing.js";
 import { splitTmuxFields, tmuxFormat, tmuxText } from "./tmux-format.js";
 import type { Location, TmuxServer } from "./types.js";
 import { RENDER_PRIORITY, type RenderState, type StateCounts } from "./view.js";
@@ -787,7 +788,7 @@ export const tmux: Mux = {
   // whose key press invoked it. tmux resolves that from $TMUX, and a targeted
   // read would answer about the target's session instead.
   clientIdentity() {
-    return runTmux(["display-message", "-p", "#{client_name} #{client_created}"]) || null;
+    return runTmux(["display-message", "-p", CLIENT_IDENTITY_FORMAT]) || null;
   },
 
   jumpClientMarker() {
