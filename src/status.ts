@@ -5,7 +5,7 @@ import type { NodeIdentity } from "./identity.js";
 import { jumpTarget } from "./jump-target.js";
 import { type Mux, tmux } from "./mux.js";
 import type { Store } from "./store.js";
-import type { TmuxServer } from "./types.js";
+import type { PeerRecord, TmuxServer } from "./types.js";
 import {
   emptyCounts,
   freshness,
@@ -22,7 +22,7 @@ import {
 
 type Counts = StateCounts;
 
-type StatusOptions = { mux?: Mux };
+type StatusOptions = { mux?: Mux; cached?: boolean };
 
 function commandNames(command: string): string[] {
   return [...command.matchAll(/(?:^|[\s'"/])([\w.-]+)(?=$|[\s'"])/g)].flatMap((match) => {
@@ -210,6 +210,35 @@ function markRemoteWorkers(panes: PaneView[], mux: Mux): void {
   }
 }
 
+function markAttachments(panes: PaneView[], peers: PeerRecord[], mux: Mux): void {
+  const commandsByPeer = new Map(
+    peers
+      .filter((peer): peer is typeof peer & { host_id: string } => peer.host_id !== null)
+      .map((peer) => [peer.host_id, new Set(commandNames(peer.jump_command))]),
+  );
+  // Only remote rows can have a local attachment, and only ones naming an agent:
+  // the name is the sole thing the local argv can be matched against.
+  const attachable = panes.filter(
+    (pane): pane is typeof pane & { agent_name: string } =>
+      !pane.local && pane.agent_name !== null && pane.agent_name !== "",
+  );
+  if (attachable.length > 0) {
+    // Only panes running a command some peer's jump command names can match, so
+    // the process read is limited to those (usually none).
+    const candidates = new Set(
+      attachable.flatMap((pane) => [...(commandsByPeer.get(pane.host_id) ?? [])]),
+    );
+    for (const process of mux.localPaneProcesses(candidates)) {
+      const remote = attachable.find(
+        (pane) =>
+          commandsByPeer.get(pane.host_id)?.has(process.current_command) &&
+          attachesPane(process.arguments, pane.agent_name, pane.pane, pane.server),
+      );
+      if (remote) remote.attached_pane = process.pane;
+    }
+  }
+}
+
 /**
  * The current view. Pure with respect to the network: the caller decides whether
  * to collect first (see `statusWithCollect`).
@@ -240,33 +269,11 @@ export function status(
   const orchestratedCounts = emptyCounts();
   const panes = paneViews(store, identity, now);
   const peers = store.peers();
-  const commandsByPeer = new Map(
-    peers
-      .filter((peer): peer is typeof peer & { host_id: string } => peer.host_id !== null)
-      .map((peer) => [peer.host_id, new Set(commandNames(peer.jump_command))]),
-  );
-  // Only remote rows can have a local attachment, and only ones naming an agent:
-  // the name is the sole thing the local argv can be matched against.
-  const attachable = panes.filter(
-    (pane): pane is typeof pane & { agent_name: string } =>
-      !pane.local && pane.agent_name !== null && pane.agent_name !== "",
-  );
-  if (attachable.length > 0) {
-    // Only panes running a command some peer's jump command names can match, so
-    // the process read is limited to those (usually none).
-    const candidates = new Set(
-      attachable.flatMap((pane) => [...(commandsByPeer.get(pane.host_id) ?? [])]),
-    );
-    for (const process of (options.mux ?? tmux).localPaneProcesses(candidates)) {
-      const remote = attachable.find(
-        (pane) =>
-          commandsByPeer.get(pane.host_id)?.has(process.current_command) &&
-          attachesPane(process.arguments, pane.agent_name, pane.pane, pane.server),
-      );
-      if (remote) remote.attached_pane = process.pane;
-    }
+  if (!options.cached) {
+    const mux = options.mux ?? tmux;
+    markAttachments(panes, peers, mux);
+    markRemoteWorkers(panes, mux);
   }
-  markRemoteWorkers(panes, options.mux ?? tmux);
   const sortedPanes = viewSort(panes, { ...context, now });
   for (const pane of sortedPanes) {
     const target = pane.driver === "human" ? counts : orchestratedCounts;
@@ -312,7 +319,9 @@ export function status(
       // at a switched-off box cannot happen: it fails with `Operation timed
       // out`, which is not auth-class.
       needs_session:
-        peer.last_error !== null && needsInteractiveAuth(peer.last_error) && !warm(peer.target),
+        peer.last_error !== null &&
+        needsInteractiveAuth(peer.last_error) &&
+        (options.cached || !warm(peer.target)),
     })),
   };
 }

@@ -1,10 +1,11 @@
-import { mkdtempSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import type { Channel } from "../src/channel.js";
 import { ssh } from "../src/channel.js";
-import type { NodeIdentity } from "../src/identity.js";
+import { createIdentity, type NodeIdentity } from "../src/identity.js";
 import { asPaneId, asSessionId, asWindowId } from "../src/ids.js";
 import { jumpTarget, parseJumpTarget } from "../src/jump-target.js";
 import { status, statusJson, statusWithCollect, tmuxStatus } from "../src/status.js";
@@ -18,6 +19,7 @@ import type {
   SnapshotPane,
 } from "../src/types.js";
 import { STALENESS_MS } from "../src/view.js";
+import { builtArtifact } from "./helpers/built.js";
 import { fakeMux } from "./helpers/fake-mux.js";
 
 const stores: Store[] = [];
@@ -151,6 +153,43 @@ function remotePane(pane: string, over: Partial<SnapshotPane> = {}): SnapshotPan
     ...over,
   };
 }
+
+test("built status --cached reads named peer and local crew rows without helpers", () => {
+  createIdentity("here");
+  localAgent("%1", { driver: "orchestrated" });
+  store.addPeer("dev", "dev.example", "ssh dev.example {attach}");
+  const remote = remotePane("%2");
+  if (!remote.agent) throw new Error("expected a remote agent fixture");
+  remote.agent.agent_name = "worker";
+  store.replacePeerSnapshot("dev", { ok: true, at: 1, snapshot: remoteSnapshot([remote]) });
+  store.replacePeerSnapshot("dev", { ok: false, at: 2, error: "Permission denied (publickey)." });
+
+  const bin = mkdtempSync(join(tmpdir(), "murmur-status-helpers-"));
+  const log = join(bin, "calls");
+  for (const name of ["ssh", "tmux", "ps"]) {
+    writeFileSync(join(bin, name), `#!/bin/sh\necho ${name} >> "$CALLS"\nexit 1\n`, {
+      mode: 0o755,
+    });
+  }
+  const result = spawnSync(
+    process.execPath,
+    [builtArtifact("cli.js"), "status", "--json", "--cached"],
+    {
+      env: { ...process.env, PATH: bin, CALLS: log },
+      encoding: "utf8",
+      timeout: 5_000,
+    },
+  );
+  expect(result.status, result.stderr).toBe(0);
+  expect(JSON.parse(result.stdout)).toMatchObject({
+    peers: [expect.objectContaining({ needs_session: true })],
+    panes: expect.arrayContaining([
+      expect.objectContaining({ pane: "%1", local: true, runs_on: null }),
+      expect.objectContaining({ pane: "%2", local: false, attached_pane: null }),
+    ]),
+  });
+  expect(existsSync(log)).toBe(false);
+});
 
 test("counts group by render state, and attention beats activity", () => {
   localAgent("%1", { activity: "running" });

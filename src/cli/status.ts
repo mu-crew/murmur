@@ -30,7 +30,7 @@ export function registerStatus(program: Command): void {
           ? // No warm-socket probe either: `ssh -O check` is an ssh exec. So
             // `needs_session` here means "last attempt was refused on auth" and
             // may stay true while a warm socket exists; `murmur jump` re-probes.
-            status(store, identity, Date.now(), () => false)
+            status(store, identity, undefined, undefined, undefined, { cached: true })
           : await statusWithCollect(store, identity, Date.now(), ssh, {
               floorMs: COLLECT_FLOOR_MS,
             });
