@@ -1,5 +1,5 @@
 import { agentLabel } from "./agents.js";
-import { commandNames, connectsToPeer } from "./attachment.js";
+import { commandNames, connectsToPeer, type SshResolver, sshResolver } from "./attachment.js";
 import { type Channel, hasWarmSocket, ssh } from "./channel.js";
 import { type CollectOptions, collect, needsInteractiveAuth } from "./collector.js";
 import type { NodeIdentity } from "./identity.js";
@@ -23,7 +23,7 @@ import {
 
 type Counts = StateCounts;
 
-type StatusOptions = { mux?: Mux };
+type StatusOptions = { mux?: Mux; resolveSsh?: SshResolver };
 
 /**
  * Whether a local pane's command line is an attachment to `agentName`.
@@ -251,6 +251,7 @@ export function status(
     const candidates = new Set(
       attachable.flatMap((pane) => commandNames(peersByHost.get(pane.host_id)?.jump_command ?? "")),
     );
+    const resolve = options.resolveSsh ?? sshResolver();
     for (const process of (options.mux ?? tmux).localPaneProcesses(candidates)) {
       // The argv must connect to the row's peer, not merely name its pane: two
       // peers can both report %9. More than one match is a guess, so none.
@@ -258,7 +259,7 @@ export function status(
         const peer = peersByHost.get(pane.host_id);
         return (
           peer !== undefined &&
-          connectsToPeer(process.arguments, peer) &&
+          connectsToPeer(process.arguments, peer, resolve) &&
           attachesPane(process.arguments, pane.agent_name, pane.pane, pane.server)
         );
       });

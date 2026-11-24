@@ -2,6 +2,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { sshResolver } from "../src/attachment.js";
 import type { Channel } from "../src/channel.js";
 import { ssh } from "../src/channel.js";
 import type { NodeIdentity } from "../src/identity.js";
@@ -990,6 +991,8 @@ test("an attachment is credited to the peer its argv connects to, not the first 
           { pane: asPaneId("%55"), current_command: command, arguments: argv },
         ],
       }),
+      // Real `ssh -G`, but blind to the operator's own ssh_config.
+      resolveSsh: sshResolver(["-F", "/dev/null"]),
     });
     return Object.fromEntries(result.panes.map((pane) => [pane.agent_name, pane.attached_pane]));
   };
@@ -998,10 +1001,24 @@ test("an attachment is credited to the peer its argv connects to, not the first 
     first: null,
     second: "%55",
   });
-  expect(attached("ssh -p 2222 -l me first.example tmux attach -t %9")).toEqual({
+  expect(attached("ssh -p 22 -i key first.example tmux attach -t %9")).toEqual({
     first: "%55",
     second: null,
   });
+  // ssh connects where the overrides say, not where the operand says: this is
+  // neither peer, and a port or login change is another sshd or another
+  // user's tmux.
+  for (const argv of [
+    "ssh -o HostName=elsewhere.example first.example tmux attach -t %9",
+    "ssh -oHostName=second.example first.example tmux attach -t %9",
+    "ssh -p 2222 first.example tmux attach -t %9",
+    "ssh -l someone-else first.example tmux attach -t %9",
+  ]) {
+    expect(attached(argv), argv).toEqual({
+      first: null,
+      second: argv.includes("HostName=second") ? "%55" : null,
+    });
+  }
   // An unrelated local ssh session naming the same pane id is nobody's.
   expect(attached("ssh -t elsewhere.example tmux attach -t %9")).toEqual({
     first: null,

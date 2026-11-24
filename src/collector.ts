@@ -1,6 +1,6 @@
 import { publishAgentStates } from "./agent-state.js";
 import { type AlertRunner, alertHook, fireAlerts, runHook } from "./alert.js";
-import { type AttachPeer, connectsToPeer } from "./attachment.js";
+import { type AttachPeer, connectsToPeer, type SshResolver, sshResolver } from "./attachment.js";
 import { type Channel, hasWarmSocket } from "./channel.js";
 import { loadIdentity, type NodeIdentity } from "./identity.js";
 import { type DrainOptions, drainInbox } from "./inbox.js";
@@ -483,8 +483,9 @@ export function describeFailure(peer: string, message: string, culprit?: string 
 export function attachmentHoldingPeer(
   peer: AttachPeer,
   panes: readonly { pane: string; arguments: string }[],
+  resolve: SshResolver = sshResolver(),
 ): string | null {
-  const matches = panes.filter((pane) => connectsToPeer(pane.arguments, peer));
+  const matches = panes.filter((pane) => connectsToPeer(pane.arguments, peer, resolve));
   return matches.length === 1 ? (matches[0]?.pane ?? null) : null;
 }
 
