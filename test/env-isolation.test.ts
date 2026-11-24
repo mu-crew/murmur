@@ -93,3 +93,17 @@ test("every environment variable src/ and extension/ read is one the rig control
   expect(read.size).toBeGreaterThan(0);
   expect([...read].sort()).toEqual([...read].filter((name) => owned.has(name)).sort());
 });
+
+test("an ssh a test starts cannot read the developer's ssh config", async () => {
+  // ssh reads ~/.ssh/config from the passwd home, not $HOME, so no env
+  // redirect isolates it: a `Match exec` there runs, a `Host dev` rewrite
+  // reroutes a resolver test. The rig's ssh refuses any argv without `-F`.
+  const { spawnSync } = await import("node:child_process");
+  const { findHelper } = await import("../src/helper-path.js");
+  const ssh = findHelper("ssh");
+  expect(ssh).not.toBeNull();
+  const unisolated = spawnSync(ssh ?? "ssh", ["-G", "localhost"], { encoding: "utf8" });
+  expect(unisolated.status).toBe(255);
+  expect(unisolated.stdout).toBe("");
+  expect(unisolated.stderr).toContain("-F");
+});

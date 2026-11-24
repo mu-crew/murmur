@@ -27,6 +27,9 @@ const stores: Store[] = [];
 let store: Store;
 
 const IDENTITY: NodeIdentity = { host_id: "LOCAL", display_name: "here" };
+// Real `ssh -G`, blind to the operator's ssh_config; the suite's ssh refuses
+// any argv without `-F` (test/setup.ts).
+const isolatedSsh = sshResolver(["-F", "/dev/null"]);
 
 beforeEach(() => {
   process.env.MURMUR_STATE_DIR = mkdtempSync(join(tmpdir(), "murmur-status-"));
@@ -371,6 +374,7 @@ function attachedPaneFor(name: string, argv: string, jumpCommand?: string) {
     mux: fakeMux({
       localPaneProcesses: () => [{ pane: asPaneId("%7"), current_command: "ssh", arguments: argv }],
     }),
+    resolveSsh: isolatedSsh,
   });
   return result.panes.find((pane) => pane.pane === "%50")?.attached_pane ?? null;
 }
@@ -993,6 +997,7 @@ test("a local attachment is credited only to the pane on the server it names", (
           { pane: asPaneId("%55"), current_command: "ssh", arguments: argv },
         ],
       }),
+      resolveSsh: isolatedSsh,
     });
     return Object.fromEntries(result.panes.map((pane) => [pane.agent_name, pane.attached_pane]));
   };
@@ -1030,8 +1035,7 @@ test("an attachment is credited to the peer its argv connects to, not the first 
           { pane: asPaneId("%55"), current_command: command, arguments: argv },
         ],
       }),
-      // Real `ssh -G`, but blind to the operator's own ssh_config.
-      resolveSsh: sshResolver(["-F", "/dev/null"]),
+      resolveSsh: isolatedSsh,
     });
     return Object.fromEntries(result.panes.map((pane) => [pane.agent_name, pane.attached_pane]));
   };
