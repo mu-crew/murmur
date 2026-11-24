@@ -1018,7 +1018,7 @@ function realRemote() {
     return read();
   };
   const ordinaryAttach = (session: string) => `tmux -L ${label} -f /dev/null attach -t ${session}`;
-  return { label, remote, run, attachClient, ordinaryAttach, marker, cleanup };
+  return { label, remote, terminals, run, attachClient, ordinaryAttach, marker, cleanup };
 }
 
 test("against a real tmux a failed wrapper marks nobody, and a started one marks its client", () => {
@@ -1066,6 +1066,50 @@ test("against a real tmux a failed wrapper marks nobody, and a started one marks
       "#{client_name} #{client_pid} #{client_created}",
     );
     expect(rig.marker()).toBe(identity);
+  } finally {
+    rig.cleanup();
+  }
+});
+
+test("against a real tmux a wrapper the client could not switch to is closed and unmarked", () => {
+  // The wrapper starts detached and its attach marks the remote client before
+  // the local switch. A switch that then fails (the invoking client is gone)
+  // left a live, unseen attachment holding the marker and an ssh channel.
+  const rig = realRemote();
+  try {
+    rig.remote("new-session", "-d", "-s", "agents", "sleep 300");
+    const pane = asPaneId(rig.remote("list-panes", "-a", "-F", "#{pane_id}"));
+    peer("p", "remote-host", [], "sh -c {attach}");
+    vi.stubEnv("TMUX", "/tmp/tmux-1000/default,123,0");
+    const server = { kind: "label" as const, value: rig.label };
+    let client = "";
+    const killed: string[] = [];
+    const result = jumpToAgent(
+      store,
+      view({ server, pane }),
+      fakeMux({
+        newSession: (_name, command) => {
+          client = rig.attachClient(command);
+          // Marked before the switch, the case being pinned.
+          expect(rig.marker()).toContain(client);
+          return true;
+        },
+        switchClient: () => false,
+        killSession: (session) => {
+          killed.push(session);
+          rig.terminals("kill-server");
+          return true;
+        },
+      }),
+      rig.run,
+    );
+    expect(result).toMatchObject({ ok: false, reason: "attach_failed" });
+    expect(killed).toEqual([remoteSessionName("p", "remote-host", server)]);
+    const clients = () => rig.remote("list-clients", "-F", "#{client_name}").split("\n");
+    const deadline = Date.now() + 5_000;
+    while (Date.now() < deadline && clients().includes(client)) execFileSync("sleep", ["0.1"]);
+    expect(clients()).not.toContain(client);
+    expect(rig.marker()).toBe("");
   } finally {
     rig.cleanup();
   }

@@ -622,13 +622,23 @@ export function jumpToAgent(
     mux.setSessionOption(name, "prefix", "None");
     mux.setSessionOption(name, "detach-on-destroy", "previous");
 
-    return mux.switchClient(client, name)
-      ? { ok: true }
-      : {
-          ok: false,
-          reason: "attach_failed",
-          message: `attached to ${target} in session ${name}, but could not switch to it.`,
-        };
+    if (mux.switchClient(client, name)) return { ok: true };
+    // The wrapper started detached and may already hold a marked remote
+    // client and the host's only ssh session; nobody will ever see it. Close
+    // it, then unset the remote marks naming its client. Best effort: a mark
+    // set after this names a client that is gone, and an identity with a pid
+    // matches no later one.
+    mux.killSession(name);
+    const unmark =
+      `m=$(${tmuxPrefix} show-options -gqv ${clientOption}); ${tmuxPrefix} set-option -gu ${clientOption}; ` +
+      `[ -n "$m" ] && [ "$(${tmuxPrefix} show-options -gqv ${JUMP_CLIENT_OPTION})" = "$m" ] && ` +
+      `${tmuxPrefix} set-option -gu ${JUMP_CLIENT_OPTION}; true`;
+    run("ssh", [...SSH_OPTIONS, target, `sh -c ${shellQuote(unmark)}`]);
+    return {
+      ok: false,
+      reason: "attach_failed",
+      message: `opened session ${name} to ${target}, but could not switch to it, so closed it.`,
+    };
   }
 
   // Outside tmux there is no popup to escape, so run it directly. stdio is
