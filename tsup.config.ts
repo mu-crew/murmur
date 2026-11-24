@@ -13,7 +13,7 @@ export default defineConfig([
     },
     // dist/extension/ belongs to the second config; both build in parallel.
     clean: ["!extension/**"],
-    target: "node20",
+    target: "node22",
     esbuildOptions(options) {
       options.jsx = "automatic";
     },
@@ -35,7 +35,7 @@ export default defineConfig([
     entry: { "murmur-pi": "extension/murmur-pi.ts", store: "extension/store.ts" },
     format: ["esm"],
     clean: true,
-    target: "node20",
+    target: "node22",
     splitting: false,
     sourcemap: true,
     outDir: "dist/extension",
