@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, expect, test, vi } from "vitest";
@@ -160,6 +160,50 @@ test("multi-field tmux reads preserve names, socket paths and option values cont
     vi.stubEnv("TMUX_PANE", pane);
     expect(tmux.currentWindow()).toEqual(location);
     expect(tmux.currentView()?.location).toEqual(location);
+  } finally {
+    vi.unstubAllEnvs();
+    try {
+      run("kill-server");
+    } catch {
+      // Already gone, or never started.
+    }
+  }
+});
+
+test("localPaneProcesses keeps a command name containing a pipe and a backslash intact", () => {
+  const dir = join(TMUX_ROOT, "bin");
+  const socket = join(TMUX_ROOT, "proc|~1");
+  const name = "p|\\q";
+  // tmux itself stores a backslash in a process or session name doubled (its
+  // own vis encoding, in every locale), so the reader must return what tmux
+  // holds: `p|\\q`, the pipe unsplit and no further mangling.
+  const held = "p|\\\\q";
+  const run = (...args: string[]) =>
+    execFileSync("tmux", ["-S", socket, "-f", "/dev/null", ...args], {
+      encoding: "utf8",
+      timeout: 10_000,
+      stdio: ["ignore", "pipe", "pipe"],
+    }).trim();
+
+  try {
+    mkdirSync(dir, { recursive: true });
+    // /bin/sleep is a platform binary that macOS kills once copied.
+    copyFileSync(process.execPath, join(dir, name));
+    chmodSync(join(dir, name), 0o755);
+    vi.stubEnv("LC_ALL", "C");
+    run("new-session", "-d", "-s", "proc", join(dir, name), "-e", "setTimeout(() => {}, 300000)");
+    const pane = asPaneId(run("display-message", "-p", "#{pane_id}"));
+    const serverPid = Number(run("display-message", "-p", "#{pid}"));
+    vi.stubEnv("TMUX", `${socket},${serverPid},0`);
+    // tmux learns the foreground process name a moment after exec.
+    let found: ReturnType<typeof tmux.localPaneProcesses> = [];
+    for (let i = 0; i < 50 && found.length === 0; i++) {
+      found = tmux.localPaneProcesses(new Set([held]));
+      if (found.length === 0) execFileSync("sleep", ["0.1"]);
+    }
+    expect(run("display-message", "-p", "-t", pane, "#{pane_current_command}")).toBe(held);
+    expect(found.map((row) => [row.pane, row.current_command])).toEqual([[pane, held]]);
+    expect(found[0]?.arguments).toContain(name);
   } finally {
     vi.unstubAllEnvs();
     try {
