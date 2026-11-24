@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync, realpathSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
-import { DASH_PANE_OPTION, JUMP_CLIENT_OPTION, JUMP_HOOK_INDEX } from "./goto.js";
+import { DASH_PANE_OPTION, JUMP_CLIENT_OPTION } from "./goto.js";
 import { helperPath } from "./helper-path.js";
 import {
   asPaneId,
@@ -103,6 +103,8 @@ export interface Mux {
   sessionNamed(name: string): boolean;
   newSession(name: string, command: string): boolean;
   setSessionOption(session: string, option: string, value: string): void;
+  sessionOption(session: string, option: string): string | null;
+  killSession(session: string): boolean;
   switchClient(client: string | null, session: string): boolean;
   // --- goto seam ----------------------------------------------------------
   // `murmur dash --goto` decides from server-global tmux options only, so each
@@ -121,10 +123,6 @@ export interface Mux {
   // tty path from inheriting a dead jump's marker.
   clientIdentity(): string | null;
   jumpClientMarker(): string | null;
-  // Arms a ONE-SHOT client-attached hook so the next client to attach marks
-  // itself as murmur's. Run on the REMOTE server by the jump, just before its
-  // ssh attaches, which is what keeps an ordinary human login unmarked.
-  armJumpMarkerCommand(): string;
   detachClient(client: string): boolean;
   // The pane and window of the client running this command -- the key press's
   // client. Untargeted on purpose: `run-shell` exports no $TMUX_PANE.
@@ -747,6 +745,14 @@ export const tmux: Mux = {
     runTmux(["set-option", "-t", exactPaneTarget(session), option, value]);
   },
 
+  sessionOption(session, option) {
+    return runTmux(["show-options", "-qv", "-t", exactPaneTarget(session), option]) || null;
+  },
+
+  killSession(session) {
+    return runTmux(["kill-session", "-t", exactSession(session)]) !== null;
+  },
+
   switchClient(client, session) {
     const target = exactSession(session);
     const args = client
@@ -786,17 +792,6 @@ export const tmux: Mux = {
 
   jumpClientMarker() {
     return runTmux(["show-options", "-gqv", JUMP_CLIENT_OPTION]) || null;
-  },
-
-  armJumpMarkerCommand() {
-    // Indexed, so it appends to the user's own client-attached hooks instead of
-    // replacing them, and `set-hook -gu` on the same index inside the hook body
-    // makes it fire exactly once -- verified against tmux 3.7c.
-    //
-    // `-F` expands the format in the VALUE at hook time, when the attaching
-    // client exists; expanding it now would record the wrong client or none.
-    const hook = `client-attached[${JUMP_HOOK_INDEX}]`;
-    return `set-hook -g '${hook}' "set-option -gF ${JUMP_CLIENT_OPTION} '#{client_name} #{client_created}' ; set-hook -gu '${hook}'"`;
   },
 
   detachClient(client) {

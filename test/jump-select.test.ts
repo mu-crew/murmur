@@ -166,7 +166,8 @@ test("enter focuses an attached local pane instead of opening another remote ses
       {
         pane: attached,
         current_command: "et",
-        arguments: "MU_AGENT_NAME=worker-1 MU_WORKSTREAM=murmur et dev",
+        // ps argv carries no environment; see attachesPane in src/status.ts.
+        arguments: "et dev -c tmux attach -t mu-worker-1",
       },
     ],
     attach: vi.fn(() => true),

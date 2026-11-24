@@ -1,4 +1,7 @@
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, rmSync } from "node:fs";
 import { expect, test } from "vitest";
+import { SSH_OPTIONS } from "../src/channel.js";
 import {
   acknowledgeAttention,
   buildClearDelivery,
@@ -8,6 +11,8 @@ import {
   editComposer,
   emptyComposer,
   emptyFilter,
+  type InputDelivery,
+  sendEscape,
   sendPrompt,
 } from "../src/dash-input.js";
 import { asPaneId, asSessionId, asWindowId } from "../src/ids.js";
@@ -85,7 +90,11 @@ test("local prompt delivery keeps prompt bytes on stdin", () => {
   const delivery = buildPromptDelivery(pane(true), "hello 'remote'\nsecond", null, "input-1");
   expect(delivery).toEqual({
     command: "tmux",
+    // `-L default`: a bare tmux follows $TMUX, so a dash inside another server
+    // would deliver to that server's `%9`.
     args: [
+      "-L",
+      "default",
       "load-buffer",
       "-b",
       "input-1",
@@ -121,7 +130,7 @@ test("remote prompt delivery wraps tmux in ssh and quotes the pane", () => {
 test("Escape delivery has no prompt input", () => {
   expect(buildEscapeDelivery(pane(true), null)).toEqual({
     command: "tmux",
-    args: ["send-keys", "-t", "%9", "Escape"],
+    args: ["-L", "default", "send-keys", "-t", "%9", "Escape"],
     input: "",
   });
 });
@@ -257,5 +266,103 @@ test("acknowledging a remote pane runs murmur clear on its node", async () => {
     "clear",
     "--pane",
     "'%9'\\''bad'",
+  ]);
+});
+
+test("prompt and Escape reach only the selected server's pane, locally and over ssh", async () => {
+  // Two real servers, each with a `%0`. Deliveries that ignored the server sent
+  // to whichever `%0` a bare tmux found. The non-target must receive nothing.
+  //
+  // Private sockets under a short TMUX_TMPDIR (macOS's per-user $TMPDIR is too
+  // long for a unix socket path), torn down on every exit path.
+  const root = mkdtempSync("/tmp/murmur-dash-");
+  const labels = [`murmur-dash-a-${process.pid}`, `murmur-dash-b-${process.pid}`];
+  const previous = process.env.TMUX_TMPDIR;
+  process.env.TMUX_TMPDIR = root;
+  const tmux = (label: string, ...args: string[]) =>
+    execFileSync("tmux", ["-L", label, "-f", "/dev/null", ...args], {
+      encoding: "utf8",
+      timeout: 10_000,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+  const screen = (label: string) => tmux(label, "capture-pane", "-p", "-t", "%0");
+  // ssh's remote half: the words after the target, joined, run by a shell.
+  const viaSsh = (delivery: InputDelivery) => {
+    if (delivery.command !== "ssh") throw new Error("expected ssh");
+    execFileSync("sh", ["-c", delivery.args.slice(SSH_OPTIONS.length + 1).join(" ")], {
+      input: delivery.input,
+      timeout: 10_000,
+      stdio: ["pipe", "ignore", "pipe"],
+    });
+    return Promise.resolve();
+  };
+  const settle = (predicate: () => boolean) => {
+    const deadline = Date.now() + 5_000;
+    while (!predicate() && Date.now() < deadline) execFileSync("sleep", ["0.05"]);
+  };
+  try {
+    for (const label of labels) tmux(label, "new-session", "-d", "-x", "80", "-y", "10", "cat");
+    for (const label of labels) {
+      expect(tmux(label, "list-panes", "-a", "-F", "#{pane_id}").trim()).toBe("%0");
+    }
+    const [a, b] = labels as [string, string];
+    const on = (label: string, local: boolean): PaneView => ({
+      ...pane(local, "%0"),
+      server: { kind: "label", value: label },
+    });
+    const store = {
+      peers: () => [{ host_id: "remote-host", name: "dev", target: "dev" }],
+    } as unknown as Store;
+
+    await expect(sendPrompt(store, on(b, true), "local-to-b")).resolves.toEqual({ ok: true });
+    await expect(sendPrompt(store, on(a, false), "remote-to-a", viaSsh)).resolves.toEqual({
+      ok: true,
+    });
+    await expect(sendEscape(store, on(b, false), viaSsh)).resolves.toEqual({ ok: true });
+    settle(() => screen(a).includes("remote-to-a") && screen(b).includes("^["));
+
+    expect(screen(b)).toContain("local-to-b");
+    expect(screen(b)).toContain("^[");
+    expect(screen(a)).toContain("remote-to-a");
+    expect(screen(a)).not.toContain("local-to-b");
+    expect(screen(a)).not.toContain("^[");
+    expect(screen(b)).not.toContain("remote-to-a");
+  } finally {
+    for (const label of labels) {
+      try {
+        tmux(label, "kill-server");
+      } catch {
+        // Never started.
+      }
+    }
+    if (previous === undefined) delete process.env.TMUX_TMPDIR;
+    else process.env.TMUX_TMPDIR = previous;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("acknowledging names the pane's server, locally and on its node", async () => {
+  const server = { kind: "path" as const, value: "/tmp/private sock" };
+  const attention = [{ kind: "done" as const, requested_at: 1, message: "" }];
+  const store = {
+    peers: () => [{ host_id: "remote-host", name: "dev", target: "dev" }],
+  } as unknown as Store;
+  const cleared: unknown[] = [];
+  await acknowledgeAttention(
+    store,
+    { ...pane(true), server, attention },
+    (id, named) => cleared.push([id, named]),
+    async () => {
+      throw new Error("must not run");
+    },
+  );
+  expect(cleared).toEqual([["%9", server]]);
+  expect(buildClearDelivery({ ...pane(false), server }, "dev").args.slice(-6)).toEqual([
+    "murmur",
+    "clear",
+    "--pane",
+    "'%9'",
+    "-S",
+    "'/tmp/private sock'",
   ]);
 });

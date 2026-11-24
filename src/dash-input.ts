@@ -2,7 +2,10 @@ import { spawn } from "node:child_process";
 import { peerForHost, shellQuote } from "./agents.js";
 import { SSH_OPTIONS } from "./channel.js";
 import { helperPath } from "./helper-path.js";
+import type { PaneId } from "./ids.js";
+import { tmuxArgs as serverArgs } from "./mux.js";
 import type { Store } from "./store.js";
+import type { TmuxServer } from "./types.js";
 import type { PaneView } from "./view.js";
 
 export type Composer = {
@@ -112,20 +115,45 @@ function tmuxArgs(pane: string, buffer: string): string[] {
   ];
 }
 
+/**
+ * Every delivery names the pane's server: pane ids are unique per host AND
+ * server, so a bare tmux sent to whichever `%N` its own server holds. Locally
+ * the default server is pinned with `-L default` (a bare tmux follows $TMUX);
+ * over ssh it stays bare, since the remote shell is not inside tmux.
+ */
+function remoteSelector(server: TmuxServer): string[] {
+  if (server.kind === "default") return [];
+  return [server.kind === "label" ? "-L" : "-S", shellQuote(server.value)];
+}
+
 export function buildPromptDelivery(
   pane: PaneView,
   text: string,
   target: string | null,
   buffer = `murmur-input-${process.pid}`,
 ): InputDelivery {
-  if (pane.local) return { command: "tmux", args: tmuxArgs(pane.pane, buffer), input: text };
+  if (pane.local) {
+    return {
+      command: "tmux",
+      args: serverArgs(pane.server, tmuxArgs(pane.pane, buffer)),
+      input: text,
+    };
+  }
   const args = tmuxArgs(shellQuote(pane.pane), buffer).map((arg) => (arg === ";" ? "\\;" : arg));
-  return { command: "ssh", args: [...SSH_OPTIONS, target ?? "", "tmux", ...args], input: text };
+  return {
+    command: "ssh",
+    args: [...SSH_OPTIONS, target ?? "", "tmux", ...remoteSelector(pane.server), ...args],
+    input: text,
+  };
 }
 
 export function buildEscapeDelivery(pane: PaneView, target: string | null): InputDelivery {
   if (pane.local) {
-    return { command: "tmux", args: ["send-keys", "-t", pane.pane, "Escape"], input: "" };
+    return {
+      command: "tmux",
+      args: serverArgs(pane.server, ["send-keys", "-t", pane.pane, "Escape"]),
+      input: "",
+    };
   }
   return {
     command: "ssh",
@@ -133,6 +161,7 @@ export function buildEscapeDelivery(pane: PaneView, target: string | null): Inpu
       ...SSH_OPTIONS,
       target ?? "",
       "tmux",
+      ...remoteSelector(pane.server),
       "send-keys",
       "-t",
       shellQuote(pane.pane),
@@ -199,7 +228,15 @@ export function sendPrompt(
 export function buildClearDelivery(pane: PaneView, target: string): InputDelivery {
   return {
     command: "ssh",
-    args: [...SSH_OPTIONS, target, "murmur", "clear", "--pane", shellQuote(pane.pane)],
+    args: [
+      ...SSH_OPTIONS,
+      target,
+      "murmur",
+      "clear",
+      "--pane",
+      shellQuote(pane.pane),
+      ...remoteSelector(pane.server),
+    ],
     input: "",
   };
 }
@@ -212,12 +249,12 @@ export function buildClearDelivery(pane: PaneView, target: string): InputDeliver
 export function acknowledgeAttention(
   store: Store,
   pane: PaneView,
-  clearLocal: (pane: string) => void,
+  clearLocal: (pane: PaneId, server: TmuxServer) => void,
   run: InputRunner = runInput,
 ): Promise<InputResult> {
   if (pane.attention.length === 0) return Promise.resolve({ ok: true });
   if (pane.local) {
-    clearLocal(pane.pane);
+    clearLocal(pane.pane, pane.server);
     return Promise.resolve({ ok: true });
   }
   return deliver(store, pane, (target) => buildClearDelivery(pane, target ?? ""), run);

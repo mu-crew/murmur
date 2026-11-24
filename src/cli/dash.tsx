@@ -21,6 +21,7 @@ import {
   editComposer,
   emptyComposer,
   emptyFilter,
+  type InputResult,
   sendEscape,
   sendPrompt,
 } from "../dash-input.js";
@@ -70,6 +71,7 @@ import {
   glanceViewport,
   moveIndex,
   paneFingerprint,
+  dashPaneKey as paneKey,
   routeDashKey,
   scrollLabel,
 } from "../dash-tick.js";
@@ -87,6 +89,7 @@ import {
   sessionNotice,
 } from "../paint.js";
 import { type Status, status, statusWithCollect } from "../status.js";
+import type { Store } from "../store.js";
 import {
   age,
   harnessTag,
@@ -170,8 +173,29 @@ export function requireDashTmux(
   return false;
 }
 
-function paneKey(pane: PaneView): string {
-  return `${pane.host_id}:${pane.pane}`;
+/**
+ * The selected row's index. By the shared host/server/pane key, so the second
+ * of two `%0`s on different tmux servers of one host is selected as itself.
+ * Exported so tests drive the selection App runs, not a copy of it.
+ */
+export function selectedPaneIndex(panes: readonly PaneView[], key: string | null): number {
+  return Math.max(
+    0,
+    panes.findIndex((pane) => paneKey(pane) === key),
+  );
+}
+
+/**
+ * Acknowledge the pane's attention the way opening its composer does. A local
+ * pane is cleared on ITS server: without one, clearPane resolves the dash's own
+ * server and clears whichever pane there has the same id.
+ */
+export function acknowledgeDashPane(
+  store: Store,
+  pane: PaneView,
+  mux: Mux = tmux,
+): Promise<InputResult> {
+  return acknowledgeAttention(store, pane, (id, server) => clearPane(id, mux, server));
 }
 
 function nextSort(sort: DashSort): DashSort {
@@ -472,10 +496,7 @@ export function App({ dashStore, initial }: DashProps) {
     () => (query.trim() ? dashRows(view.panes, prefs, now, query) : allPanes),
     [view, prefs, now, query, allPanes],
   );
-  const selectedIndex = Math.max(
-    0,
-    panes.findIndex((pane) => paneKey(pane) === selectedKey),
-  );
+  const selectedIndex = selectedPaneIndex(panes, selectedKey);
   const selected = panes[selectedIndex];
   const inputMode = inputTarget !== null;
   const previewPane = inputTarget ?? selected;
@@ -934,7 +955,7 @@ export function App({ dashStore, initial }: DashProps) {
       // Opening the prompt is answering the agent, the same fact tmux focus
       // reports, so it acknowledges the pane's done/blocked/crashed.
       const target = selected;
-      void acknowledgeAttention(store, target, (pane) => clearPane(pane)).then((result) => {
+      void acknowledgeDashPane(store, target).then((result) => {
         if (!result.ok) setInputError(result.message);
         else if (target.attention.length > 0) {
           const identity = requireIdentity();

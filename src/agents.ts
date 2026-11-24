@@ -1,14 +1,16 @@
 import { spawnSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { SSH_OPTIONS } from "./channel.js";
+import { JUMP_CLIENT_OPTION } from "./goto.js";
 import { findHelper } from "./helper-path.js";
 import { asPaneId } from "./ids.js";
 import {
   currentJumpCommand,
   renderJumpCommand,
   shellQuote,
-  suggestedJumpCommand,
   supportsServer,
   tmuxAttachCommand,
+  unsupportedServerMessage,
 } from "./jump-command.js";
 import { type Mux, tmux } from "./mux.js";
 import type { Store } from "./store.js";
@@ -111,19 +113,6 @@ export function peerForHost(
   if (!peer) return null;
   const target = peer.target ?? peer.name;
   return target ? { peer, target } : null;
-}
-
-/**
- * A shell command on one line, meaning the same thing: a backslash-newline
- * continuation is a space, any other newline a `;`. The remediation is printed
- * on one stderr line, and joining the lines with a space instead would turn a
- * continuation into `\\ ` and the next line's indent into part of an argument.
- */
-function singleLineShell(command: string): string {
-  return command
-    .replaceAll(/\\\r?\n[ \t]*/g, " ")
-    .replaceAll(/[ \t]*\r?\n\s*/g, "; ")
-    .trim();
 }
 
 /** A `~`-marked wrapper name, with tmux target syntax stripped from the label. */
@@ -308,6 +297,13 @@ function runOutside(
   return result.status === 0 && !result.failed;
 }
 
+/**
+ * Local session option on a jump wrapper naming the remote server-global
+ * option its remote client recorded itself in, as `name created`.
+ */
+export const WRAPPER_CLIENT_OPTION = "@murmur_wrapper_client";
+const WRAPPER_OPTION = /^@murmur_wrapper_[0-9a-f]+$/;
+
 export function jumpToAgent(
   store: Store,
   agent: PaneView,
@@ -381,9 +377,7 @@ export function jumpToAgent(
     return {
       ok: false,
       reason: "unsupported_server",
-      message:
-        `murmur: ${peer.name}'s jump command uses {pane}, which cannot identify the tmux server holding ${agentLabel(agent)} (${agent.pane})\n\n` +
-        `update it:\n  murmur peer set ${/^[\w.-]+$/.test(peer.name) ? peer.name : shellQuote(peer.name)} --jump-command ${shellQuote(singleLineShell(suggestedJumpCommand(peer.jump_command, target)))}`,
+      message: unsupportedServerMessage(peer, target, agentLabel(agent), agent.pane),
     };
   }
 
@@ -403,33 +397,24 @@ export function jumpToAgent(
   // rides; without ConnectTimeout it inherits the kernel's 75s dial, so a
   // sleeping laptop froze the picker for ten seconds before admitting it.
   //
-  // The probe also ARMS the jump marker when there is a local session to come
-  // back to, so `murmur dash --goto` on the remote machine detaches instead of
-  // switching. Appended to the probe rather than sent as its own ssh: a second
-  // round trip would double the jump's latency, and arming it after the attach
-  // is impossible -- the hook has to exist before the client it marks. Appended
-  // rather than prepended so the probe's pane list stays the readable output.
-  //
-  // `process.env.TMUX` gates it because the outside-tmux path below has no
-  // wrapper and no local client: a detach there would drop the operator out of
-  // their own shell's session for nothing.
-  //
-  // `|| true`, because the remote shell's exit status is its LAST command's: a
-  // bare `;` would report the ARM's status and discard the probe's. The arm is
-  // best effort -- an unmarked jump still lands on the agent, it only leaves
-  // PREFIX G switching to the remote dash instead of coming home -- while the
-  // probe's status is what every branch below reads. Without this, a remote
-  // tmux too old for the indexed hook made every jump to that host report
-  // "has no tmux server running" about a host that had just listed its panes.
+  // Named after the peer as configured, matching the picker's host column: a
+  // self-reported display_name can be a container id, unrecognisable in a
+  // session list.
+  const name = remoteSessionName(peer.name, agent.host_id, agent.server);
+  // Reuse this host's wrapper rather than stacking one per jump -- three jumps
+  // to bubba left three identical windows. Matched on name, the only handle
+  // available: the ssh is opaque and a remote session id is not a local
+  // address.
+  const reuse = Boolean(env.TMUX) && mux.sessionNamed(name);
+
   const tmuxPrefix =
     agent.server.kind === "default"
       ? "tmux"
       : `tmux ${agent.server.kind === "label" ? "-L" : "-S"} ${shellQuote(agent.server.value)}`;
-  const arm = env.TMUX ? ` ; { ${tmuxPrefix} ${mux.armJumpMarkerCommand()} || true; }` : "";
   const probe = run("ssh", [
     ...SSH_OPTIONS,
     target,
-    `${tmuxPrefix} list-panes -a -F ${shellQuote("#{pane_id}")}${arm}`,
+    `${tmuxPrefix} list-panes -a -F ${shellQuote("#{pane_id}")}`,
   ]);
   if (probe.status !== 0) {
     // 255 is ssh's own failure code; anything else came from the remote command.
@@ -477,6 +462,17 @@ export function jumpToAgent(
   // "only a pane may decide whether an agent exists" exists to prevent, applied
   // one level short of the action. `tmux attach -t %pane` resolves session,
   // window and pane together, verified against a real tmux server.
+  //
+  // The wrapper's attach (below) also MARKS its own remote client, so `murmur
+  // dash --goto` on the remote machine detaches instead of switching. Part of
+  // the attach command, so only a client that really attached is marked: a
+  // one-shot client-attached hook armed by the probe was left behind whenever
+  // the wrapper then failed to start, and marked the next unrelated login. A
+  // `{pane}` template has no attach of ours to extend, so it stays unmarked;
+  // PREFIX G there opens the remote dash rather than coming home.
+  //
+  // Outside tmux there is no wrapper and no local client: a detach there would
+  // drop the operator out of their own shell's session for nothing.
   const attach = renderJumpCommand(template, agent);
 
   // Hand the ssh to tmux as its own detached SESSION rather than running it
@@ -499,16 +495,7 @@ export function jumpToAgent(
     const client = mux.clientName();
     const origin = mux.currentTarget();
 
-    // Named after the peer as configured, matching the picker's host column: a
-    // self-reported display_name can be a container id, unrecognisable in a
-    // session list.
-    const name = remoteSessionName(peer.name, agent.host_id, agent.server);
-
-    // Reuse this host's wrapper rather than stacking one per jump -- three jumps
-    // to bubba left three identical windows. Matched on name, the only handle
-    // available: the ssh is opaque and a remote session id is not a local
-    // address.
-    if (mux.sessionNamed(name)) {
+    if (reuse) {
       // RETARGET the remote client first. Reuse is matched on the host's name
       // alone, so without this the wrapper still shows whichever pane the last
       // jump left it on: jump to agent A on a host, come back, pick agent B on
@@ -518,34 +505,50 @@ export function jumpToAgent(
       // exists to prevent, and the local attach had the identical bug.
       //
       // One extra round trip, on the reuse path only, over the socket the
-      // wrapper's own ssh already warmed. A failure here fails the jump.
-      // The wrapper's ssh process and remote tmux client stay alive while the
-      // local client is elsewhere, so reuse retargets that existing remote
-      // client. No remote client-attached event occurs here; arming another
-      // one-shot hook would only leave a trap for the next unrelated login.
-      const retarget = run("ssh", [
-        ...SSH_OPTIONS,
-        target,
-        `${tmuxPrefix} switch-client -t ${shellQuote(agent.pane)}`,
-      ]);
-      // Reported, and BEFORE the local switch: success with the client left on
-      // the wrong pane (or wrong server) is a jump that "worked" and went
-      // nowhere useful, and the client must not move on a failed retarget.
-      if (retarget.status !== 0 || retarget.failed) {
+      // wrapper's own ssh already warmed.
+      //
+      // `-c` the wrapper's OWN remote client, which its attach recorded under
+      // a per-wrapper option (named in the local session's
+      // WRAPPER_CLIENT_OPTION). A bare `switch-client -t` lets tmux pick a
+      // client: with another operator attached to that host it moved theirs,
+      // reported success, and left the wrapper where it was. The recorded
+      // `name created` must still be a live client, since tty names recycle.
+      // `sh -c`, so a non-POSIX login shell on the remote parses none of it.
+      const recorded = mux.sessionOption(name, WRAPPER_CLIENT_OPTION);
+      if (recorded && WRAPPER_OPTION.test(recorded)) {
+        const script =
+          `m=$(${tmuxPrefix} show-options -gqv ${recorded}) && [ -n "$m" ] && ` +
+          `${tmuxPrefix} list-clients -F ${shellQuote("#{client_name} #{client_created}")} | grep -Fqx -- "$m" && ` +
+          `${tmuxPrefix} switch-client -c "\${m% *}" -t ${shellQuote(agent.pane)}`;
+        const retarget = run("ssh", [...SSH_OPTIONS, target, `sh -c ${shellQuote(script)}`]);
+        // Reported, and BEFORE the local switch: the client must not move on
+        // a retarget that did not happen.
+        if (retarget.status === 255 || retarget.failed) {
+          return {
+            ok: false,
+            reason: "attach_failed",
+            message: `could not reach ${target} to retarget the existing ${name} session at ${agent.pane}.`,
+          };
+        }
+        if (retarget.status === 0) {
+          return mux.switchClient(client, name)
+            ? { ok: true }
+            : {
+                ok: false,
+                reason: "attach_failed",
+                message: `could not switch to the existing ${name} session.`,
+              };
+        }
+      }
+      // The wrapper's client cannot be identified (an older wrapper, a client
+      // gone): replace the wrapper rather than steer some other client.
+      if (!mux.killSession(name)) {
         return {
           ok: false,
           reason: "attach_failed",
-          message: `could not retarget the existing ${name} session at ${agent.pane}.`,
+          message: `could not replace the existing ${name} session.`,
         };
       }
-      if (!mux.switchClient(client, name)) {
-        return {
-          ok: false,
-          reason: "attach_failed",
-          message: `could not switch to the existing ${name} session.`,
-        };
-      }
-      return { ok: true };
     }
 
     // The peer's opaque command template owns its shell quoting. The default
@@ -563,7 +566,11 @@ export function jumpToAgent(
       ? `; tmux switch-client ${client ? `-c ${shellQuote(client)} ` : ""}-t ${shellQuote(`=${origin}`)}`
       : "";
 
-    if (!mux.newSession(name, `${attach}${restore}`)) {
+    // A fresh option per wrapper, so reuse can name this wrapper's remote
+    // client among any others on that host, including other machines' jumps.
+    const clientOption = `@murmur_wrapper_${randomBytes(6).toString("hex")}`;
+    const wrapper = renderJumpCommand(template, agent, [JUMP_CLIENT_OPTION, clientOption]);
+    if (!mux.newSession(name, `${wrapper}${restore}`)) {
       return {
         ok: false,
         reason: "attach_failed",
@@ -571,6 +578,7 @@ export function jumpToAgent(
       };
     }
 
+    mux.setSessionOption(name, WRAPPER_CLIENT_OPTION, clientOption);
     mux.setSessionOption(name, "status", "off");
     mux.setSessionOption(name, "prefix", "None");
     mux.setSessionOption(name, "detach-on-destroy", "previous");
