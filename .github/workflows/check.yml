@@ -24,8 +24,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Current Node, and the engines floor in package.json.
-        node: [26, "22.12"]
+        # Current Node, and the engines floor in package.json. 22.14, not the
+        # ">=22" better-sqlite3 declares: it segfaults on 22.13 and older.
+        node: [26, "22.14"]
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
@@ -41,8 +42,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Current Node, and the engines floor in package.json.
-        node: [26, "22.12"]
+        # Current Node, and the engines floor in package.json. 22.14, not the
+        # ">=22" better-sqlite3 declares: it segfaults on 22.13 and older.
+        node: [26, "22.14"]
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
@@ -61,7 +63,7 @@ jobs:
       fail-fast: false
       matrix:
         project: [unit, tmux-rig]
-        node: [26, "22.12"]
+        node: [26, "22.14"]
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
