@@ -1,4 +1,4 @@
-import type { PaneIdentity, TmuxServer } from "./types.js";
+import type { PaneIdentity, PeerRecord, TmuxServer } from "./types.js";
 
 export const ATTACH_PLACEHOLDER = "{attach}";
 export const PANE_PLACEHOLDER = "{pane}";
@@ -51,4 +51,36 @@ export function renderJumpCommand(template: string, destination: PaneIdentity): 
 
 export function supportsServer(template: string, server: TmuxServer): boolean {
   return server.kind === "default" || !template.includes(PANE_PLACEHOLDER);
+}
+
+/**
+ * A shell command on one line, meaning the same thing: a backslash-newline
+ * continuation is a space, any other newline a `;`. The remediation is printed
+ * on one stderr line, and joining the lines with a space instead would turn a
+ * continuation into `\\ ` and the next line's indent into part of an argument.
+ */
+function singleLineShell(command: string): string {
+  return command
+    .replaceAll(/\\\r?\n[ \t]*/g, " ")
+    .replaceAll(/[ \t]*\r?\n\s*/g, "; ")
+    .trim();
+}
+
+/**
+ * The refusal for a `{pane}` template and a named-server pane, shared by
+ * `murmur jump` and `murmur jump-command` so both name the same fix. `{pane}`
+ * is a bare %N, which the remote resolves on its DEFAULT server.
+ */
+export function unsupportedServerMessage(
+  peer: Pick<PeerRecord, "name" | "jump_command">,
+  target: string,
+  label: string,
+  pane: string,
+): string {
+  const name = /^[\w.-]+$/.test(peer.name) ? peer.name : shellQuote(peer.name);
+  const fix = shellQuote(singleLineShell(suggestedJumpCommand(peer.jump_command, target)));
+  return (
+    `murmur: ${peer.name}'s jump command uses {pane}, which cannot identify the tmux server holding ${label} (${pane})\n\n` +
+    `update it:\n  murmur peer set ${name} --jump-command ${fix}`
+  );
 }

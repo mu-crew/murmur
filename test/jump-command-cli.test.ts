@@ -27,9 +27,10 @@ function addPeer(
     server?: TmuxServer;
     pending?: number;
   }>,
+  jumpCommand = "fake-transport --command {attach}",
 ): void {
   const store = openStore();
-  store.addPeer(name, target, "fake-transport --command {attach}");
+  store.addPeer(name, target, jumpCommand);
   const snapshot: Snapshot = {
     murmur_snapshot: 7,
     host_id: `host-${name}`,
@@ -121,6 +122,48 @@ test("text output is one command that survives command substitution literally", 
   );
   expect(rendered.stderr).toBe("");
   expect(readFileSync(log, "utf8")).toBe("--command\ntmux -L 'mule server' attach -t '%34'\n");
+});
+
+test("a {pane} template refuses a named-server row instead of printing a default-server attach", () => {
+  // `{pane}` expands to a bare %N, and running the printed command lands on %N
+  // of the remote DEFAULT server -- some other pane, or nothing. `murmur jump`
+  // already refused this; the printer must say the same thing, not exit 0.
+  addPeer(
+    "dev",
+    "developer.example",
+    [
+      { pane: "%34", agent: "mule-job", server: { kind: "label", value: "mule" } },
+      { pane: "%35", agent: "plain" },
+    ],
+    'et dev -c "tmux attach -t {pane}"',
+  );
+
+  for (const json of [[], ["--json"]]) {
+    const refused = cliResult("jump-command", "--host", "dev", "--agent", "mule-job", ...json);
+    expect(refused.status).toBe(2);
+    expect(refused.stdout).toBe("");
+    expect(refused.stderr).toBe(
+      "murmur: dev's jump command uses {pane}, which cannot identify the tmux server holding mule-job (%34)\n\n" +
+        "update it:\n  murmur peer set dev --jump-command 'et dev -c {attach}'\n",
+    );
+  }
+  // The default server is what `{pane}` can address, so that row still renders.
+  expect(cli("jump-command", "--host", "dev", "--agent", "plain")).toBe(
+    'et dev -c "tmux attach -t %35"\n',
+  );
+});
+
+test("a generated legacy default is upgraded for a named-server row", () => {
+  const quote = (value: string) => `'${value.replaceAll("'", `'\\''`)}'`;
+  addPeer(
+    "dev",
+    "developer.example",
+    [{ pane: "%34", agent: "mule-job", server: { kind: "label", value: "mule" } }],
+    `ssh -t ${quote("developer.example")} tmux attach -t ${quote(quote("{pane}"))}`,
+  );
+  expect(cli("jump-command", "--host", "dev", "--agent", "mule-job")).toBe(
+    `ssh -t 'developer.example' env LC_CTYPE=C.UTF-8 ${quote("tmux -L 'mule' attach -t '%34'")}\n`,
+  );
 });
 
 test("JSON has the stable address and rendered-command shape for hidden crew", () => {

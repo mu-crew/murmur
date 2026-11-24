@@ -577,11 +577,13 @@ start.
 be ssh:
 
 ```bash
-murmur peer set dev --jump-command 'et dev -c "tmux attach -t {pane}"'
+murmur peer set dev --jump-command 'et dev -c {attach}'
 ```
 
-murmur substitutes `{pane}` and runs the rest unparsed. Default is
-`ssh -t <target> env LC_CTYPE=C.UTF-8 tmux attach`. The explicit UTF-8 locale
+murmur substitutes `{attach}` (a quoted `tmux attach` naming the pane's server)
+and runs the rest unparsed. `{pane}` is a bare `%N`, so it only reaches the
+default server; jumps to a named-server pane refuse it. Default is
+`ssh -t <target> env LC_CTYPE=C.UTF-8 {attach}`. The explicit UTF-8 locale
 keeps Nerd Font glyphs intact when the remote SSH login has no locale. Override
 the command when sshd sets `MaxSessions 1` — see [SSH.md](../SSH.md).
 

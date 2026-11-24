@@ -4,11 +4,10 @@ import { findHelper } from "./helper-path.js";
 import { asPaneId } from "./ids.js";
 import {
   currentJumpCommand,
-  shellQuote as quoteCommand,
   renderJumpCommand,
-  suggestedJumpCommand,
   supportsServer,
   tmuxAttachCommand,
+  unsupportedServerMessage,
 } from "./jump-command.js";
 import { type Mux, tmux } from "./mux.js";
 import type { Store } from "./store.js";
@@ -142,19 +141,6 @@ export function peerForHost(
   if (!peer) return null;
   const target = peer.target ?? peer.name;
   return target ? { peer, target } : null;
-}
-
-/**
- * A shell command on one line, meaning the same thing: a backslash-newline
- * continuation is a space, any other newline a `;`. The remediation is printed
- * on one stderr line, and joining the lines with a space instead would turn a
- * continuation into `\\ ` and the next line's indent into part of an argument.
- */
-function singleLineShell(command: string): string {
-  return command
-    .replaceAll(/\\\r?\n[ \t]*/g, " ")
-    .replaceAll(/[ \t]*\r?\n\s*/g, "; ")
-    .trim();
 }
 
 export function remoteSessionName(
@@ -411,9 +397,7 @@ export function jumpToAgent(
     return {
       ok: false,
       reason: "unsupported_server",
-      message:
-        `murmur: ${peer.name}'s jump command uses {pane}, which cannot identify the tmux server holding ${agentLabel(agent)} (${agent.pane})\n\n` +
-        `update it:\n  murmur peer set ${/^[\w.-]+$/.test(peer.name) ? peer.name : quoteCommand(peer.name)} --jump-command ${quoteCommand(singleLineShell(suggestedJumpCommand(peer.jump_command, target)))}`,
+      message: unsupportedServerMessage(peer, target, agentLabel(agent), agent.pane),
     };
   }
 
