@@ -10,9 +10,9 @@ import type { TmuxServer } from "../src/types.js";
 import type { PaneView } from "../src/view.js";
 import { fakeMux } from "./helpers/fake-mux.js";
 
-// The dashboard's own selection and acknowledge wiring, with two panes that
-// share a host and a pane id and differ only in tmux server. The helpers they
-// call are tested elsewhere; these pin that App uses them with the server.
+// The dashboard's selection and acknowledge helpers, with two panes that share
+// a host and a pane id and differ only in tmux server. That App calls them, with
+// the selected row, is pinned through App itself in dash-app.test.ts.
 
 const DEFAULT = { kind: "default" } as const;
 const at = (server: TmuxServer, pane: string) => ({
