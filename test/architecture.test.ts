@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, test } from "vitest";
 
@@ -11,12 +11,16 @@ import { expect, test } from "vitest";
  * that finds it inconvenient.
  */
 
-function sourceFiles(dir = "src"): string[] {
-  return readdirSync(dir).flatMap((entry) => {
-    const path = join(dir, entry);
-    if (statSync(path).isDirectory()) return sourceFiles(path);
-    return path.endsWith(".ts") ? [path] : [];
+function walkSource(dir: string): string[] {
+  return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+    const path = join(dir, entry.name);
+    if (entry.isDirectory()) return walkSource(path);
+    return /\.tsx?$/.test(path) ? [path] : [];
   });
+}
+
+function sourceFiles(): string[] {
+  return ["src", "extension"].flatMap(walkSource);
 }
 
 test("only the store owns SQL", () => {
