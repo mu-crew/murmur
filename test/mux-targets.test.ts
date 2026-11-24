@@ -174,10 +174,10 @@ test("localPaneProcesses keeps a command name containing a pipe and a backslash 
   const dir = join(TMUX_ROOT, "bin");
   const socket = join(TMUX_ROOT, "proc|~1");
   const name = "p|\\q";
-  // tmux itself stores a backslash in a process or session name doubled (its
-  // own vis encoding, in every locale), so the reader must return what tmux
-  // holds: `p|\\q`, the pipe unsplit and no further mangling.
-  const held = "p|\\\\q";
+  // tmux's own reported value is the oracle: versions differ in how they
+  // encode a backslash in a process name (macOS 3.8 doubles it, Linux CI does
+  // not), so the reader must return exactly what tmux reports, pipe unsplit.
+  let held = "";
   const run = (...args: string[]) =>
     execFileSync("tmux", ["-S", socket, "-f", "/dev/null", ...args], {
       encoding: "utf8",
@@ -198,10 +198,11 @@ test("localPaneProcesses keeps a command name containing a pipe and a backslash 
     // tmux learns the foreground process name a moment after exec.
     let found: ReturnType<typeof tmux.localPaneProcesses> = [];
     for (let i = 0; i < 50 && found.length === 0; i++) {
-      found = tmux.localPaneProcesses(new Set([held]));
+      held = run("list-panes", "-a", "-F", "#{pane_current_command}");
+      if (held.includes("|")) found = tmux.localPaneProcesses(new Set([held]));
       if (found.length === 0) execFileSync("sleep", ["0.1"]);
     }
-    expect(run("display-message", "-p", "-t", pane, "#{pane_current_command}")).toBe(held);
+    expect(held).toContain("p|");
     expect(found.map((row) => [row.pane, row.current_command])).toEqual([[pane, held]]);
     expect(found[0]?.arguments).toContain(name);
   } finally {
