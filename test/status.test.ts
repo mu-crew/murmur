@@ -1056,6 +1056,10 @@ test("an attachment is credited to the peer its argv connects to, not the first 
     "ssh -oHostName=second.example first.example tmux attach -t %9",
     "ssh -p 2222 first.example tmux attach -t %9",
     "ssh -l someone-else first.example tmux attach -t %9",
+    // Same hostname, user and port through a bastion is the bastion's
+    // first.example, another machine.
+    "ssh -J bastion.example first.example tmux attach -t %9",
+    "ssh -o ProxyCommand=bastion-pipe first.example tmux attach -t %9",
   ]) {
     expect(attached(argv), argv).toEqual({
       first: null,

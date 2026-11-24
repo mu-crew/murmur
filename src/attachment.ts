@@ -97,8 +97,19 @@ function sameHost(a: Destination, b: Destination): boolean {
 
 export type AttachPeer = { target: string; jump_command: string };
 
-/** Where ssh actually connects once config and `-o` overrides apply. */
-type SshEnd = { host: string; user: string; port: string };
+/**
+ * Where ssh actually connects once config and `-o` overrides apply: the end
+ * and the route to it. Equal hostname, user and port behind a different
+ * ProxyJump or ProxyCommand is a different machine -- `localhost` through a
+ * bastion is the bastion's localhost -- so the proxy chain is part of it.
+ */
+export type SshRoute = {
+  host: string;
+  user: string;
+  port: string;
+  proxyjump: string;
+  proxycommand: string;
+};
 
 /**
  * Resolve ssh arguments (options, destination, maybe a command) the way ssh
@@ -106,17 +117,17 @@ type SshEnd = { host: string; user: string; port: string };
  * `ssh -o HostName=b a` is credited to b, not a. No connection is made.
  * `extra` goes before the arguments; tests pass `-F /dev/null`.
  */
-export type SshResolver = (args: readonly string[]) => SshEnd | null;
+export type SshResolver = (args: readonly string[]) => SshRoute | null;
 
 export function sshResolver(extra: readonly string[] = []): SshResolver {
   // Memoized per resolver: one status pass asks about the same argv and peer
   // target once per candidate row.
-  const memo = new Map<string, SshEnd | null>();
+  const memo = new Map<string, SshRoute | null>();
   return (args) => {
     const key = args.join("\0");
     const known = memo.get(key);
     if (known !== undefined) return known;
-    let end: SshEnd | null = null;
+    let route: SshRoute | null = null;
     try {
       const out = execFileSync(helperPath("ssh"), [...extra, "-G", ...args], {
         encoding: "utf8",
@@ -127,13 +138,38 @@ export function sshResolver(extra: readonly string[] = []): SshResolver {
       const host = field("hostname");
       const user = field("user");
       const port = field("port");
-      if (host && user && port) end = { host: host.toLowerCase(), user, port };
+      // Absent and `none` are the same direct route.
+      const proxy = (name: string) => {
+        const value = field(name) ?? "none";
+        return value === "none" ? "" : value;
+      };
+      if (host && user && port) {
+        route = {
+          host: host.toLowerCase(),
+          user,
+          port,
+          proxyjump: proxy("proxyjump"),
+          proxycommand: proxy("proxycommand"),
+        };
+      }
     } catch {
       // No ssh, a bad option, a hung `Match exec`: unresolved, so no match.
     }
-    memo.set(key, end);
-    return end;
+    memo.set(key, route);
+    return route;
   };
+}
+
+function sameRoute(a: SshRoute | null, b: SshRoute | null): boolean {
+  return (
+    a !== null &&
+    b !== null &&
+    a.host === b.host &&
+    a.user === b.user &&
+    a.port === b.port &&
+    a.proxyjump === b.proxyjump &&
+    a.proxycommand === b.proxycommand
+  );
 }
 
 function wordsOf(argv: string): string[] {
@@ -144,8 +180,9 @@ function wordsOf(argv: string): string[] {
  * Whether `argv` connects to `peer`: a recognized transport the jump command
  * names, whose destination is the peer's ssh target or the jump command's own
  * destination (an ET template can name a host alias the ssh target does not).
- * For ssh the effective destination (host, user, port) is compared, never the
- * operand alone: `-o HostName=`, `-p`, `-l` and ssh_config all reroute it.
+ * For ssh the effective route (host, user, port and proxy chain) is compared,
+ * never the operand alone: `-o HostName=`, `-p`, `-l`, `-J` and ssh_config all
+ * reroute it.
  */
 export function connectsToPeer(
   argv: string,
@@ -155,17 +192,11 @@ export function connectsToPeer(
   const here = destination(argv);
   if (!here || !commandNames(peer.jump_command).includes(here.program)) return false;
   if (here.program === "ssh") {
-    const end = resolve(wordsOf(argv).slice(1));
-    if (!end) return false;
-    const same = (other: SshEnd | null) =>
-      other !== null &&
-      other.host === end.host &&
-      other.user === end.user &&
-      other.port === end.port;
+    const route = resolve(wordsOf(argv).slice(1));
     const jump = wordsOf(peer.jump_command);
     return (
-      same(resolve([peer.target])) ||
-      (jump[0]?.split("/").at(-1) === "ssh" && same(resolve(jump.slice(1))))
+      sameRoute(route, resolve([peer.target])) ||
+      (jump[0]?.split("/").at(-1) === "ssh" && sameRoute(route, resolve(jump.slice(1))))
     );
   }
   const viaTarget = parse("ssh", peer.target);
