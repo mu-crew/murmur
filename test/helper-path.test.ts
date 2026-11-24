@@ -5,6 +5,7 @@ import { delimiter, dirname, isAbsolute, join, relative } from "node:path";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { spawnRunner } from "../src/agents.js";
 import { ssh } from "../src/channel.js";
+import { findHelper } from "../src/helper-path.js";
 import { spawnFzf } from "../src/jump-select.js";
 
 let dir: string;
@@ -128,7 +129,7 @@ console.log(JSON.stringify([...m.probeSockets(["/nonexistent-sock"], 200)]));`,
   expect(r.status, r.out).toBe(0);
 });
 
-test("a cached miss or vanished hit is looked up again", () => {
+test("a cached miss is looked up again without displacing a usable cached hit", () => {
   const a = join(dir, "a");
   const b = join(dir, "b");
   mkdirSync(a);
@@ -149,3 +150,20 @@ console.log(m.findHelper("late-tool"));`,
     `null\n${join(b, "late-tool")}\n${join(b, "late-tool")}\n${join(b, "late-tool")}\n`,
   );
 });
+
+test.each(["removed", "replaced by a directory"])(
+  "findHelper rescans when its cached executable is %s",
+  (change) => {
+    const first = join(dir, "tool");
+    const bin = join(dir, "bin");
+    mkdirSync(bin);
+    const fallback = join(bin, "tool");
+    shim(first);
+    shim(fallback);
+    const env = { PATH: [dir, bin].join(delimiter) };
+    expect(findHelper("tool", env)).toBe(first);
+    rmSync(first);
+    if (change === "replaced by a directory") mkdirSync(first);
+    expect(findHelper("tool", env)).toBe(fallback);
+  },
+);

@@ -5,7 +5,7 @@ import { delimiter, isAbsolute } from "node:path";
 // Node uses this Unix search path when the child environment has no PATH.
 const DEFAULT_PATH = "/usr/bin:/bin";
 type Lookup = { executable: string } | { code: "ENOENT" | "EACCES" };
-const cache = new Map<string, Lookup>();
+const cache = new Map<string, { executable: string }>();
 let searchPath: string | undefined;
 let searchCwd: string | undefined;
 let directories: string[] = [];
@@ -53,7 +53,8 @@ function lookup(file: string, path: string): Lookup {
     cache.clear();
   }
   const cached = cache.get(file);
-  if (cached && "executable" in cached && probe(cached.executable) !== null) return cached;
+  const hit = cached && probe(cached.executable);
+  if (hit && "executable" in hit) return hit;
   cache.delete(file);
 
   // Misses are not cached: a helper installed later is found without a restart.
@@ -71,7 +72,7 @@ function lookup(file: string, path: string): Lookup {
   return result;
 }
 
-/** Resolve on first use, then reuse the path unless PATH or the working directory changes. */
+/** Reuse a still-executable match while PATH and the search cwd stay the same. */
 export function findHelper(file: string, env: NodeJS.ProcessEnv = process.env): string | null {
   const result = lookup(file, env.PATH ?? DEFAULT_PATH);
   return "executable" in result ? result.executable : null;
