@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { SSH_OPTIONS } from "./channel.js";
 import { JUMP_CLIENT_OPTION } from "./goto.js";
 import { findHelper } from "./helper-path.js";
@@ -325,6 +326,13 @@ function runOutside(
   return result.status === 0 && !result.failed;
 }
 
+/**
+ * Local session option on a jump wrapper naming the remote server-global
+ * option its remote client recorded itself in, as `name created`.
+ */
+export const WRAPPER_CLIENT_OPTION = "@murmur_wrapper_client";
+const WRAPPER_OPTION = /^@murmur_wrapper_[0-9a-f]+$/;
+
 export function jumpToAgent(
   store: Store,
   agent: PaneView,
@@ -484,9 +492,9 @@ export function jumpToAgent(
   // one level short of the action. `tmux attach -t %pane` resolves session,
   // window and pane together, verified against a real tmux server.
   //
-  // Inside tmux the attach also MARKS its own remote client, so `murmur dash
-  // --goto` on the remote machine detaches instead of switching. Part of the
-  // attach command, so only a client that really attached is marked: a
+  // The wrapper's attach (below) also MARKS its own remote client, so `murmur
+  // dash --goto` on the remote machine detaches instead of switching. Part of
+  // the attach command, so only a client that really attached is marked: a
   // one-shot client-attached hook armed by the probe was left behind whenever
   // the wrapper then failed to start, and marked the next unrelated login. A
   // `{pane}` template has no attach of ours to extend, so it stays unmarked;
@@ -494,7 +502,7 @@ export function jumpToAgent(
   //
   // Outside tmux there is no wrapper and no local client: a detach there would
   // drop the operator out of their own shell's session for nothing.
-  const attach = renderJumpCommand(template, agent, env.TMUX ? [JUMP_CLIENT_OPTION] : []);
+  const attach = renderJumpCommand(template, agent);
 
   // Hand the ssh to tmux as its own detached SESSION rather than running it
   // here: a picker is usually a display-popup, and a popup is modal, so an
@@ -526,30 +534,50 @@ export function jumpToAgent(
       // exists to prevent, and the local attach had the identical bug.
       //
       // One extra round trip, on the reuse path only, over the socket the
-      // wrapper's own ssh already warmed. A failure here fails the jump.
-      const retarget = run("ssh", [
-        ...SSH_OPTIONS,
-        target,
-        `${tmuxPrefix} switch-client -t ${shellQuote(agent.pane)}`,
-      ]);
-      // Reported, and BEFORE the local switch: success with the client left on
-      // the wrong pane (or wrong server) is a jump that "worked" and went
-      // nowhere useful, and the client must not move on a failed retarget.
-      if (retarget.status !== 0 || retarget.failed) {
+      // wrapper's own ssh already warmed.
+      //
+      // `-c` the wrapper's OWN remote client, which its attach recorded under
+      // a per-wrapper option (named in the local session's
+      // WRAPPER_CLIENT_OPTION). A bare `switch-client -t` lets tmux pick a
+      // client: with another operator attached to that host it moved theirs,
+      // reported success, and left the wrapper where it was. The recorded
+      // `name created` must still be a live client, since tty names recycle.
+      // `sh -c`, so a non-POSIX login shell on the remote parses none of it.
+      const recorded = mux.sessionOption(name, WRAPPER_CLIENT_OPTION);
+      if (recorded && WRAPPER_OPTION.test(recorded)) {
+        const script =
+          `m=$(${tmuxPrefix} show-options -gqv ${recorded}) && [ -n "$m" ] && ` +
+          `${tmuxPrefix} list-clients -F ${shellQuote("#{client_name} #{client_created}")} | grep -Fqx -- "$m" && ` +
+          `${tmuxPrefix} switch-client -c "\${m% *}" -t ${shellQuote(agent.pane)}`;
+        const retarget = run("ssh", [...SSH_OPTIONS, target, `sh -c ${shellQuote(script)}`]);
+        // Reported, and BEFORE the local switch: the client must not move on
+        // a retarget that did not happen.
+        if (retarget.status === 255 || retarget.failed) {
+          return {
+            ok: false,
+            reason: "attach_failed",
+            message: `could not reach ${target} to retarget the existing ${name} session at ${agent.pane}.`,
+          };
+        }
+        if (retarget.status === 0) {
+          return mux.switchClient(client, name)
+            ? { ok: true }
+            : {
+                ok: false,
+                reason: "attach_failed",
+                message: `could not switch to the existing ${name} session.`,
+              };
+        }
+      }
+      // The wrapper's client cannot be identified (an older wrapper, a client
+      // gone): replace the wrapper rather than steer some other client.
+      if (!mux.killSession(name)) {
         return {
           ok: false,
           reason: "attach_failed",
-          message: `could not retarget the existing ${name} session at ${agent.pane}.`,
+          message: `could not replace the existing ${name} session.`,
         };
       }
-      if (!mux.switchClient(client, name)) {
-        return {
-          ok: false,
-          reason: "attach_failed",
-          message: `could not switch to the existing ${name} session.`,
-        };
-      }
-      return { ok: true };
     }
 
     // The peer's opaque command template owns its shell quoting. The default
@@ -567,7 +595,11 @@ export function jumpToAgent(
       ? `; tmux switch-client ${client ? `-c ${shellQuote(client)} ` : ""}-t ${shellQuote(`=${origin}`)}`
       : "";
 
-    if (!mux.newSession(name, `${attach}${restore}`)) {
+    // A fresh option per wrapper, so reuse can name this wrapper's remote
+    // client among any others on that host, including other machines' jumps.
+    const clientOption = `@murmur_wrapper_${randomBytes(6).toString("hex")}`;
+    const wrapper = renderJumpCommand(template, agent, [JUMP_CLIENT_OPTION, clientOption]);
+    if (!mux.newSession(name, `${wrapper}${restore}`)) {
       return {
         ok: false,
         reason: "attach_failed",
@@ -575,6 +607,7 @@ export function jumpToAgent(
       };
     }
 
+    mux.setSessionOption(name, WRAPPER_CLIENT_OPTION, clientOption);
     mux.setSessionOption(name, "status", "off");
     mux.setSessionOption(name, "prefix", "None");
     mux.setSessionOption(name, "detach-on-destroy", "previous");

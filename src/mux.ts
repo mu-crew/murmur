@@ -103,6 +103,8 @@ export interface Mux {
   sessionNamed(name: string): boolean;
   newSession(name: string, command: string): boolean;
   setSessionOption(session: string, option: string, value: string): void;
+  sessionOption(session: string, option: string): string | null;
+  killSession(session: string): boolean;
   switchClient(client: string | null, session: string): boolean;
   // --- goto seam ----------------------------------------------------------
   // `murmur dash --goto` decides from server-global tmux options only, so each
@@ -741,6 +743,14 @@ export const tmux: Mux = {
 
   setSessionOption(session, option, value) {
     runTmux(["set-option", "-t", exactPaneTarget(session), option, value]);
+  },
+
+  sessionOption(session, option) {
+    return runTmux(["show-options", "-qv", "-t", exactPaneTarget(session), option]) || null;
+  },
+
+  killSession(session) {
+    return runTmux(["kill-session", "-t", exactSession(session)]) !== null;
   },
 
   switchClient(client, session) {

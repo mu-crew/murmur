@@ -9,6 +9,7 @@ import {
   jumpToAgent,
   type Runner,
   remoteSessionName,
+  WRAPPER_CLIENT_OPTION,
 } from "../src/agents.js";
 import { JUMP_CLIENT_OPTION } from "../src/goto.js";
 import { asPaneId, asSessionId, asWindowId } from "../src/ids.js";
@@ -329,6 +330,7 @@ test("an existing per-host session is switched to, and no new one is opened", ()
     view(),
     fakeMux({
       sessionNamed: () => true,
+      sessionOption: () => "@murmur_wrapper_0a1b",
       newSession: () => {
         opened += 1;
         return true;
@@ -357,7 +359,7 @@ test("reusing a host's wrapper retargets it at the pane that was picked", () => 
   const result = jumpToAgent(
     store,
     view({ pane: asPaneId("%42") }),
-    fakeMux({ sessionNamed: () => true }),
+    fakeMux({ sessionNamed: () => true, sessionOption: () => "@murmur_wrapper_0a1b" }),
     (_file, args) => {
       remoteCommands.push(args.at(-1) ?? "");
       return ok("%42\n");
@@ -365,10 +367,10 @@ test("reusing a host's wrapper retargets it at the pane that was picked", () => 
   );
 
   expect(result).toEqual({ ok: true });
-  // The probe is still there, AND a switch-client naming the picked pane. The
-  // pane is double-quoted for the same reason the attach command is: the local
-  // shell must not expand a `$`-leading tmux id before ssh sees it.
-  expect(remoteCommands.some((command) => /switch-client -t .*%42/.test(command))).toBe(true);
+  // The probe is still there, AND a switch-client naming the wrapper's client
+  // and the picked pane. The pane is quoted for the same reason the attach
+  // command is: the local shell must not expand a `$`-leading tmux id.
+  expect(remoteCommands.some((command) => /switch-client -c .* -t .*%42/.test(command))).toBe(true);
 });
 
 test("a wrapper reuse that cannot retarget fails instead of claiming success", () => {
@@ -383,6 +385,7 @@ test("a wrapper reuse that cannot retarget fails instead of claiming success", (
     view({ pane: asPaneId("%42") }),
     fakeMux({
       sessionNamed: () => true,
+      sessionOption: () => "@murmur_wrapper_0a1b",
       switchClient: (_client, session) => {
         switched.push(session);
         return true;
@@ -556,6 +559,10 @@ test("the wrapper session hides the local status bar and disables the local pref
 
   const wrapper = remoteSessionName("p", "remote-host");
   expect(options).toEqual([
+    // Which remote option its client recorded itself in, for reuse to find it.
+    expect.stringMatching(
+      new RegExp(`^${wrapper} ${WRAPPER_CLIENT_OPTION}=@murmur_wrapper_[0-9a-f]{12}$`),
+    ),
     `${wrapper} status=off`,
     `${wrapper} prefix=None`,
     `${wrapper} detach-on-destroy=previous`,
@@ -597,8 +604,10 @@ test("the wrapper returns the originating client to where the jump started", () 
   // verified by hand through `sh -c`. The target is a pane now, which happens to
   // be shell-inert, so this asserts the STRUCTURE that protects the next value
   // rather than a rescue this one needs.
-  const attach = `tmux attach -t '%9' ';' set-option -gF ${JUMP_CLIENT_OPTION} '#{client_name} #{client_created}'`;
-  expect(command).toBe(
+  const mark = (option: string) =>
+    ` ';' set-option -gF ${option} '#{client_name} #{client_created}'`;
+  const attach = `tmux attach -t '%9'${mark(JUMP_CLIENT_OPTION)}${mark("@murmur_wrapper_X")}`;
+  expect(command.replace(/@murmur_wrapper_[0-9a-f]{12}/, "@murmur_wrapper_X")).toBe(
     `ssh -t 'p' env LC_CTYPE=C.UTF-8 ${shellQuote(attach)}; ` +
       `tmux switch-client -c '/dev/ttys004' -t '=work:@3'`,
   );
@@ -1048,6 +1057,95 @@ test("against a real tmux a failed wrapper marks nobody, and a started one marks
   }
 });
 
+test("against a real tmux reuse moves the wrapper's own client, not another on that host", () => {
+  // A bare `switch-client -t %N` lets tmux choose the client. With an operator
+  // attached to the same host it moved theirs, reported success, and left the
+  // wrapper where it was.
+  const rig = realRemote();
+  try {
+    for (const session of ["agents", "human", "chosen"]) {
+      rig.remote("new-session", "-d", "-s", session, "sleep 300");
+    }
+    const paneOf = (session: string) =>
+      asPaneId(rig.remote("list-panes", "-t", `=${session}:`, "-F", "#{pane_id}"));
+    peer("p", "remote-host", [], "sh -c {attach}");
+    vi.stubEnv("TMUX", "/tmp/tmux-1000/default,123,0");
+    const server = { kind: "label" as const, value: rig.label };
+    // A local wrapper session in memory: its command runs on a terminal of the
+    // rig, its options are kept for the reuse to read.
+    const options = new Map<string, string>();
+    let wrapper = "";
+    const mux = fakeMux({
+      sessionNamed: () => wrapper !== "",
+      newSession: (_name, command) => {
+        wrapper = command;
+        return true;
+      },
+      setSessionOption: (_session, option, value) => {
+        options.set(option, value);
+      },
+      sessionOption: (_session, option) => options.get(option) ?? null,
+    });
+
+    expect(jumpToAgent(store, view({ server, pane: paneOf("agents") }), mux, rig.run)).toEqual({
+      ok: true,
+    });
+    const own = rig.attachClient(wrapper);
+    // Attached last, so it is the client a bare switch-client picks.
+    const human = rig.attachClient(rig.ordinaryAttach("human"));
+
+    expect(jumpToAgent(store, view({ server, pane: paneOf("chosen") }), mux, rig.run)).toEqual({
+      ok: true,
+    });
+    const sessions = new Map(
+      rig
+        .remote("list-clients", "-F", "#{client_name} #{session_name}")
+        .split("\n")
+        .map((line) => line.split(" ") as [string, string]),
+    );
+    expect(sessions.get(own)).toBe("chosen");
+    expect(sessions.get(human)).toBe("human");
+  } finally {
+    rig.cleanup();
+  }
+});
+
+test("a wrapper whose remote client cannot be identified is replaced, not retargeted blind", () => {
+  // No recorded client (a wrapper from an older murmur), or one that is no
+  // longer attached: any switch-client would be tmux's pick of client.
+  peer("p", "remote-host");
+  vi.stubEnv("TMUX", "/tmp/tmux-1000/default,123,0");
+  const name = remoteSessionName("p", "remote-host");
+  for (const recorded of [null, "@murmur_wrapper_0a1b"]) {
+    const killed: string[] = [];
+    const opened: string[] = [];
+    const result = jumpToAgent(
+      store,
+      view(),
+      fakeMux({
+        sessionNamed: () => true,
+        sessionOption: () => recorded,
+        killSession: (session) => {
+          killed.push(session);
+          return true;
+        },
+        newSession: (session) => {
+          opened.push(session);
+          return true;
+        },
+      }),
+      (_file, args) =>
+        // The recorded client is gone: the remote check exits 1.
+        /switch-client/.test(args.at(-1) ?? "")
+          ? { status: 1, stdout: "", failed: false }
+          : ok("%9\n"),
+    );
+    expect(result, String(recorded)).toEqual({ ok: true });
+    expect(killed).toEqual([name]);
+    expect(opened).toEqual([name]);
+  }
+});
+
 test("reusing a wrapper retargets its existing remote client without marking another", () => {
   peer("p", "remote-host");
   vi.stubEnv("TMUX", "/tmp/tmux-1000/default,123,0");
@@ -1056,7 +1154,7 @@ test("reusing a wrapper retargets its existing remote client without marking ano
   const result = jumpToAgent(
     store,
     view({ pane: asPaneId("%42") }),
-    fakeMux({ sessionNamed: () => true }),
+    fakeMux({ sessionNamed: () => true, sessionOption: () => "@murmur_wrapper_0a1b" }),
     (_file, args) => {
       remoteCommands.push(args.at(-1) ?? "");
       return ok("%42\n");
@@ -1193,43 +1291,6 @@ test("outside tmux a local pane that is gone is pane_gone, and nothing is run", 
   );
   expect(result).toMatchObject({ ok: false, reason: "pane_gone" });
   expect(ran).toBe(0);
-});
-
-/** The argv a remote shell would hand tmux for a command ssh sent as one string. */
-function remoteArgv(command: string): string[] {
-  const out = execFileSync("sh", ["-c", `tmux() { printf '%s\\n' "$@"; }; ${command}`], {
-    encoding: "utf8",
-  });
-  return out.split("\n").slice(0, -1);
-}
-
-test("reusing a healthy wrapper retargets with the bare pane id after the remote shell", () => {
-  // Quoted twice, tmux saw `'%1'` and answered `can't find pane`: a healthy
-  // wrapper's reuse failed once a failed retarget became fatal.
-  peer("p", "remote-host");
-  vi.stubEnv("TMUX", "/tmp/tmux-1000/default,123,0");
-  const switched: string[] = [];
-
-  const result = jumpToAgent(
-    store,
-    view({ pane: asPaneId("%1") }),
-    fakeMux({
-      sessionNamed: () => true,
-      switchClient: (_client, session) => {
-        switched.push(session);
-        return true;
-      },
-    }),
-    (_file, args) => {
-      const command = args.at(-1) ?? "";
-      if (!/switch-client/.test(command)) return ok("%1\n");
-      const argv = remoteArgv(command);
-      return argv.at(-1) === "%1" ? ok("") : { status: 1, stdout: "", failed: false };
-    },
-  );
-
-  expect(result).toEqual({ ok: true });
-  expect(switched).toHaveLength(1);
 });
 
 test("the peer-set remediation survives a backslash line continuation", () => {
