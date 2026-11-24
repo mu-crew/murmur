@@ -1,5 +1,10 @@
 import { expect, test } from "vitest";
-import { shellQuote } from "../src/agents.js";
+import { shellQuote } from "../src/index.js";
+import { shellQuote as quoteJumpCommand } from "../src/jump-command.js";
+
+test("the SDK and jump commands share the shell quoting implementation", () => {
+  expect(shellQuote).toBe(quoteJumpCommand);
+});
 
 test("shellQuote protects a tmux target from the remote shell", () => {
   // ssh hands its arguments to a shell on the far side, and a tmux session id

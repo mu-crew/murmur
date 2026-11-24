@@ -120,13 +120,8 @@ The panel opens on the left at 25 percent of the window width clamped to
 25–40 columns, then shrinks to fit its widest line (never below 16 columns). It
 spans the full viewport even when the existing layout is nested, and takes focus. Toggling it again removes only that window's panel.
 
-Press `j` or `Down` to select the next agent, and `k` or `Up` to select the
-previous agent. Press `g` or `Home` to select the first agent, and `G` or `End`
-to select the last agent. Press `?` to show all panel keys. Press `?` or
-`Escape` to close the help panel. Press `c` to toggle compact one-line rows. With
-the mouse, click a row to select it, double-click it to jump to that agent, and
-scroll the wheel to move the selection. The side panel and dashboard share this compact setting, along with the saved sort
-and visibility settings.
+Press `?` for the live key legend. The side panel and dashboard share compact
+mode, sort and visibility settings.
 
 ## Harnesses other than pi
 
@@ -244,8 +239,8 @@ hook's process chain to the tmux server, and names a mu worker from mu's
 anchor file.
 
 Do not hook `PreToolUse` or `PostToolUse`: they fire on every tool call and
-carry no state murmur uses. The hook prints nothing and always exits 0, so a
-murmur problem never blocks a turn. The agent must run in a tmux pane; a hook
+carry no state murmur uses. Harness hooks exit 0 so a murmur problem never
+blocks a turn. The agent must run in a tmux pane; a hook
 whose process chain does not reach a tmux server writes nothing. Events wait in
 a per-pane inbox under `~/.local/state/murmur2/inbox` (the home path whatever
 `XDG_STATE_HOME` says, since Muse's hooks never see it) until a reader

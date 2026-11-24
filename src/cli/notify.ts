@@ -34,8 +34,7 @@ type NotifyPayload = Record<string, unknown>;
  * `settledState`. So one harness reported a finished turn as `done` and the
  * other reported it as `blocked`, and a codex agent that had simply finished
  * was indistinguishable from one waiting on an answer -- on every turn, not
- * rarely. It got louder once `blocked` began sorting oldest-first, which pinned
- * a stale turn-complete to the top of the picker.
+ * rarely.
  *
  * A TABLE keyed on the payload's own `type`, rather than a `--kind` flag: the
  * harness already says which event this is, and a flag would have to be right
@@ -62,9 +61,7 @@ const EVENT_KINDS: Record<string, RequestableKind> = {
  *
  * `blocked`, deliberately, because it is the answer that cannot lose
  * information. A harness bothered to tell us something and we do not know what:
- * calling that `done` files it as handled and it vanishes from the default
- * picker, while calling it `blocked` puts a row in front of a human who can
- * look. Over-asking is recoverable by focusing the pane; under-asking is a
+ * calling that `done` can hide it, while `blocked` asks a human to look. Over-asking is recoverable by focusing the pane; under-asking is a
  * missed request nobody sees.
  *
  * It also keeps every existing caller working: a notifier passing only
@@ -121,12 +118,8 @@ export function cursorStopKind(payload: NotifyPayload): RequestableKind | null {
  * event type, before a generic "attention": a bare placeholder is worse than
  * whatever the harness did say.
  *
- * `last-assistant-message` is in that chain because it is the only field in a
- * codex payload that says what actually happened. The documented hook line
- * passes `--title Codex`, so before argv was read every codex row in the picker
- * said the word "Codex" -- the harness name, which the `source` column already
- * carries. It sits BELOW an explicit `message` and above `title`, so a notifier
- * that names its own text still wins.
+ * Codex's `last-assistant-message` beats a generic `title`, but never overrides
+ * an explicit `message`.
  */
 export function notifyFields(
   input: NotifyInput,
@@ -157,8 +150,7 @@ export function notifyFields(
  * Strip control characters and collapse whitespace.
  *
  * This text comes from another program's event payload and reaches a tmux status
- * line and a picker row, either of which an embedded newline or escape sequence
- * would corrupt. `terminalText` in agents.ts is the read side of this rule.
+ * line and other terminal views, where newlines and escapes corrupt layout. `terminalText` in agents.ts is the read side of this rule.
  */
 function clean(value: string): string {
   // Char codes, not a character class: biome's noControlCharactersInRegex fired
@@ -177,23 +169,9 @@ function clean(value: string): string {
 }
 
 /**
- * The payload from a trailing argv token, or nothing.
- *
- * Codex appends the event JSON as ONE MORE ARGUMENT after the tokens you
- * configured, with stdin set to null. murmur only ever read stdin, so for the
- * documented codex hook the payload was silently discarded: every row's message
- * was whatever `--title` said, and the `type` field that names the event -- the
- * one field `notifyKind` needs -- never arrived.
- *
- * Scans for the FIRST argument that parses as a JSON object rather than taking
- * the last one, because position cannot be relied on. `sh -lc '<script>' <arg>`
- * assigns that argument to `$0`, not `$1`, so a payload appended to the shipped
- * hook line is consumed by the shell and never reaches murmur at all -- which is
- * why the README now passes a placeholder token. A scan means murmur works
- * whether the payload lands before or after the flags.
- *
- * commander leaves unrecognised operands in `program.args`, so this needs no
- * new option and cannot collide with one.
+ * Codex sends notification JSON on argv, not stdin. Scan the operands for the
+ * first JSON object: callers may put it before or after flags, and a shell
+ * wrapper needs a placeholder for `$0` to forward the appended argument.
  */
 export function payloadFromArgs(args: readonly string[]): NotifyPayload {
   for (const arg of args) {

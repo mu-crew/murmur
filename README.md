@@ -158,8 +158,7 @@ factor / `BatchMode`, `MaxSessions 1`, Eternal Terminal): [SSH.md](SSH.md).
 | [docs/VOCABULARY.md](docs/VOCABULARY.md) | Protocol and identity terms |
 | [AGENTS.md](AGENTS.md) | Repo gate for agents working on murmur |
 
-**1.0.3.** Ready for daily use. Known gaps live at the end of
-[ARCHITECTURE.md](ARCHITECTURE.md#known-gaps).
+[Release notes](CHANGELOG.md) · [Known gaps](ARCHITECTURE.md#known-gaps)
 
 ---
 

@@ -23,8 +23,7 @@ export function registerRexFeed(program: Command): void {
     .action(async () => {
       const identity = requireIdentity();
       if (!identity) return;
-      // Loaded here, as dash and pick are: every command pays for what the
-      // CLI imports statically, and the status-bar tick runs one.
+      // Keep feed rendering off the status-bar tick's import path.
       const { diffRecords, fleetRecords, formatClear } = await import("../program-status.js");
       const store = openStore();
       let sent = new Map<string | null, string>();

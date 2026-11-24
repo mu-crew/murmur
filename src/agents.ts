@@ -4,8 +4,8 @@ import { findHelper } from "./helper-path.js";
 import { asPaneId } from "./ids.js";
 import {
   currentJumpCommand,
-  shellQuote as quoteCommand,
   renderJumpCommand,
+  shellQuote,
   suggestedJumpCommand,
   supportsServer,
   tmuxAttachCommand,
@@ -88,39 +88,8 @@ export function terminalText(value: string): string {
     .join("");
 }
 
-export function shellQuote(value: string): string {
-  return `'${value.replaceAll("'", `'\\''`)}'`;
-}
+export { shellQuote };
 
-/**
- * The local session name that wraps a remote attach.
- *
- * The trailing `~` marks it as murmur's, for a human reading a session list and
- * for the `#{m:*~,...}` match in the suggested escape-hatch binding.
- *
- * The invariant is: no character tmux's target grammar reserves, ANYWHERE in
- * the name -- not merely no leading sigil.
- *
- * Leading `@`, `$`, `%` and `=` are parsed as a window, session or pane id, so a
- * session named `@bubba` -- what the old per-host window was called -- cannot be
- * addressed at all: every `-t @bubba` fails with `can't find window`. Window
- * names were never targets, so the old name was safe; session names are.
- *
- * A colon is worse, and stripping only the prefix missed it. `:` separates
- * session from window in a target, so a peer named `a:b` produced
- * `switch-client -t '=a:b~'` -> `can't find session: a`, AFTER `newSession` had
- * already created the session. The jump then returned `attach_failed` and left
- * an orphan behind with `status` on and the local prefix live -- which
- * `sessionNamed` matched on the next attempt, so every later jump to that host
- * took the reuse branch and failed identically. Permanent, self-reinforcing, and
- * recoverable only by killing the session by hand. `.` is reserved the same way
- * and goes with it.
- *
- * Peer names come from `murmur peer add <name>` and default to the ssh target,
- * so this needs only a bracketed IPv6 literal, an rsync-style `host:path` habit,
- * or a name someone typed. Whitespace is replaced too: it survives quoting but
- * reads badly in a session list.
- */
 /**
  * The peer that reaches a pane's host, and the ssh target to use for it.
  *
@@ -157,6 +126,7 @@ function singleLineShell(command: string): string {
     .trim();
 }
 
+/** A `~`-marked wrapper name, with tmux target syntax stripped from the label. */
 export function remoteSessionName(
   peerName: string,
   hostId?: string,
@@ -413,7 +383,7 @@ export function jumpToAgent(
       reason: "unsupported_server",
       message:
         `murmur: ${peer.name}'s jump command uses {pane}, which cannot identify the tmux server holding ${agentLabel(agent)} (${agent.pane})\n\n` +
-        `update it:\n  murmur peer set ${/^[\w.-]+$/.test(peer.name) ? peer.name : quoteCommand(peer.name)} --jump-command ${quoteCommand(singleLineShell(suggestedJumpCommand(peer.jump_command, target)))}`,
+        `update it:\n  murmur peer set ${/^[\w.-]+$/.test(peer.name) ? peer.name : shellQuote(peer.name)} --jump-command ${shellQuote(singleLineShell(suggestedJumpCommand(peer.jump_command, target)))}`,
     };
   }
 

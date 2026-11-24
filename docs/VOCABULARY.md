@@ -1,16 +1,14 @@
 # murmur vocabulary
 
 - **node** — one machine running murmur, identified by `host_id`.
-- **tmux server** — the server that owns a pane. Snapshot protocol v3 represents
-  it as exactly one tagged value: `{ "kind": "default" }`,
+- **tmux server** — the server that owns a pane. Its address is one tagged value: `{ "kind": "default" }`,
   `{ "kind": "label", "value": "mule" }`, or
   `{ "kind": "path", "value": "/absolute/socket/path" }`.
 - **pane address** — `(server, pane)`. A pane id is unique only within one tmux
   server; `%34` on the default server and `%34` on `tmux -L mule` are different
   addresses.
 - **snapshot** — one node's complete current state. Versions are deliberately
-  incompatible in both directions; version 7 requires a `harness` on every
-  agent.
+  incompatible in both directions.
 - **driver** — who is waiting on a pane: `human` (you) or `orchestrated` (a
   supervisor such as mu, which consumes the result). An agent row carries its
   agent's driver, and each attention row the driver its requester saw. A pane

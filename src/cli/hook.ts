@@ -23,8 +23,7 @@ import { readStdin } from "./stdin.js";
  * `murmur hook <harness>`: what a hook harness runs on each hooked event.
  *
  * One payload on stdin becomes at most one event file in the pane's inbox. It
- * opens no database, takes no lock, calls no tmux and prints nothing, and it
- * exits 0 whatever happens: a hook's exit status and output are the harness's
+ * opens no database, takes no lock, calls no tmux and exits 0: a hook's exit status and output are the harness's
  * to interpret (claude reads exit 2 from a Stop hook as "block the stop"), and
  * a murmur problem must never cost the agent its turn.
  *
@@ -180,9 +179,7 @@ export function registerHook(program: Command): void {
           }
           return;
         }
-        // A harness hook. Exit 0 whatever happens below. cursor-agent's CLI
-        // treats empty stdout as a failed hook (`empty_stdout`) and tracking
-        // never sticks; reply `{}` like muzzle. Other harnesses stay silent.
+        // Cursor requires `{}` rather than silence (`empty_stdout`).
         try {
           if (!hasHookRow(name)) return;
           runHarnessHook(name, parsePayload(await readStdin(HOOK_STDIN_DEADLINE_MS)));

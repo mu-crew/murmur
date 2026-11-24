@@ -163,8 +163,8 @@ Three consequences worth stating, because each is easy to violate by accident:
   *reports* it and writes nothing. The next collect reconciles, because the
   owning node is the one that reconciles.
 - **Only a pane's own process may report for that pane.** `claimAgent` answers
-  `refused` to a second live claimant, and a refused caller registers no
-  handlers, writes nothing and publishes no tmux state. This replaced an environment
+  `refused` to a second live claimant, which writes nothing and publishes no
+  tmux state. This replaced an environment
   marker and three helper functions: a nested pi inherits `$TMUX_PANE` and used
   to report *as* the pane's real agent, so one pane accumulated six reporting
   pids of which one was alive, and the live agent read idle while it worked.
@@ -529,8 +529,8 @@ older builds have no stamp; the CLI and the pi package upgrade together for it.
 Schema 11 is the first to use the stamp: it adds the nullable `last_text_run`
 and `generation_run` and keeps `compatible_since = 10`, so a schema-10 build
 opens a schema-11 store and leaves the new columns alone. Such a build does not
-keep `last_text_run` in step with `last_text`, which is the trade-off of an additive change. Older inbox readers also don't
-honor schema 12 receipts; use current readers for deduplicated drains.
+keep `last_text_run` in step with `last_text`. Older inbox readers also ignore
+schema 12 receipts; use current readers for deduplicated drains.
 
 **Identity is never minted by the store.** `openStore()` takes no arguments and
 creates no identity; the one file it touches is a 1.x node's `identity.json`,
@@ -590,9 +590,8 @@ in `~/.local/state/murmur2/inbox` whatever `XDG_STATE_HOME` says: Muse's hooks
 keep `HOME` and lose `XDG_STATE_HOME`, so writers and readers agree on the home
 path (`homeStateDir`; `MURMUR_STATE_DIR` still moves it). The remote area sits
 beside it for the same reason.
-A reader never sees a partial event, whatever its size. The hook opens no
-database, takes no lock, calls no tmux and prints nothing, and stops writing for
-a pane past 10,000 waiting files (`doctor` reports it).
+A reader never sees a partial event. The hook stops writing past 10,000
+waiting files per pane (`doctor` reports it).
 
 **The process chain places an event, not the environment.** A harness may clear
 its hooks' environment, so a hook reads the process table once and walks its
@@ -748,8 +747,8 @@ generation (every other harness, and mu's) never touch these columns.
 runs, once per hooked event, with the payload on stdin. Each harness's row
 (`src/hook-rows.ts`) maps a payload to one event and owns that harness's drop
 rules; the process chain then places it (`src/hook.ts`). The command opens no
-store, takes no lock, calls no tmux, prints nothing and exits 0, whatever
-happens: claude reads exit 2 from a Stop hook as "block the stop".
+store, takes no lock, calls no tmux and exits 0: Claude reads exit 2 as
+"block the stop". Only Cursor gets stdout (`{}`), since it rejects silence.
 
 | Event | claude | codex | cursor-agent | muse |
 | --- | --- | --- | --- | --- |
@@ -1497,16 +1496,15 @@ identity (never mint one), open the store, and `claimAgent`. Then:
 
 | Outcome | Meaning | What the extension does |
 | --- | --- | --- |
-| `claimed` | the pane had no owner | keep the `agent_id`, register handlers |
+| `claimed` | the pane had no owner | keep the `agent_id` and report |
 | `retained` | same pid re-claiming | keep the same `agent_id` and activity |
 | `replaced` | previous owner is dead, or an `inbox` owner that is not this pi's ancestor | fresh `agent_id`; a dead pi occupant's attention is cleared, an inbox occupant's is kept |
-| `refused` | another live process owns the pane | register nothing, paint nothing, close the store |
+| `refused` | another live process owns the pane | close the store; write and paint nothing |
 
 `retained` is what makes pi's `/reload` a no-op: pi re-runs the extension
 factory in the same process, and a check that could not recognise its own claim
-would silence the real agent. `refused` is permanent for the process — a nested
-agent is deliberately invisible, and it is checked at both the store call and
-the tmux publish, because both happen in the same handler.
+would silence the real agent. A refused claim leaves the queued handlers inert, so a nested agent
+can neither write to the store nor publish pane options.
 
 `replaced` clears the previous occupant's attention because that attention
 described a process that is gone, and a human looking at the pane now sees a
@@ -1586,17 +1584,10 @@ Several of those are asserted structurally — over the whole returned object
 graph, not by reading the type — because a type says what the author intended
 and a test says what the object contains.
 
-Not tested: ssh transport (OpenSSH's job), live interactive use, full terminal
-rendering, packaging.
-
-That boundary is narrower than it once read. "tmux wrappers" and "TUI
-rendering" were listed here as untested and both now are:
-`test/mux-targets.test.ts` drives a real tmux server for target syntax, moved
-panes and pane-addressed switching; `test/jump.test.ts` asserts wrapper
-creation, its session options and the return home; and
-`test/dash-view.test.ts` and `test/sidepanel-view.test.ts` assert what a row
-renders. What remains untested is sitting in the result --
-attaching by hand and looking at a terminal.
+The package tests check the manifest and open the built extension's sibling
+store. Ink `renderToString` tests check dash and side-panel frames; tmux tests
+check pane-addressed switching and wrapper setup. Live terminal interaction
+still needs a manual check; SSH transport belongs to OpenSSH.
 
 New tests are verified by breaking the code they cover and watching them fail. A
 test that has never failed has not been shown to test anything. A test asserting
