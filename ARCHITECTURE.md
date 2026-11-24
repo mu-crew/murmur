@@ -371,7 +371,7 @@ at `~/.local/state/murmur2/{inbox,remote}` whatever `XDG_STATE_HOME` says (see
 
 The directory is versioned by breaking change, not by release. 1.x used
 `murmur`, and its schema-9 store refuses any store from schema 10 up, so the
-hook-harness store (schema 11) could not share it without breaking a 1.x
+hook-harness store could not share it without breaking a 1.x
 install still running beside it (an older pi extension, say). An additive
 change stays in the current directory; the next breaking one moves to
 `murmur3`.
@@ -388,11 +388,9 @@ are not carried, and reappear on their next event.
 
 ## The data model
 
-Five tables in `state.db`, all `STRICT`, `user_version = 11`. `agents` and
-`attention` are local truth; `peers` is a cache of other nodes; `compat` holds
-the one-row "compatible since" stamp (see Versioning below); `alerted`
-remembers which attention events the `on-attention` hook has run for (see
-[Alerting](#alerting)).
+In `state.db` (`STRICT`, `user_version = 12`): `agents` and `attention` hold
+local truth, `peers` caches remote state, `compat` tracks compatibility, `alerted`
+tracks [alerts](#alerting), and `inbox_receipts` tracks pending file cleanup.
 
 ```sql
 CREATE TABLE agents (
@@ -511,13 +509,9 @@ agent again, and the producer reports zero before it delivers the last one, so
 the settle after that run raises the real `done`. The channel name is a
 string on both sides, so neither package imports the other.
 
-**Versioning is one strategy, not two.** On open, if `user_version` is older
-than this build's, murmur salvages `SELECT name, target FROM peers` — the two
-fields a human typed — deletes the database and its `-wal`/`-shm` sidecars,
-recreates the schema, and re-inserts those peers with every observed column
-`NULL`. There is no `ALTER TABLE` in this build. Any change to any table bumps
-the version, which is affordable precisely because nothing here is history:
-everything in the file is either current state or a cache.
+**Versioning.** Schema 12 adds receipts in place to schema 11. For older
+schemas, murmur rebuilds the store and restores only configured peers, not
+observed state. There is no history to migrate.
 
 The rebuild only runs upward. A `user_version` above this build's is refused
 (`StoreTooNewError`, exit 4 from the CLI; the extension goes silent) and the
@@ -535,8 +529,8 @@ older builds have no stamp; the CLI and the pi package upgrade together for it.
 Schema 11 is the first to use the stamp: it adds the nullable `last_text_run`
 and `generation_run` and keeps `compatible_since = 10`, so a schema-10 build
 opens a schema-11 store and leaves the new columns alone. Such a build does not
-keep `last_text_run` in step with `last_text`, which is the cost the stamp
-accepts for an additive column.
+keep `last_text_run` in step with `last_text`, which is the trade-off of an additive change. Older inbox readers also don't
+honor schema 12 receipts; use current readers for deduplicated drains.
 
 **Identity is never minted by the store.** `openStore()` takes no arguments and
 creates no identity; the one file it touches is a 1.x node's `identity.json`,
@@ -627,9 +621,10 @@ is the one place every hook can find. An anchor counts only when its
 `start_time` matches the process's; a stale file at home does not hide a live
 one in the fallback.
 
-**Readers drain.** Under the store's write lock (`ingestInbox`, `IMMEDIATE`), a
-reader lists each pane's inbox in name order, applies each event and deletes the
-file. Before that, outside the lock, it maps each inbox's server pid to a tmux
+**Readers drain.** Under the store's write lock, a reader folds each pane's
+files in name order and commits their receipts with the state. It unlinks
+only after commit; a failed unlink leaves a receipt so a retry can't apply the
+file again. Before taking the lock, the reader maps each inbox's server pid to a tmux
 server and its root pid to a pane (`list-panes -F '#{pane_pid} #{pane_id}'`),
 and deletes the inbox of a dead server or a gone pane. A server pid is located
 cheapest first: the socket cache (`tmux-sockets.json` in the state directory,
@@ -1665,8 +1660,8 @@ each was cheaper to accept than to solve:
    retention horizon, and no way to ask what an agent was doing an hour ago. The
    dash's pane glance is a live `capture-pane`, not a replay.
 2. **No compatibility with older nodes.** A pre-rewrite `events.db` is not
-   migrated, and any `state.db` from a different `user_version` is rebuilt with
-   only peer names and targets salvaged. A change that breaks a released
+   migrated, and incompatible older stores keep only configured peers. A
+   change that breaks a released
    build's store moves to a new state directory instead (see
    [State directory](#state-directory)). A node serving the old event format is
    reported as reachable-but-broken, which is the honest description: the two

@@ -442,11 +442,11 @@ export type AgentSource = "pi" | "inbox";
 /**
  * One inbox event, ready to apply, as the drain hands it to the store.
  *
- * The drain read the file and located the pane under the store's lock; the
- * store decides what the event means and calls `consume` once it is applied or
- * refused, so an event is never applied twice.
+ * The immutable file path identifies the delivery across drains. The store
+ * records it in the same transaction as the event fold.
  */
 export type InboxDelivery = {
+  path: string;
   location: Location;
   /** Whether a human is looking at the pane: a focused `turn_stopped` raises no `done`. */
   focused: boolean;
@@ -454,11 +454,12 @@ export type InboxDelivery = {
   event: InboxEvent | null;
   /** Whether a pi runs in the pane's process tree. Asked only before claiming an unclaimed pane. */
   piRuns: () => boolean;
-  consume: () => void;
 };
 
 export type IngestOptions = {
   isAlive?: LiveCheck;
+  /** Remove a committed file; an already absent file counts as success. */
+  consume: (path: string) => void;
 };
 
 export type IngestSummary = {

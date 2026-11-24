@@ -1111,12 +1111,22 @@ test("a newer store whose compat stamp still includes this build is opened, not 
   after.close();
 });
 
-test("schema 11 only adds columns: it keeps the schema-10 stamp, so a schema-10 build opens it", () => {
-  // `last_text_run` and `generation_run` are nullable additions (D8): the
-  // version moves, the "compatible since" stamp does not.
-  store().close();
+test("schema 11 gains inbox receipts without losing state or breaking the compatibility stamp", () => {
+  const s = store();
+  s.addPeer("dev", "dev.example");
+  s.claimAgent({ location: location(), owner_pid: 100, meta: meta() });
+  s.close();
+  const old = new Database(dbPath());
+  old.exec("DROP TABLE inbox_receipts; PRAGMA user_version = 11");
+  old.close();
+
+  const upgraded = store();
+  expect(upgraded.localPanes().map((pane) => pane.agent?.agent_name)).toEqual(["worker-1"]);
+  expect(upgraded.peers().map((peer) => peer.name)).toEqual(["dev"]);
+  upgraded.close();
   const database = new Database(dbPath(), { readonly: true });
-  expect(database.pragma("user_version", { simple: true })).toBe(11);
+  expect(database.pragma("user_version", { simple: true })).toBe(12);
+  expect(database.prepare("SELECT path FROM inbox_receipts").all()).toEqual([]);
   expect(database.prepare("SELECT compatible_since FROM compat").all()).toEqual([
     { compatible_since: 10 },
   ]);

@@ -1,6 +1,6 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { readdirSync, readFileSync, rmdirSync, rmSync, statSync, unlinkSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { publishAgentStates } from "./agent-state.js";
 import { findHelper, helperPath } from "./helper-path.js";
 import { asPaneId, asSessionId, asWindowId } from "./ids.js";
@@ -31,8 +31,8 @@ export { INBOX_PANE_CAP, inboxDir, inboxKey, writeInboxEvent } from "./inbox-fil
  * tmux. It writes one event to `inbox/tmp/` and links it into
  * `inbox/<pane key>/<ns timestamp>-<pid>.json`, so a reader never sees a partial
  * event whatever its size. Readers -- `status`, `pane`, the dash, `export` --
- * drain: under the store's write lock they apply each pane's events in name
- * order and delete them. Nothing is retained; an applied event is gone.
+ * drain: they apply each pane's events in name order and commit receipts with
+ * the state before removing files.
  *
  * Single writer still holds: this node's inbox only ever names panes of its
  * own tmux servers, because the hook placed the event by walking its own
@@ -519,9 +519,8 @@ function removeDir(path: string): boolean {
  *    whose root no longer roots a pane (`reconcileLocal` owns pane-id reuse).
  *    One whose server cannot be found yet is left for a later drain, until
  *    its oldest event is an hour old.
- * 2. Apply, inside `ingestInbox`'s transaction: list each located inbox in
- *    name order, hand every file to the store, delete it once handled. The
- *    emptied directory goes too.
+ * 2. Apply each located inbox in name order. The store commits, then removes
+ *    acknowledged files. The emptied directories go too.
  * 3. Publish `@murmur_pane_state` and the rest for the changed panes.
  *
  * Total: a drain never fails its caller, which is a status-bar tick.
@@ -616,7 +615,7 @@ function drainWith(
       () =>
         located.flatMap(({ paneDir, server_pid, root_pid, pane }) =>
           eventFiles(paneDir).map((file): InboxDelivery => {
-            const path = join(paneDir, file);
+            const path = resolve(paneDir, file);
             const parsed = readEvent(path);
             // An event naming another pane than its directory is not this pane's.
             const event =
@@ -624,6 +623,7 @@ function drainWith(
                 ? parsed
                 : null;
             return {
+              path,
               location: pane.location,
               focused: pane.focused,
               event,
@@ -631,11 +631,10 @@ function drainWith(
               // pi is the pane's one writer, never a pi to stand aside for.
               piRuns: () =>
                 event?.harness === "pi" ? false : host.piRunsUnder(root_pid, event?.owner_pid ?? 0),
-              consume: () => unlinkSync(path),
             };
           }),
         ),
-      { isAlive: host.isAlive },
+      { isAlive: host.isAlive, consume: (path) => rmSync(path, { force: true }) },
     );
   } catch {
     return { ...EMPTY, removed };

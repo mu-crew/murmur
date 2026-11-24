@@ -4,6 +4,8 @@ import {
   mkdirSync,
   mkdtempSync,
   readdirSync,
+  renameSync,
+  rmdirSync,
   statSync,
   utimesSync,
   writeFileSync,
@@ -11,6 +13,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
+import Database from "better-sqlite3";
 import { afterEach, beforeEach, expect, test } from "vitest";
 import { paneReport } from "../src/cli/pane.js";
 import { asPaneId, asSessionId, asWindowId } from "../src/ids.js";
@@ -168,6 +171,57 @@ test("the first event of any kind claims an unclaimed pane, and the drain publis
   expect(plans.at(-1)?.panes).toEqual([{ pane: "%1", state: "running", label: "claude" }]);
   // Applied events are gone, and so is the emptied directory.
   expect(existsSync(join(inboxDir(), inboxKey(SERVER, ROOT)))).toBe(false);
+});
+
+test("a failed inbox commit leaves its prompt available to retry", () => {
+  const s = store();
+  const database = new Database(join(process.env.MURMUR_STATE_DIR ?? "", "state.db"));
+  try {
+    database.exec(`CREATE TABLE commit_parent (id INTEGER PRIMARY KEY);
+      CREATE TABLE commit_child (id REFERENCES commit_parent(id) DEFERRABLE INITIALLY DEFERRED);
+      CREATE TRIGGER fail_commit AFTER INSERT ON agents BEGIN
+        INSERT INTO commit_child VALUES (1);
+      END;`);
+    write({ event: "prompt_submitted" });
+    expect(drain(s).applied).toBe(0);
+    expect(report(s).agent).toBeNull();
+
+    database.exec("DROP TRIGGER fail_commit");
+    expect(drain(s).applied).toBe(1);
+    expect(report(s).agent?.run_count).toBe(1);
+  } finally {
+    database.close();
+  }
+});
+
+test("a prompt left by a failed unlink is not folded again after reopening", () => {
+  const s = store();
+  write({ event: "prompt_submitted" });
+  const dir = join(inboxDir(), inboxKey(SERVER, ROOT));
+  const [filename] = readdirSync(dir);
+  if (!filename) throw new Error("expected an inbox file");
+  const file = join(dir, filename);
+  const backup = join(dir, "backup");
+  const blocked: Store = {
+    ...s,
+    ingestInbox: (read, options) =>
+      s.ingestInbox(() => {
+        const deliveries = read();
+        // Turn the pathname into a directory just for the unlink attempt.
+        renameSync(file, backup);
+        mkdirSync(file);
+        return deliveries;
+      }, options),
+  };
+  expect(drain(blocked).applied).toBe(1);
+  rmdirSync(file);
+  renameSync(backup, file);
+  s.close();
+
+  const reopened = store();
+  expect(drain(reopened).applied).toBe(0);
+  expect(report(reopened).agent?.run_count).toBe(1);
+  expect(existsSync(file)).toBe(false);
 });
 
 test("events apply in name order, so the last turn's text wins and runs count up", () => {

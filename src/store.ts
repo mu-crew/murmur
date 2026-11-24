@@ -50,11 +50,11 @@ import { MURMUR_VERSION } from "./version.js";
 /**
  * The storage version. Any change to any table bumps it.
  *
- * ONE version strategy for an OLDER file: it salvages the peer names and
- * targets a human typed, deletes the file, and recreates the schema. No ALTER
- * TABLE anywhere in this build.
+ * Older incompatible files are rebuilt with just the configured peers.
+ * Schema 11 can be upgraded in place: receipts only add a table.
  */
-const SCHEMA_USER_VERSION = 11;
+const SCHEMA_USER_VERSION = 12;
+const BEFORE_INBOX_RECEIPTS = 11;
 
 /**
  * The oldest schema whose build can read and write a store this build creates,
@@ -180,7 +180,12 @@ const RUNTIME_COLUMNS = [
  */
 const RESET_LOCK_TIMEOUT_MS = 5_000;
 
+const INBOX_RECEIPTS_SCHEMA = `
+  CREATE TABLE inbox_receipts (path TEXT NOT NULL PRIMARY KEY) STRICT;
+`;
+
 const SCHEMA = `
+  ${INBOX_RECEIPTS_SCHEMA}
   CREATE TABLE agents (
     agent_id     TEXT    NOT NULL PRIMARY KEY,
     server_kind  TEXT    NOT NULL CHECK (server_kind IN ('default', 'label', 'path')),
@@ -372,15 +377,14 @@ export interface Store {
   // --- the inbox: the one ingest -----------------------------------------
   /**
    * Apply hook events to the panes they name, in the order `read` returns
-   * them, inside ONE immediate transaction. `read` runs under that lock, so two
-   * drains never apply one event twice: the second waits, then finds the file
-   * gone.
+   * them, inside one immediate transaction. The receipt and state commit
+   * together; unlink is retried after commit without folding the event again.
    *
    * The owner gate uses the pid the hook recorded, not the caller's. A `pi`
    * row ignores every inbox event, and an unclaimed pane is never claimed while
    * a pi runs in its process tree.
    */
-  ingestInbox(read: () => readonly InboxDelivery[], options?: IngestOptions): IngestSummary;
+  ingestInbox(read: () => readonly InboxDelivery[], options: IngestOptions): IngestSummary;
   /** One local pane's harness-side state, for `murmur pane --json`. Never in a snapshot. */
   harnessState(pane: PaneIdentity): HarnessState | null;
 
@@ -693,7 +697,7 @@ function storeCondition(path: string): "ok" | "reset" | StoreTooNewError {
   }
   try {
     const version = (existing.pragma("user_version", { simple: true }) as number) ?? 0;
-    if (usable(existing, version)) return "ok";
+    if (version === BEFORE_INBOX_RECEIPTS || usable(existing, version)) return "ok";
     if (version > SCHEMA_USER_VERSION) return new StoreTooNewError(path, version);
     return "reset";
   } catch {
@@ -930,8 +934,7 @@ export function openStore(): Store {
     // opening the picker: measured at ~300ms behind a held write lock and ~230ms
     // behind a reader on a non-empty WAL, against ~70ms otherwise.
     //
-    // Safe because a version change only ever comes from a rebuild, and a
-    // rebuild happens under the reset lock this process holds right now.
+    // Rebuilds and in-place upgrades both take the reset lock this process holds.
     if (usable(opened, (opened.pragma("user_version", { simple: true }) as number) ?? 0)) {
       return opened;
     }
@@ -957,6 +960,11 @@ export function openStore(): Store {
         .transaction(() => {
           const version = (opened.pragma("user_version", { simple: true }) as number) ?? 0;
           if (usable(opened, version)) return;
+          if (version === BEFORE_INBOX_RECEIPTS) {
+            opened.exec(INBOX_RECEIPTS_SCHEMA);
+            opened.pragma(`user_version = ${SCHEMA_USER_VERSION}`);
+            return;
+          }
           // The reset lock is best effort and can be stolen, so a newer build may
           // have written the file since the check above. Never build over it.
           if (version > SCHEMA_USER_VERSION) throw new StoreTooNewError(path, version);
@@ -1526,17 +1534,29 @@ export function openStore(): Store {
     },
   );
 
-  /**
-   * IMMEDIATE, like `claimAgent`: it reads rows and then writes them, and
-   * `read` lists the inbox under the same lock, which is what makes a drain the
-   * only one applying a given file.
-   */
+  const receipt = database.prepare("INSERT OR IGNORE INTO inbox_receipts (path) VALUES (?)");
+  const receipts = database.prepare<[], { path: string }>("SELECT path FROM inbox_receipts");
+  const deleteReceipt = database.prepare("DELETE FROM inbox_receipts WHERE path = ?");
+  const consumeReceipts = database.transaction((consume: IngestOptions["consume"]) => {
+    for (const { path } of receipts.all()) {
+      try {
+        consume(path);
+      } catch {
+        continue; // Keep the receipt for the next drain.
+      }
+      deleteReceipt.run(path);
+    }
+  });
+
+  // List under the same write lock as the fold and receipt. Concurrent drains
+  // see either the committed receipt or an inbox from which the file is gone.
   const ingestInbox = database.transaction(
     (read: () => readonly InboxDelivery[], options: IngestOptions): IngestSummary => {
       const isAlive = options.isAlive ?? pidAlive;
       const summary: IngestSummary = { applied: 0, ignored: 0, malformed: 0, changed: [] };
       const changed = new Map<string, InboxDelivery["location"]>();
       for (const delivery of read()) {
+        if (receipt.run(delivery.path).changes === 0) continue;
         let outcome: "applied" | "ignored" | "malformed" = "malformed";
         if (delivery.event) {
           try {
@@ -1553,12 +1573,6 @@ export function openStore(): Store {
             serverKey(delivery.location.server, delivery.location.pane),
             delivery.location,
           );
-        }
-        try {
-          delivery.consume();
-        } catch {
-          // Already gone, or undeletable: the next drain sees it again, and an
-          // applied event from it is refused by nothing. Best effort.
         }
       }
       summary.changed = [...changed.values()];
@@ -1609,8 +1623,16 @@ export function openStore(): Store {
     claimAgent,
     reconcileLocal,
 
-    ingestInbox(read, options = {}) {
-      return ingestInbox.immediate(read, options);
+    ingestInbox(read, options) {
+      const summary = ingestInbox.immediate(read, options);
+      // Never unlink on rollback. Retry old receipts too, including a file
+      // already removed when a previous reader died before clearing its receipt.
+      try {
+        consumeReceipts.immediate(options.consume);
+      } catch {
+        // Housekeeping must not hide the committed changes from the publisher.
+      }
+      return summary;
     },
 
     harnessState(pane) {
