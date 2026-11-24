@@ -215,11 +215,11 @@ export function registerPeer(program: Command): void {
         // `peer list` can name the host, its version and its snapshot version
         // immediately rather than after the first collect.
         if (snapshot) {
-          store.replacePeerSnapshot(name, { ok: true, snapshot, at: Date.now() });
+          store.replacePeerSnapshot(name, { ok: true, snapshot, at: Date.now() }, target);
         } else if (probeError) {
           // Recorded so `peer list`, `doctor` and the collector's own
           // classification all agree without a second probe.
-          store.replacePeerSnapshot(name, { ok: false, error: probeError, at: Date.now() });
+          store.replacePeerSnapshot(name, { ok: false, error: probeError, at: Date.now() }, target);
         }
         if (snapshot) {
           process.stdout.write(`Added ${name} (${snapshot.display_name})\n`);

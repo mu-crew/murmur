@@ -13,8 +13,9 @@ A peer that cannot authenticate unattended is collectable only while an
 authenticated connection exists on that socket for murmur to ride. The rest of
 this page follows from that.
 
-The interactive attach (jump) is the exception: it is plain `ssh -t`, so it
-uses your ssh_config and may prompt. A failure there is not a collect failure.
+The interactive attach (jump) is the exception: by default it is plain
+`ssh -t` (a custom `jump_command` is whatever you set), so it uses your
+ssh_config and may prompt. A failure there is not a collect failure.
 
 ## A host that wants interactive auth
 
@@ -115,9 +116,9 @@ ssh -O check -S '~/.ssh/control/%r@%h:%p' dev  # expect: Master running (pid=...
 - **error**: why the latest attempt failed (printed under the table, `error` in
   `--json`), empty after a success.
 
-Branch on the error, never on presence in the list; `--json` exits 0 with peers down, since sleeping machines
-are normal.
+Branch on the error, never on presence in the list; `--json` exits 0 with
+peers down, since sleeping machines are normal.
 
-`murmur status`, the dash and the side panel poll and stay silent. `murmur collect` dials
-and prints one line per unreachable host: run it to ask "can I reach this host
-right now".
+`murmur status`, the dash and the side panel poll and stay silent.
+`murmur collect` dials and prints one line per unreachable host: run it to ask
+"can I reach this host right now".
