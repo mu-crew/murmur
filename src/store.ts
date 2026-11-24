@@ -372,7 +372,11 @@ export interface Store {
   addPeer(name: string, target: string, jumpCommand?: string): void;
   setPeerJumpCommand(name: string, jumpCommand: string): boolean;
   removePeer(name: string): boolean;
-  replacePeerSnapshot(name: string, fetch: PeerFetch): void;
+  /**
+   * `target` is the target the fetch was made against: a write for a peer
+   * retargeted since is dropped, so one node's answer never lands on another.
+   */
+  replacePeerSnapshot(name: string, fetch: PeerFetch, target?: string): void;
 
   // --- the inbox: the one ingest -----------------------------------------
   /**
@@ -1788,7 +1792,9 @@ export function openStore(): Store {
     },
 
     addPeer(name, target, jumpCommand) {
-      // Correcting a target must not discard the cache or a custom jump command.
+      // Correcting a target keeps a custom jump command but drops the cache: the
+      // new target is unverified, and rows cached from the old node would stay
+      // actionable through it. The next successful fetch refills it.
       // A default command follows a corrected target because it was derived from it.
       const existing = database
         .prepare("SELECT target, jump_command FROM peers WHERE name = ?")
@@ -1808,6 +1814,17 @@ export function openStore(): Store {
              target = excluded.target, jump_command = excluded.jump_command`,
         )
         .run(name, target, command);
+      if (existing && existing.target !== target) {
+        database
+          .prepare(
+            `UPDATE peers
+                SET snapshot = NULL, snapshot_at = NULL, fetched_at = NULL, host_id = NULL,
+                    display_name = NULL, murmur_version = NULL, snapshot_version = NULL,
+                    last_attempt_at = NULL, last_error = NULL
+              WHERE name = ?`,
+          )
+          .run(name);
+      }
     },
 
     setPeerJumpCommand(name, jumpCommand) {
@@ -1821,13 +1838,17 @@ export function openStore(): Store {
       return database.prepare("DELETE FROM peers WHERE name = ?").run(name).changes > 0;
     },
 
-    replacePeerSnapshot(name, fetch) {
+    replacePeerSnapshot(name, fetch, target) {
+      // Matches any target when the caller did not name one.
+      const pinned = target ?? null;
       if (!fetch.ok) {
         // Failure touches neither snapshot, snapshot_at nor fetched_at, so the
         // last-known document stands and the peer ages into `stale` on its own.
         database
-          .prepare("UPDATE peers SET last_attempt_at = ?, last_error = ? WHERE name = ?")
-          .run(fetch.at, fetch.error, name);
+          .prepare(
+            "UPDATE peers SET last_attempt_at = ?, last_error = ? WHERE name = ? AND (? IS NULL OR target = ?)",
+          )
+          .run(fetch.at, fetch.error, name, pinned, pinned);
         return;
       }
       // Two clocks, and conflating them is how a freshly fetched three-hour-old
@@ -1840,7 +1861,7 @@ export function openStore(): Store {
               SET snapshot = ?, snapshot_at = ?, fetched_at = ?, last_attempt_at = ?,
                   last_error = NULL, host_id = ?, display_name = ?,
                   murmur_version = ?, snapshot_version = ?
-            WHERE name = ?`,
+            WHERE name = ? AND (? IS NULL OR target = ?)`,
         )
         .run(
           JSON.stringify(fetch.snapshot),
@@ -1852,6 +1873,8 @@ export function openStore(): Store {
           fetch.snapshot.murmur_version,
           fetch.snapshot.murmur_snapshot,
           name,
+          pinned,
+          pinned,
         );
     },
 

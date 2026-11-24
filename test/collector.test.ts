@@ -991,3 +991,23 @@ test("a channel still busy on the retry fails, and other errors are not retried"
   await collect(store, denied.channel, 2_000, { busyRetryMs: 0 });
   expect(denied.calls()).toBe(1);
 });
+
+test("a fetch in flight when the peer is retargeted does not write to the new target", async () => {
+  store.addPeer("dev", "old.example");
+  const channel: Channel = {
+    exec: async () => {
+      // The operator corrects the target while the old target is being fetched.
+      store.addPeer("dev", "new.example");
+      return snapshot([pane("%1")], "OLD-NODE");
+    },
+  };
+
+  await collect(store, channel, 5_000);
+
+  expect(store.peers()[0]).toMatchObject({
+    target: "new.example",
+    host_id: null,
+    snapshot: null,
+    fetched_at: null,
+  });
+});
