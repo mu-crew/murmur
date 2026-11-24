@@ -82,7 +82,7 @@ murmur needs tmux, so agents inside herdr's own panes are not visible to it.
 ## Install
 
 Needs tmux, [pi](https://github.com/earendil-works/pi), `fzf`, and
-Node 20+. Multi-machine: ssh access, murmur on each node.
+Node 22.12+. Multi-machine: ssh access, murmur on each node.
 
 On every node that runs agents:
 
