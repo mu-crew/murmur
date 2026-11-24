@@ -7,6 +7,7 @@ import { remoteSessionName } from "../src/agents.js";
 import { DASH_PANE_OPTION, JUMP_CLIENT_OPTION } from "../src/goto.js";
 import { asPaneId, asSessionId, asWindowId } from "../src/ids.js";
 import { tmuxInboxHost } from "../src/inbox.js";
+import { shellQuote, tmuxAttachCommand } from "../src/jump-command.js";
 import { exactPaneTarget, exactSession, paneAddress, tmux } from "../src/mux.js";
 import { openStore } from "../src/store.js";
 
@@ -404,11 +405,11 @@ test("the dash and jump markers are server-global options a later command can re
   rig("kill-session", "-t", exactSession("opts"));
 });
 
-test("the armed jump hook marks exactly one attaching client and then removes itself", () => {
+test("the jump attach marks exactly its own client, and an ordinary attach is unmarked", () => {
   // The invariant the whole remote branch rests on: murmur's own attach is
   // marked, and the NEXT client -- an ordinary human `tmux attach` to the same
   // machine -- is not. Only a real server can establish it, since the mechanism
-  // is tmux firing a hook and expanding `#{client_name}` at that moment.
+  // is tmux running the marking command as the client that just attached.
   //
   // Two extra tmux servers act as terminals, because a client needs a tty and
   // `attach` from a test process has none.
@@ -429,20 +430,18 @@ test("the armed jump hook marks exactly one attaching client and then removes it
 
   try {
     rig("new-session", "-d", "-s", "marked", "sleep 300");
-    // The exact string the jump appends to its probe, run the way the remote
-    // side runs it: through a SHELL, as arguments to `tmux`. That is the seam
-    // worth pinning -- the quoting has to survive a shell before tmux parses
-    // it. Not `run-shell` (which takes a shell command, so the tmux command
-    // fails) and not an argv array (which would skip the shell the real path
-    // goes through).
-    execFileSync("zsh", ["-c", `tmux ${TMUX.join(" ")} ${tmux.armJumpMarkerCommand()}`], {
-      encoding: "utf8",
-      timeout: 10_000,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+    // The exact attach string the jump's wrapper runs, through a SHELL as the
+    // remote side runs it: the quoting has to survive a shell before tmux
+    // parses it, and `#{client_name}` has to expand as the attaching client.
     expect(rig("show-options", "-gqv", JUMP_CLIENT_OPTION)).toBe("");
-
-    outerTmux("new-session", "-d", `tmux -L ${SOCKET} -f /dev/null attach -t marked`);
+    const attach = tmuxAttachCommand(
+      {
+        server: { kind: "label", value: SOCKET },
+        pane: asPaneId(rig("list-panes", "-t", "marked", "-F", "#{pane_id}")),
+      },
+      [JUMP_CLIENT_OPTION],
+    );
+    outerTmux("new-session", "-d", `TMUX= sh -c ${shellQuote(attach)}`);
     // A client attach is not synchronous with the command that starts it.
     const settle = (predicate: () => boolean) => {
       const deadline = Date.now() + 5_000;
@@ -461,9 +460,9 @@ test("the armed jump hook marks exactly one attaching client and then removes it
     // time is in the marker because a tty path is recycled by the OS.
     expect(marker).toBe(client);
 
-    // The hook is gone, so a SECOND client attaching does not get marked --
-    // the ordinary-remote-login case. Proven by clearing the option and
-    // checking nothing rewrites it.
+    // A SECOND, ordinary client attaching does not get marked -- the
+    // ordinary-remote-login case. Proven by clearing the option and checking
+    // nothing rewrites it.
     rig("set-option", "-gqu", JUMP_CLIENT_OPTION);
     secondTmux("new-session", "-d", `tmux -L ${SOCKET} -f /dev/null attach -t marked`);
     expect(settle(() => rig("list-clients", "-F", "#{client_name}").split("\n").length === 2)).toBe(

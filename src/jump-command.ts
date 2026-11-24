@@ -34,18 +34,34 @@ export function suggestedJumpCommand(template: string, target: string): string {
   return migrated === template ? defaultJumpCommand(target) : migrated;
 }
 
-export function tmuxAttachCommand({ server, pane }: PaneIdentity): string {
+/**
+ * `tmux attach` to the pane. Each of `marks` names a server-global option the
+ * attaching client records itself in, as `#{client_name} #{client_created}`:
+ * commands after `attach` in the same list run as the client that just
+ * attached, so only an attach that happened can mark, and only its own client.
+ */
+export function tmuxAttachCommand(
+  { server, pane }: PaneIdentity,
+  marks: readonly string[] = [],
+): string {
   const selector =
     server.kind === "default"
       ? ""
       : ` ${server.kind === "label" ? "-L" : "-S"} ${shellQuote(server.value)}`;
-  return `tmux${selector} attach -t ${shellQuote(pane)}`;
+  const mark = marks
+    .map((option) => ` ';' set-option -gF ${option} '#{client_name} #{client_created}'`)
+    .join("");
+  return `tmux${selector} attach -t ${shellQuote(pane)}${mark}`;
 }
 
 /** Substitute values into a peer-owned transport without parsing or rewriting it. */
-export function renderJumpCommand(template: string, destination: PaneIdentity): string {
+export function renderJumpCommand(
+  template: string,
+  destination: PaneIdentity,
+  marks: readonly string[] = [],
+): string {
   return template
-    .replaceAll(ATTACH_PLACEHOLDER, shellQuote(tmuxAttachCommand(destination)))
+    .replaceAll(ATTACH_PLACEHOLDER, shellQuote(tmuxAttachCommand(destination, marks)))
     .replaceAll(PANE_PLACEHOLDER, destination.pane);
 }
 

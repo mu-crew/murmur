@@ -109,7 +109,6 @@ export function fakeMux(over: Partial<Mux> & PublishHooks = {}): Mux {
     dashPane: () => null,
     clientIdentity: () => null,
     jumpClientMarker: () => null,
-    armJumpMarkerCommand: () => "set-hook -g client-attached[9000] 'fake'",
     detachClient: () => true,
     clientLocation: () => null,
     liveWindows: () => new Set(),

@@ -13,10 +13,11 @@ export const DASH_PANE_OPTION = "@murmur_dash_pane";
 /**
  * The tmux option naming the client murmur itself attached for a remote jump.
  *
- * Lives on the REMOTE server, set by a one-shot `client-attached` hook that
- * murmur installs just before its jump attaches. It therefore marks exactly one
- * client: an ordinary human `ssh`+`tmux attach` to the same machine is not
- * murmur-controlled and must keep the ordinary switch behaviour.
+ * Lives on the REMOTE server, set by the jump's own `tmux attach ';'
+ * set-option -gF ...` (see `tmuxAttachCommand`), so it marks the client that
+ * attach created and nothing else: an ordinary human `ssh`+`tmux attach` to
+ * the same machine is not murmur-controlled and must keep the ordinary switch
+ * behaviour.
  *
  * Stored as `#{client_name} #{client_created}` rather than the name alone. A
  * client name is a tty path, which the OS recycles, so a marker left behind by
@@ -25,15 +26,6 @@ export const DASH_PANE_OPTION = "@murmur_dash_pane";
  * which is also why nothing has to clear this option on detach.
  */
 export const JUMP_CLIENT_OPTION = "@murmur_jump_client";
-
-/**
- * Hook index for the one-shot jump marker.
- *
- * A high index because hook arrays are shared with the user's own config:
- * writing `client-attached` unindexed would REPLACE whatever they had bound.
- * The hook removes itself when it fires, so it cannot mark a second client.
- */
-export const JUMP_HOOK_INDEX = 9000;
 
 /**
  * The session PREFIX G opens a dash in when none is running.
