@@ -25,7 +25,7 @@
     "ssh"
   ],
   "engines": {
-    "node": ">=22.12"
+    "node": ">=22.14"
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
