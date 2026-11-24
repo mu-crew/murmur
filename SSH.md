@@ -6,9 +6,15 @@ error looks like credentials.
 
 ## The one rule
 
-murmur never prompts: every ssh it runs sets `BatchMode=yes`. A peer that
-cannot authenticate unattended is collectable only while an authenticated
-connection exists for murmur to ride. The rest of this page follows from that.
+murmur's background ssh (collect, `peer add` probe, preview, the warm-socket
+check) never prompts: it sets `BatchMode=yes` and `ProxyCommand=none`, and
+pins `ControlPath` to `~/.ssh/control/%r@%h:%p` whatever your ssh_config says.
+A peer that cannot authenticate unattended is collectable only while an
+authenticated connection exists on that socket for murmur to ride. The rest of
+this page follows from that.
+
+The interactive attach (jump) is the exception: it is plain `ssh -t`, so it
+uses your ssh_config and may prompt. A failure there is not a collect failure.
 
 ## A host that wants interactive auth
 
@@ -22,8 +28,8 @@ ssh -MNf -S '~/.ssh/control/%r@%h:%p' dev   # answer the prompt once
 `-N -f` open no shell and background it, so the master holds no session slot.
 `-M -S` put the socket where murmur looks; OpenSSH defaults to no master and
 no `ControlPath`, so a bare `ssh` may leave nothing to ride. If your
-ssh_config already sets `ControlMaster auto` and a matching `ControlPath`, a
-plain `ssh dev` does the same.
+ssh_config already sets `ControlMaster auto` and `ControlPath
+~/.ssh/control/%r@%h:%p`, a plain `ssh dev` does the same.
 
 While no master lives, the peer is skipped, its cached rows keep their age,
 and the dash header names the fix (`murmur doctor` has the full list):
@@ -77,8 +83,9 @@ Host dev
   HostKeyAlias dev.example.com   # the host's real name
 ```
 
-murmur takes the `ControlPath` from ssh, so it needs no change; use one local
-port per host. The master then lasts as long as the ET session, not the
+The `%h:%p` in murmur's fixed `ControlPath` resolves to `localhost:2222`
+here, so open the master with the same `-S` as above; use one local port per
+host. The master then lasts as long as the ET session, not the
 network connection. How the host authenticates a connection that arrives this
 way is up to its sshd, so check before relying on it.
 
@@ -98,9 +105,16 @@ ssh -O check dev                            # expect: Master running (pid=...)
 
 ## Reading the fleet
 
-`murmur peer list` is best-effort: the **`SSH`** column is last-known
-reachability, **`error`** is the current attempt. Branch on the error, never on
-presence in the list; `--json` exits 0 with peers down, since sleeping machines
+`murmur peer list` is best-effort, and its columns answer different questions:
+
+- **`SSH`**: `warm` if a master socket answers `ssh -O check` locally, else
+  `cold`. It never dials, so it says nothing about reachability: `cold` peers
+  collect fine on key auth, and a `warm` socket can still be wedged.
+- **`LAST SEEN`**: age of the last successful collect.
+- **error**: why the latest attempt failed (printed under the table, `error` in
+  `--json`), empty after a success.
+
+Branch on the error, never on presence in the list; `--json` exits 0 with peers down, since sleeping machines
 are normal.
 
 `murmur status`, the dash and the side panel poll and stay silent. `murmur collect` dials
