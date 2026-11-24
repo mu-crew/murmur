@@ -27,4 +27,11 @@ describe("Node runtime floor", () => {
     expect(read("README.md")).toContain(`Node ${major}`);
     expect(read("tsup.config.ts")).not.toMatch(new RegExp(`node(?!${major})\\d+"`));
   });
+
+  it("CI runs the declared floor next to the current Node", () => {
+    const [major, minor] = floor(pkg.engines.node);
+    const ci = read(".github/workflows/check.yml");
+    expect(ci).toContain(`${major}.${minor}`);
+    expect(ci).toContain("matrix.node");
+  });
 });

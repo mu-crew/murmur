@@ -19,23 +19,35 @@ concurrency:
 
 jobs:
   typecheck:
+    name: typecheck (node ${{ matrix.node }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Current Node, and the engines floor in package.json.
+        node: [26, "22.12"]
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
         with:
-          node-version: 26
+          node-version: ${{ matrix.node }}
           cache: npm
       - run: npm ci
       - run: npm run typecheck
 
   lint:
+    name: lint (node ${{ matrix.node }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Current Node, and the engines floor in package.json.
+        node: [26, "22.12"]
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
         with:
-          node-version: 26
+          node-version: ${{ matrix.node }}
           cache: npm
       - run: npm ci
       - run: npm run lint
@@ -43,17 +55,18 @@ jobs:
   # The vitest projects in vitest.config.ts: `unit` runs files in parallel,
   # `tmux-rig` drives a real tmux server one file at a time.
   test:
-    name: test (${{ matrix.project }})
+    name: test (${{ matrix.project }}, node ${{ matrix.node }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         project: [unit, tmux-rig]
+        node: [26, "22.12"]
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
         with:
-          node-version: 26
+          node-version: ${{ matrix.node }}
           cache: npm
       # zsh: one tmux-rig test runs the remote jump hook through a real zsh.
       - run: sudo apt-get update && sudo apt-get install -y tmux zsh
