@@ -61,9 +61,13 @@ export function renderJumpCommand(
   destination: PaneIdentity,
   marks: readonly string[] = [],
 ): string {
-  return template
-    .replaceAll(ATTACH_PLACEHOLDER, shellQuote(tmuxAttachCommand(destination, marks)))
-    .replaceAll(PANE_PLACEHOLDER, destination.pane);
+  // One pass, so a placeholder spelled inside a substituted value (a socket
+  // path containing `{pane}`) is never rewritten.
+  return template.replaceAll(/\{attach\}|\{pane\}/g, (placeholder) =>
+    placeholder === ATTACH_PLACEHOLDER
+      ? shellQuote(tmuxAttachCommand(destination, marks))
+      : destination.pane,
+  );
 }
 
 export function supportsServer(template: string, server: TmuxServer): boolean {
