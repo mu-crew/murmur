@@ -841,7 +841,32 @@ test("a stored jump command round-trips", () => {
   expect(s.peers()[0]?.jump_command).toBe('et dev -c "tmux attach -t {pane}"');
 });
 
-test("addPeer corrects a target without discarding the cache", () => {
+test("addPeer with the same target keeps the cache and a custom jump command", () => {
+  const s = store();
+  s.addPeer("dev", "old.example");
+  s.replacePeerSnapshot("dev", {
+    ok: true,
+    at: 1_000,
+    snapshot: {
+      murmur_snapshot: 7,
+      host_id: "REMOTE",
+      display_name: "dev",
+      murmur_version: "1.0.0",
+      generated_at: 900,
+      panes: [],
+    },
+  });
+
+  s.addPeer("dev", "old.example");
+
+  expect(s.peers()[0]).toMatchObject({ target: "old.example", snapshot: { host_id: "REMOTE" } });
+  expect(s.removePeer("dev")).toBe(true);
+  expect(s.removePeer("dev")).toBe(false);
+});
+
+test("addPeer with a new target drops the old node's cache", () => {
+  // The new target is unverified: rows cached from the old node must not stay
+  // actionable through it (the new node can have the same %N).
   const s = store();
   s.addPeer("dev", "old.example");
   s.replacePeerSnapshot("dev", {
@@ -859,9 +884,12 @@ test("addPeer corrects a target without discarding the cache", () => {
 
   s.addPeer("dev", "new.example");
 
-  expect(s.peers()[0]).toMatchObject({ target: "new.example", snapshot: { host_id: "REMOTE" } });
-  expect(s.removePeer("dev")).toBe(true);
-  expect(s.removePeer("dev")).toBe(false);
+  expect(s.peers()[0]).toMatchObject({
+    target: "new.example",
+    snapshot: null,
+    host_id: null,
+    fetched_at: null,
+  });
 });
 
 // --- opening a current store waits on nobody ----------------------------

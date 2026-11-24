@@ -131,10 +131,10 @@ test("an unreachable host is still added, on the operator's word", () => {
   expect(refusal).toBeNull();
 });
 
-test("a peer keeps its cache when its target is corrected", () => {
-  // Re-adding is how a target gets fixed, so it must update the one field the
-  // operator retyped and nothing else. Discarding the snapshot here would blank
-  // the host's whole pane list until the next collect.
+test("correcting a peer's target drops the old cache until a probe refills it", () => {
+  // The new target is unverified, so the old node's rows must not stay
+  // actionable through it. `peer add` probes the new target and records the
+  // answer, which refills the cache when it is the same host.
   const store = openStore();
   store.addPeer("bubba", "bubba");
   store.replacePeerSnapshot("bubba", { ok: true, at: 1_000, snapshot: probe("H", "bubba") });
@@ -144,9 +144,12 @@ test("a peer keeps its cache when its target is corrected", () => {
   expect(store.peers()).toHaveLength(1);
   expect(store.peers()[0]).toMatchObject({
     target: "bubba.local",
-    host_id: "H",
-    fetched_at: 1_000,
+    host_id: null,
+    fetched_at: null,
   });
+
+  store.replacePeerSnapshot("bubba", { ok: true, at: 2_000, snapshot: probe("H", "bubba") });
+  expect(store.peers()[0]).toMatchObject({ host_id: "H", fetched_at: 2_000 });
 });
 
 test("peer list output is column-aligned under a header", () => {

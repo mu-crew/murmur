@@ -570,7 +570,11 @@ export async function collect(
         if (fetch.status === "rejected") throw fetch.reason;
         // Every field the cache derives comes out of the document itself, so
         // the cache structurally cannot disagree with the snapshot it holds.
-        store.replacePeerSnapshot(peer.name, { ok: true, snapshot: fetch.value, at: now });
+        store.replacePeerSnapshot(
+          peer.name,
+          { ok: true, snapshot: fetch.value, at: now },
+          peer.target,
+        );
         results.push({ peer: peer.name, ok: true, panes: fetch.value.panes.length });
       } catch (error) {
         // Normalised ONCE, before it is stored or returned. `last_error` is read
@@ -580,7 +584,7 @@ export async function collect(
         // words that mattered. Normalising here means no surface has to
         // remember to strip it.
         const message = normalizeFailure(error instanceof Error ? error.message : String(error));
-        store.replacePeerSnapshot(peer.name, { ok: false, error: message, at: now });
+        store.replacePeerSnapshot(peer.name, { ok: false, error: message, at: now }, peer.target);
         // Returned, never printed. `collect` runs from `murmur status` on every
         // tick and from a picker inside a display-popup, so one sleeping laptop
         // wrote to stderr forever and corrupted both surfaces. Only the
