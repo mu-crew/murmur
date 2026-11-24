@@ -23,6 +23,21 @@ import type { TmuxServer } from "./types.js";
  */
 export const CLIENT_IDENTITY_FORMAT = "#{client_name} #{client_pid} #{client_created}";
 
+/**
+ * Local session option stamping a jump wrapper with the route it holds: host
+ * and remote tmux server. A wrapper's NAME is a readable label, hashed and
+ * not injective (labels `Aa` and `BB` collide), so reuse, retarget and kill
+ * act only on a session whose stamp is this jump's route.
+ */
+export const WRAPPER_ROUTE_OPTION = "@murmur_wrapper_route";
+
+export function wrapperRoute(target: { host_id: string; server: TmuxServer }): string {
+  const { server } = target;
+  const value = server.kind === "default" ? "" : server.value;
+  // base64url so no tmux option quoting can alter it on the way back.
+  return Buffer.from(JSON.stringify([target.host_id, server.kind, value])).toString("base64url");
+}
+
 /** tmux global flags that take no value and do not choose the server. */
 const NO_VALUE_FLAGS = /^-[2CDlNuv]+$/;
 

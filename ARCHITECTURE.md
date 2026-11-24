@@ -254,8 +254,8 @@ which pane the local client ends up showing, so some cases are accepted:
 
 - A hand-started `ssh` / `et` pane to a peer may be reused as the attachment even
   when it shows another pane.
-- Server labels that hash alike can share a wrapper session.
-- Wrappers left by 2.2.x are not adopted or retired.
+- Wrappers without a route stamp (older murmur) are not adopted or retired; the
+  jump takes the next free name.
 - A custom jump template that redirects the attach is trusted.
 - Activity on another tmux client during the jump can change where it lands.
 

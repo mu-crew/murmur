@@ -16,6 +16,7 @@ import { asPaneId, asSessionId, asWindowId } from "../src/ids.js";
 import { shellQuote } from "../src/jump-command.js";
 import { reportJumpFailure } from "../src/jump-select.js";
 import { tmux } from "../src/mux.js";
+import { WRAPPER_ROUTE_OPTION, wrapperRoute } from "../src/routing.js";
 import { openStore, type Store } from "../src/store.js";
 import type { PaneView } from "../src/view.js";
 import { fakeMux } from "./helpers/fake-mux.js";
@@ -38,6 +39,12 @@ afterEach(() => {
  * One pane as every surface sees it. Remote by default, because that is the path
  * with the probe, the wrapper session and the classification rules.
  */
+/** A wrapper session's options as murmur stamps them for `view()`'s route. */
+function stamped(client: string | null) {
+  const route = wrapperRoute({ host_id: "remote-host", server: { kind: "default" } });
+  return (_session: string, option: string) => (option === WRAPPER_ROUTE_OPTION ? route : client);
+}
+
 function view(over: Partial<PaneView> = {}): PaneView {
   return {
     host_id: "remote-host",
@@ -330,7 +337,7 @@ test("an existing per-host session is switched to, and no new one is opened", ()
     view(),
     fakeMux({
       sessionNamed: () => true,
-      sessionOption: () => "@murmur_wrapper_0a1b",
+      sessionOption: stamped("@murmur_wrapper_0a1b"),
       newSession: () => {
         opened += 1;
         return true;
@@ -359,7 +366,7 @@ test("reusing a host's wrapper retargets it at the pane that was picked", () => 
   const result = jumpToAgent(
     store,
     view({ pane: asPaneId("%42") }),
-    fakeMux({ sessionNamed: () => true, sessionOption: () => "@murmur_wrapper_0a1b" }),
+    fakeMux({ sessionNamed: () => true, sessionOption: stamped("@murmur_wrapper_0a1b") }),
     (_file, args) => {
       remoteCommands.push(args.at(-1) ?? "");
       return ok("%42\n");
@@ -427,7 +434,7 @@ test("a private server's pane never reuses the default server's wrapper", () => 
 
   expect(result).toEqual({ ok: true });
   expect(asked[0]).not.toBe(remoteSessionName("p", "remote-host"));
-  expect(opened).toEqual(asked);
+  expect(opened).toEqual([asked[0]]);
 });
 
 test("with no existing session, exactly one is opened for the peer", () => {
@@ -559,6 +566,7 @@ test("the wrapper session hides the local status bar and disables the local pref
 
   const wrapper = remoteSessionName("p", "remote-host");
   expect(options).toEqual([
+    `${wrapper} ${WRAPPER_ROUTE_OPTION}=${wrapperRoute(view())}`,
     // Which remote option its client recorded itself in, for reuse to find it.
     expect.stringMatching(
       new RegExp(`^${wrapper} ${WRAPPER_CLIENT_OPTION}=@murmur_wrapper_[0-9a-f]{12}$`),
@@ -1177,9 +1185,100 @@ test("against a real tmux a human reattached on the wrapper's tty in the same se
   }
 });
 
+test("against a real local tmux a wrapper for one server is never reused or killed for another", () => {
+  // Labels `Aa` and `BB` hash alike, so their wrappers once shared a name: a
+  // jump to BB found Aa's live wrapper, could not retarget it on BB, and
+  // killed it as a dead BB wrapper. Real local and remote tmux servers; only
+  // the final client switch and the ssh hop are substituted.
+  const root = mkdtempSync("/tmp/murmur-jump-");
+  const env = { ...process.env, TMUX_TMPDIR: root, TMUX: "" };
+  const on =
+    (...server: string[]) =>
+    (...args: string[]) =>
+      execFileSync("tmux", [...server, "-f", "/dev/null", ...args], {
+        encoding: "utf8",
+        timeout: 10_000,
+        stdio: ["ignore", "pipe", "pipe"],
+        env,
+      }).trim();
+  const local = on();
+  const remotes = { Aa: on("-L", "Aa"), BB: on("-L", "BB") };
+  try {
+    vi.stubEnv("TMUX_TMPDIR", root);
+    local("new-session", "-d", "-s", "home", "sleep 300");
+    for (const remote of Object.values(remotes)) {
+      remote("new-session", "-d", "-s", "agents", "sleep 300");
+    }
+    vi.stubEnv("TMUX", `${local("display-message", "-p", "#{socket_path}")},1,0`);
+    // `TMUX=` so the wrapper's attach is not refused as nested.
+    peer("p", "remote-host", [], "env TMUX= sh -c {attach}");
+    const run: Runner = (_file, args) => {
+      try {
+        const stdout = execFileSync("sh", ["-c", args.at(-1) ?? ""], {
+          encoding: "utf8",
+          timeout: 10_000,
+          stdio: ["ignore", "pipe", "ignore"],
+          env,
+        });
+        return { status: 0, stdout, failed: false };
+      } catch (error) {
+        const failure = error as { status?: number; stdout?: string };
+        return { status: failure.status ?? 1, stdout: failure.stdout ?? "", failed: false };
+      }
+    };
+    const mux = {
+      ...tmux,
+      clientName: () => null,
+      currentTarget: () => null,
+      switchClient: () => true,
+    };
+    const jump = (label: "Aa" | "BB") =>
+      jumpToAgent(
+        store,
+        view({
+          server: { kind: "label", value: label },
+          pane: asPaneId(remotes[label]("list-panes", "-a", "-F", "#{pane_id}")),
+        }),
+        mux,
+        run,
+      );
+    const sessions = () =>
+      local("list-sessions", "-F", "#{session_id} #{session_name}").split("\n").sort();
+    const name = remoteSessionName("p", "remote-host", { kind: "label", value: "Aa" });
+    expect(remoteSessionName("p", "remote-host", { kind: "label", value: "BB" })).toBe(name);
+
+    expect(jump("Aa")).toEqual({ ok: true });
+    const first = sessions();
+    const aa = first.find((line) => line.endsWith(` ${name}`));
+    expect(aa).toBeDefined();
+    // Settle the wrapper's attach, so a kill would be visible.
+    const deadline = Date.now() + 5_000;
+    while (Date.now() < deadline && remotes.Aa("list-clients", "-F", "#{client_name}") === "") {
+      execFileSync("sleep", ["0.1"]);
+    }
+
+    expect(jump("BB")).toEqual({ ok: true });
+    const after = sessions();
+    expect(after).toContain(aa);
+    expect(after).toHaveLength(first.length + 1);
+    // And back to Aa reuses Aa's wrapper rather than opening a third.
+    expect(jump("Aa")).toEqual({ ok: true });
+    expect(sessions()).toEqual(after);
+  } finally {
+    for (const tmux of [local, ...Object.values(remotes)]) {
+      try {
+        tmux("kill-server");
+      } catch {
+        // Never started.
+      }
+    }
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("a wrapper whose remote client cannot be identified is replaced, not retargeted blind", () => {
-  // No recorded client (a wrapper from an older murmur), or one that is no
-  // longer attached: any switch-client would be tmux's pick of client.
+  // No recorded client, or one that is no longer attached: any switch-client
+  // would be tmux's pick of client.
   peer("p", "remote-host");
   vi.stubEnv("TMUX", "/tmp/tmux-1000/default,123,0");
   const name = remoteSessionName("p", "remote-host");
@@ -1191,7 +1290,7 @@ test("a wrapper whose remote client cannot be identified is replaced, not retarg
       view(),
       fakeMux({
         sessionNamed: () => true,
-        sessionOption: () => recorded,
+        sessionOption: stamped(recorded),
         killSession: (session) => {
           killed.push(session);
           return true;
@@ -1213,6 +1312,48 @@ test("a wrapper whose remote client cannot be identified is replaced, not retarg
   }
 });
 
+test("a session holding the wrapper's name without its route stamp is left alone", () => {
+  // An older murmur's wrapper, another route's wrapper, or a session that is
+  // not murmur's at all: none is retargeted or killed; the jump takes the next
+  // name, and refuses once every name is taken.
+  peer("p", "remote-host");
+  vi.stubEnv("TMUX", "/tmp/tmux-1000/default,123,0");
+  const name = remoteSessionName("p", "remote-host");
+  const other = wrapperRoute({ host_id: "remote-host", server: { kind: "label", value: "x" } });
+  for (const stamp of [null, other]) {
+    const killed: string[] = [];
+    const opened: string[] = [];
+    const remote: string[] = [];
+    const jump = (taken: (session: string) => boolean) =>
+      jumpToAgent(
+        store,
+        view(),
+        fakeMux({
+          sessionNamed: taken,
+          sessionOption: (_session, option) =>
+            option === WRAPPER_ROUTE_OPTION ? stamp : "@murmur_wrapper_0a1b",
+          killSession: (session) => {
+            killed.push(session);
+            return true;
+          },
+          newSession: (session) => {
+            opened.push(session);
+            return true;
+          },
+        }),
+        (_file, args) => {
+          remote.push(args.at(-1) ?? "");
+          return ok("%9\n");
+        },
+      );
+    expect(jump((session) => session === name)).toEqual({ ok: true });
+    expect(opened).toEqual([name.replace(/~$/, "-2~")]);
+    expect(jump(() => true)).toMatchObject({ ok: false, reason: "attach_failed" });
+    expect(killed).toEqual([]);
+    expect(remote.some((command) => command.includes("switch-client"))).toBe(false);
+  }
+});
+
 test("reusing a wrapper retargets its existing remote client without marking another", () => {
   peer("p", "remote-host");
   vi.stubEnv("TMUX", "/tmp/tmux-1000/default,123,0");
@@ -1221,7 +1362,7 @@ test("reusing a wrapper retargets its existing remote client without marking ano
   const result = jumpToAgent(
     store,
     view({ pane: asPaneId("%42") }),
-    fakeMux({ sessionNamed: () => true, sessionOption: () => "@murmur_wrapper_0a1b" }),
+    fakeMux({ sessionNamed: () => true, sessionOption: stamped("@murmur_wrapper_0a1b") }),
     (_file, args) => {
       remoteCommands.push(args.at(-1) ?? "");
       return ok("%42\n");

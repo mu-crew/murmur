@@ -13,7 +13,7 @@ import {
   unsupportedServerMessage,
 } from "./jump-command.js";
 import { type Mux, tmux } from "./mux.js";
-import { CLIENT_IDENTITY_FORMAT } from "./routing.js";
+import { CLIENT_IDENTITY_FORMAT, WRAPPER_ROUTE_OPTION, wrapperRoute } from "./routing.js";
 import type { Store } from "./store.js";
 import { DEFAULT_TMUX_SERVER, type PeerRecord, type TmuxServer } from "./types.js";
 import type { PaneView } from "./view.js";
@@ -305,6 +305,29 @@ function runOutside(
 export const WRAPPER_CLIENT_OPTION = "@murmur_wrapper_client";
 const WRAPPER_OPTION = /^@murmur_wrapper_[0-9a-f]+$/;
 
+/** How many names a route's wrapper may take when another route holds its own. */
+const WRAPPER_SLOTS = 4;
+
+/**
+ * The wrapper session for `route`: the one already stamped with it (reuse), or
+ * else the first free name. A taken name whose stamp differs -- another
+ * route's wrapper, an unstamped older one, a session that is not murmur's -- is
+ * never touched. Null when every slot is taken by something else.
+ */
+function wrapperSlot(
+  mux: Mux,
+  base: string,
+  route: string,
+): { name: string; reuse: boolean } | null {
+  let free: string | null = null;
+  for (let slot = 0; slot < WRAPPER_SLOTS; slot += 1) {
+    const name = slot === 0 ? base : `${base.slice(0, -1)}-${slot + 1}~`;
+    if (!mux.sessionNamed(name)) free ??= name;
+    else if (mux.sessionOption(name, WRAPPER_ROUTE_OPTION) === route) return { name, reuse: true };
+  }
+  return free ? { name: free, reuse: false } : null;
+}
+
 export function jumpToAgent(
   store: Store,
   agent: PaneView,
@@ -401,12 +424,6 @@ export function jumpToAgent(
   // Named after the peer as configured, matching the picker's host column: a
   // self-reported display_name can be a container id, unrecognisable in a
   // session list.
-  const name = remoteSessionName(peer.name, agent.host_id, agent.server);
-  // Reuse this host's wrapper rather than stacking one per jump -- three jumps
-  // to bubba left three identical windows. Matched on name, the only handle
-  // available: the ssh is opaque and a remote session id is not a local
-  // address.
-  const reuse = Boolean(env.TMUX) && mux.sessionNamed(name);
 
   const tmuxPrefix =
     agent.server.kind === "default"
@@ -491,6 +508,24 @@ export function jumpToAgent(
   // cost is that the local server is unreachable from inside the wrapper; the
   // README documents a root-table key that detaches out.
   if (env.TMUX) {
+    // Reuse this route's wrapper rather than stacking one per jump -- three
+    // jumps to bubba left three identical windows. Found by its route stamp,
+    // not its name: the name is a hashed label, and another route's wrapper
+    // (or a session that is not murmur's) can hold it.
+    const slot = wrapperSlot(
+      mux,
+      remoteSessionName(peer.name, agent.host_id, agent.server),
+      wrapperRoute(agent),
+    );
+    if (!slot) {
+      return {
+        ok: false,
+        reason: "attach_failed",
+        message: `could not open a session to attach to ${target}: every wrapper session name for ${peer.name} is taken.`,
+      };
+    }
+    const { name, reuse } = slot;
+
     // Read BEFORE the wrapper exists, or the wrapper itself is recorded as the
     // place to come back to and the return is a no-op.
     const client = mux.clientName();
@@ -542,8 +577,9 @@ export function jumpToAgent(
               };
         }
       }
-      // The wrapper's client cannot be identified (an older wrapper, a client
-      // gone): replace the wrapper rather than steer some other client.
+      // The wrapper's client cannot be identified (a client gone): replace
+      // the wrapper, whose route the stamp just proved, rather than steer
+      // some other client.
       if (!mux.killSession(name)) {
         return {
           ok: false,
@@ -580,6 +616,7 @@ export function jumpToAgent(
       };
     }
 
+    mux.setSessionOption(name, WRAPPER_ROUTE_OPTION, wrapperRoute(agent));
     mux.setSessionOption(name, WRAPPER_CLIENT_OPTION, clientOption);
     mux.setSessionOption(name, "status", "off");
     mux.setSessionOption(name, "prefix", "None");
