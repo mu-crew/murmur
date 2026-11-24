@@ -433,29 +433,53 @@ export function jumpToAgent(
   // rides; without ConnectTimeout it inherits the kernel's 75s dial, so a
   // sleeping laptop froze the picker for ten seconds before admitting it.
   //
-  // The probe also ARMS the jump marker when there is a local session to come
-  // back to, so `murmur dash --goto` on the remote machine detaches instead of
-  // switching. Appended to the probe rather than sent as its own ssh: a second
-  // round trip would double the jump's latency, and arming it after the attach
-  // is impossible -- the hook has to exist before the client it marks. Appended
-  // rather than prepended so the probe's pane list stays the readable output.
+  // Decided BEFORE the probe, because the probe is what arms the jump marker
+  // and only a new attachment may arm it. Reuse retargets the wrapper's
+  // existing remote client, so no client-attached event follows; a hook armed
+  // then waits for the next unrelated login and marks it as a jump wrapper.
+  //
+  // Named after the peer as configured, matching the picker's host column: a
+  // self-reported display_name can be a container id, unrecognisable in a
+  // session list.
+  const name = remoteSessionName(peer.name, agent.host_id, agent.server);
+  // Reuse this host's wrapper rather than stacking one per jump -- three jumps
+  // to bubba left three identical windows. Matched on name, the only handle
+  // available: the ssh is opaque and a remote session id is not a local
+  // address.
+  const reuse = Boolean(env.TMUX) && mux.sessionNamed(name);
+
+  // The probe also ARMS the jump marker for a new attachment, so `murmur dash
+  // --goto` on the remote machine detaches instead of switching. Appended to
+  // the probe rather than sent as its own ssh: a second round trip would double
+  // the jump's latency, and arming it after the attach is impossible -- the
+  // hook has to exist before the client it marks. Appended rather than
+  // prepended so the probe's pane list stays the readable output.
   //
   // `process.env.TMUX` gates it because the outside-tmux path below has no
   // wrapper and no local client: a detach there would drop the operator out of
   // their own shell's session for nothing.
   //
-  // `|| true`, because the remote shell's exit status is its LAST command's: a
-  // bare `;` would report the ARM's status and discard the probe's. The arm is
-  // best effort -- an unmarked jump still lands on the agent, it only leaves
-  // PREFIX G switching to the remote dash instead of coming home -- while the
-  // probe's status is what every branch below reads. Without this, a remote
-  // tmux too old for the indexed hook made every jump to that host report
-  // "has no tmux server running" about a host that had just listed its panes.
+  // `&&` keeps the shell's exit status the probe's: a failed list-panes skips
+  // the group, a healthy one runs it and the group's `|| true` exits 0. A `;`
+  // join reported the arm's status instead, so a failed list-panes read as an
+  // empty pane list (`pane_gone` about a host with no tmux) and a remote tmux
+  // too old for the indexed hook read as `no_tmux` about a host that had just
+  // listed its panes. The arm is best effort -- an unmarked jump still lands on
+  // the agent, it only leaves PREFIX G switching to the remote dash instead of
+  // coming home.
+  //
+  // Guarded on the pane itself: a pane_gone jump attaches nothing, and the
+  // hook would be left for the next login. `has-session -t %pane`, because
+  // `display-message -t` falls back to some other pane when the target is gone
+  // and exits 0 -- verified against tmux 3.8.
   const tmuxPrefix =
     agent.server.kind === "default"
       ? "tmux"
       : `tmux ${agent.server.kind === "label" ? "-L" : "-S"} ${shellQuote(agent.server.value)}`;
-  const arm = env.TMUX ? ` ; { ${tmuxPrefix} ${mux.armJumpMarkerCommand()} || true; }` : "";
+  const arm =
+    env.TMUX && !reuse
+      ? ` && { ${tmuxPrefix} has-session -t ${shellQuote(agent.pane)} 2>/dev/null && ${tmuxPrefix} ${mux.armJumpMarkerCommand()} >/dev/null 2>&1 || true; }`
+      : "";
   const probe = run("ssh", [
     ...SSH_OPTIONS,
     target,
@@ -529,16 +553,7 @@ export function jumpToAgent(
     const client = mux.clientName();
     const origin = mux.currentTarget();
 
-    // Named after the peer as configured, matching the picker's host column: a
-    // self-reported display_name can be a container id, unrecognisable in a
-    // session list.
-    const name = remoteSessionName(peer.name, agent.host_id, agent.server);
-
-    // Reuse this host's wrapper rather than stacking one per jump -- three jumps
-    // to bubba left three identical windows. Matched on name, the only handle
-    // available: the ssh is opaque and a remote session id is not a local
-    // address.
-    if (mux.sessionNamed(name)) {
+    if (reuse) {
       // RETARGET the remote client first. Reuse is matched on the host's name
       // alone, so without this the wrapper still shows whichever pane the last
       // jump left it on: jump to agent A on a host, come back, pick agent B on
@@ -551,8 +566,7 @@ export function jumpToAgent(
       // wrapper's own ssh already warmed. A failure here fails the jump.
       // The wrapper's ssh process and remote tmux client stay alive while the
       // local client is elsewhere, so reuse retargets that existing remote
-      // client. No remote client-attached event occurs here; arming another
-      // one-shot hook would only leave a trap for the next unrelated login.
+      // client; the probe above armed nothing for it.
       const retarget = run("ssh", [
         ...SSH_OPTIONS,
         target,

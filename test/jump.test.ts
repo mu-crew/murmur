@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
@@ -81,20 +81,30 @@ function localView(over: Partial<PaneView> = {}): PaneView {
 
 /**
  * Run a remote command string the way ssh does -- joined and handed to a shell
- * -- with a `tmux` that succeeds for `list-panes` and fails for anything else.
+ * -- against a stub `tmux`. Each case arm is `subcommand) body ;;`; anything
+ * unlisted fails. Every invocation's subcommand is returned in `calls`, so a
+ * test can see what the remote shell actually ran rather than what the command
+ * string happens to spell.
  *
- * That is a remote host whose tmux is healthy but too old for the indexed
- * one-shot hook, which is the only configuration in which the probe's and the
- * arm's statuses disagree.
+ * The default is a remote host whose tmux is healthy but too old for the
+ * indexed one-shot hook: the configuration in which the probe's and the arm's
+ * statuses disagree.
  */
-function runRemote(command: string): ReturnType<Runner> {
+function runRemote(
+  command: string,
+  cases = `list-panes) echo '%9' ;;
+  has-session) : ;;`,
+): ReturnType<Runner> & { calls: string[] } {
   const bin = mkdtempSync(join(tmpdir(), "murmur-remote-bin-"));
   const stub = join(bin, "tmux");
+  const log = join(bin, "calls");
   writeFileSync(
     stub,
-    `#!/bin/sh\ncase "$1" in\n  list-panes) echo '%9' ;;\n  *) echo 'invalid option' >&2 ; exit 1 ;;\nesac\n`,
+    `#!/bin/sh\necho "$1" >> '${log}'\ncase "$1" in\n  ${cases}\n  *) echo 'invalid option' >&2 ; exit 1 ;;\nesac\n`,
   );
   chmodSync(stub, 0o755);
+  const calls = () =>
+    existsSync(log) ? readFileSync(log, "utf8").split("\n").filter(Boolean) : [];
   try {
     const stdout = execFileSync("sh", ["-c", command], {
       encoding: "utf8",
@@ -102,10 +112,17 @@ function runRemote(command: string): ReturnType<Runner> {
       stdio: ["ignore", "pipe", "ignore"],
       env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ""}` },
     });
-    return { status: 0, stdout, failed: false };
+    return { status: 0, stdout, failed: false, calls: calls() };
   } catch (error) {
     const failure = error as { status?: number; stdout?: string };
-    return { status: failure.status ?? 1, stdout: failure.stdout ?? "", failed: false };
+    return {
+      status: failure.status ?? 1,
+      stdout: failure.stdout ?? "",
+      failed: false,
+      calls: calls(),
+    };
+  } finally {
+    rmSync(bin, { recursive: true, force: true });
   }
 }
 
@@ -913,6 +930,7 @@ test("a remote tmux that rejects the arm does not turn a healthy probe into a fa
   peer("p", "remote-host");
   vi.stubEnv("TMUX", "/tmp/tmux-1000/default,123,0");
   const remoteCommands: string[] = [];
+  let armed = false;
 
   const result = jumpToAgent(
     store,
@@ -926,15 +944,136 @@ test("a remote tmux that rejects the arm does not turn a healthy probe into a fa
       // that answers the pane list and rejects the hook. Asserting on the
       // command string instead would only restate whichever spelling was
       // written; the claim is about what a remote sh does with it.
-      return runRemote(command);
+      const remote = runRemote(command);
+      armed = remote.calls.includes("set-hook");
+      return remote;
     },
   );
 
   expect(result).toEqual({ ok: true });
+  // The arm really ran and really failed; only its status was dropped.
+  expect(armed).toBe(true);
   // Still one round trip, and the arm still appended so the pane list stays the
   // readable output.
   expect(remoteCommands[0]).toContain("list-panes");
   expect(remoteCommands[0]).toContain("client-attached[9000]");
+});
+
+test("a remote tmux that fails the pane list is no_tmux, and arms nothing", () => {
+  // The arm shares the probe's shell, so a status-masking join (`; { arm ||
+  // true; }`) made the shell exit 0 whatever list-panes did. The empty pane
+  // list then read as `pane_gone` about a host with no tmux server at all, and
+  // the arm still ran against whatever answered.
+  peer("p", "remote-host");
+  vi.stubEnv("TMUX", "/tmp/tmux-1000/default,123,0");
+  let calls: string[] = [];
+
+  const result = jumpToAgent(
+    store,
+    view(),
+    fakeMux({ armJumpMarkerCommand: () => "set-hook -g client-attached[9000] 'mark'" }),
+    (file, args) => {
+      if (file !== "ssh") return ok();
+      const remote = runRemote(args.at(-1) ?? "", `list-panes) exit 1 ;;\n  set-hook) : ;;`);
+      calls = remote.calls;
+      return remote;
+    },
+  );
+
+  expect(result).toMatchObject({ ok: false, reason: "no_tmux" });
+  expect(calls).not.toContain("set-hook");
+});
+
+test("a pane the remote tmux no longer has is pane_gone, and arms nothing", () => {
+  // No attach follows a pane_gone, so a hook armed here waits on the remote
+  // server for the next unrelated login and marks it as a jump wrapper.
+  peer("p", "remote-host");
+  vi.stubEnv("TMUX", "/tmp/tmux-1000/default,123,0");
+  let calls: string[] = [];
+
+  const result = jumpToAgent(
+    store,
+    view(),
+    fakeMux({ armJumpMarkerCommand: () => "set-hook -g client-attached[9000] 'mark'" }),
+    (file, args) => {
+      if (file !== "ssh") return ok();
+      const remote = runRemote(
+        args.at(-1) ?? "",
+        `list-panes) echo '%1' ;;\n  has-session) exit 1 ;;\n  set-hook) : ;;`,
+      );
+      calls = remote.calls;
+      return remote;
+    },
+  );
+
+  expect(result).toMatchObject({ ok: false, reason: "pane_gone" });
+  expect(calls).toContain("list-panes");
+  expect(calls).not.toContain("set-hook");
+});
+
+test("against a real tmux the probe arms only for a pane it has", () => {
+  // The stubs above pin the shell's status logic; this pins the tmux half: the
+  // pane guard must fail for a missing pane on a real server. `display-message
+  // -t` was the first spelling tried and exits 0 for one.
+  //
+  // A private server under a short TMUX_TMPDIR (macOS's per-user $TMPDIR hits
+  // the unix socket length limit), killed and removed on every exit path.
+  const root = mkdtempSync("/tmp/murmur-arm-");
+  const label = `murmur-arm-${process.pid}`;
+  const env = { ...process.env, TMUX_TMPDIR: root, TMUX: "" };
+  const real = (...args: string[]) =>
+    execFileSync("tmux", ["-L", label, "-f", "/dev/null", ...args], {
+      encoding: "utf8",
+      timeout: 10_000,
+      stdio: ["ignore", "pipe", "pipe"],
+      env,
+    }).trim();
+  const hook = () => real("show-hooks", "-g", "client-attached[9000]");
+  const sh = (_file: string, args: string[]): ReturnType<Runner> => {
+    try {
+      const stdout = execFileSync("sh", ["-c", args.at(-1) ?? ""], {
+        encoding: "utf8",
+        timeout: 10_000,
+        stdio: ["ignore", "pipe", "ignore"],
+        env,
+      });
+      return { status: 0, stdout, failed: false };
+    } catch (error) {
+      const failure = error as { status?: number; stdout?: string };
+      return { status: failure.status ?? 1, stdout: failure.stdout ?? "", failed: false };
+    }
+  };
+  try {
+    real("new-session", "-d", "-s", "arm", "sleep 300");
+    const pane = asPaneId(real("list-panes", "-a", "-F", "#{pane_id}"));
+    peer("p", "remote-host");
+    vi.stubEnv("TMUX", "/tmp/tmux-1000/default,123,0");
+    const server = { kind: "label" as const, value: label };
+
+    // A fake local mux carrying the REAL arm command: the local side must not
+    // reach the developer's own tmux server.
+    const mux = fakeMux({
+      armJumpMarkerCommand: tmux.armJumpMarkerCommand,
+      newSession: () => false,
+    });
+
+    const gone = jumpToAgent(store, view({ server, pane: asPaneId("%999") }), mux, sh);
+    expect(gone).toMatchObject({ ok: false, reason: "pane_gone" });
+    // `show-hooks` names an unset hook with no body.
+    expect(hook()).not.toContain("set-option");
+
+    // The healthy probe arms; the local wrapper the fake mux refuses to open is
+    // past the point under test.
+    jumpToAgent(store, view({ server, pane }), mux, sh);
+    expect(hook()).toContain("set-option");
+  } finally {
+    try {
+      real("kill-server");
+    } catch {
+      // Never started.
+    }
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("reusing a wrapper retargets its existing remote client without arming another", () => {
@@ -961,9 +1100,10 @@ test("reusing a wrapper retargets its existing remote client without arming anot
 
   expect(result).toEqual({ ok: true });
   expect(remoteCommands).toHaveLength(2);
-  expect(remoteCommands[0]).toContain("client-attached[9000]");
   expect(remoteCommands[1]).toContain("switch-client");
-  expect(remoteCommands[1]).not.toContain("client-attached[9000]");
+  // Neither call: the probe runs before reuse is known only if reuse is
+  // decided late, and then the hook it arms waits for the next human login.
+  expect(remoteCommands.every((command) => !command.includes("client-attached"))).toBe(true);
 });
 
 test("outside tmux the jump arms no marker, because there is nothing to come back to", () => {
