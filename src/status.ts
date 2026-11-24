@@ -5,6 +5,7 @@ import { type CollectOptions, collect, needsInteractiveAuth } from "./collector.
 import type { NodeIdentity } from "./identity.js";
 import { jumpTarget } from "./jump-target.js";
 import { type Mux, tmux } from "./mux.js";
+import { argvAddressesServer } from "./routing.js";
 import type { Store } from "./store.js";
 import type { PeerRecord, TmuxServer } from "./types.js";
 import {
@@ -76,28 +77,8 @@ function attachesPane(
   server: TmuxServer,
 ): boolean {
   return (
-    (namesTarget(command, agentName) || namesTarget(command, pane)) && namesServer(command, server)
-  );
-}
-
-/**
- * Whether an attach argv addresses `server`, so a pane id shared by two servers
- * on one host cannot be credited with the other's attachment.
- *
- * The argv is the rendered attach command, quoted zero to several levels deep,
- * so quotes are flattened away before the `tmux -L|-S <value> attach` selector
- * is read. No selector means the default server. A selector that cannot be
- * read from a non-default pane's argv declines the match: a wrong "already
- * attached" focuses the wrong place, a missing one only costs the fast path.
- */
-function namesServer(command: string, server: TmuxServer): boolean {
-  const flat = (text: string) => text.replaceAll("'\\''", "").replaceAll(/['"\\]/g, "");
-  const selector = /\btmux\s+-([LS])\s+(.+?)\s+attach\b/.exec(flat(command));
-  if (server.kind === "default") return selector === null;
-  return (
-    selector !== null &&
-    selector[1] === (server.kind === "label" ? "L" : "S") &&
-    selector[2] === flat(server.value)
+    (namesTarget(command, agentName) || namesTarget(command, pane)) &&
+    argvAddressesServer(command, server)
   );
 }
 

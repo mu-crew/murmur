@@ -1006,6 +1006,23 @@ test("a local attachment is credited only to the pane on the server it names", (
     beta: "%55",
   });
   expect(attached("ssh dev tmux attach -t %1")).toEqual({ alpha: "%55", beta: null });
+  // tmux takes its global flags in any order, so a selector after another
+  // flag still names the server, and a no-arg flag alone is still the default.
+  expect(attached("ssh dev tmux -u -L 'private é' attach -t %1")).toEqual({
+    alpha: null,
+    beta: "%55",
+  });
+  expect(attached("ssh dev tmux -2u attach -t %1")).toEqual({ alpha: "%55", beta: null });
+  // A flag that is not read, `-S` overriding `-L` as tmux does, a config
+  // file, or two attaches: the server cannot be named, so neither is credited.
+  for (const argv of [
+    "ssh dev tmux -X attach -t %1",
+    "ssh dev tmux -S /tmp/elsewhere -L 'private é' attach -t %1",
+    "ssh dev tmux -f /tmp/conf attach -t %1",
+    "ssh dev tmux -L 'private é' attach -t %1 ; tmux attach -t %1",
+  ]) {
+    expect(attached(argv), argv).toEqual({ alpha: null, beta: null });
+  }
 });
 
 test("an attachment is credited to the peer its argv connects to, not the first with that pane id", () => {
