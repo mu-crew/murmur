@@ -487,6 +487,8 @@ host it is the remote tmux that reads the key.
 
 1. **In a murmur-controlled remote session** it detaches. The wrapper's own
    restore command then returns the local client to where the jump started.
+   The client is recognised by tty, pid and creation time; with an older murmur
+   on either end it is not recognised, and the key falls through to rule 3.
 2. **In the dash** it goes back to the pane you pressed the key in last. If that
    pane is gone it goes to its window. If the window is gone too, it stays in
    the dash and says `nothing to go back to`.

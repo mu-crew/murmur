@@ -259,6 +259,14 @@ which pane the local client ends up showing, so some cases are accepted:
 - A custom jump template that redirects the attach is trusted.
 - Activity on another tmux client during the jump can change where it lands.
 
+**Routing identity.** Every action that reaches a place re-checks the full
+identity of that place where it acts, and declines when it cannot: an ssh argv
+is credited to a peer only when `ssh -G` gives the same route (hostname, user,
+port, ProxyJump, ProxyCommand); an attach argv names a server only when its tmux
+flags positively read as that server; a remote client is `tty pid created`,
+since tty and second recur; a wrapper session is reused, retargeted or killed
+only when its route stamp matches. `src/routing.ts` holds these checks.
+
 Workaround: start peer connections through murmur (`PREFIX a`, which opens
 tsesh's agents view, or `murmur jump`) and keep the default jump template.
 

@@ -3,6 +3,16 @@
 Notable changes per release. Written for someone deciding whether to upgrade,
 so it says what changed for a user rather than listing every commit.
 
+## Unreleased
+
+**Jumps act only on what they can prove is the target.** An attachment through
+a ProxyJump or ProxyCommand is no longer credited to the direct peer, nor one
+whose tmux flags come before `-L` to the default server. A reused wrapper moves
+only its own remote client, never a human who reattached on the same tty, and a
+wrapper whose name collides with another server's is left alone. A wrapper the
+client could not switch to is closed. `PREFIX G` detach now needs this murmur
+on both ends.
+
 ## 2.5.1
 
 **Spawned helpers resolve reliably.** murmur now resolves local helper
