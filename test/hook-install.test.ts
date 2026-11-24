@@ -110,6 +110,26 @@ describe("the acceptance check", () => {
 });
 
 describe("what init writes", () => {
+  test("doctor reports a missing Cursor version even when the handlers are current", () => {
+    installHooks({ home, harnesses: ["cursor-agent"] });
+    const hooks = read(CURSOR).hooks;
+    put(CURSOR, { hooks });
+
+    expect(checkHooks({ home }).find((r) => r.harness === "cursor-agent")).toMatchObject({
+      state: "drift",
+      added: [],
+      removed: [],
+    });
+    expect(installHooks({ home }).find((r) => r.harness === "cursor-agent")?.state).toBe("written");
+    expect(read(CURSOR)).toEqual({ version: 1, hooks });
+    expect(checkHooks({ home }).find((r) => r.harness === "cursor-agent")?.state).toBe("ok");
+    const inode = statSync(file(CURSOR)).ino;
+    expect(installHooks({ home }).find((r) => r.harness === "cursor-agent")?.state).toBe(
+      "unchanged",
+    );
+    expect(statSync(file(CURSOR)).ino).toBe(inode);
+  });
+
   test("each harness gets its own command on exactly the events its hook row maps", () => {
     for (const dir of [".claude", ".codex", ".cursor", ".config/muse"]) {
       mkdirSync(join(home, dir), { recursive: true });

@@ -280,10 +280,11 @@ export function planHooks(target: HookTarget, root: Json): HookPlan {
     plan.added.push(event);
   }
 
-  if (plan.added.length > 0 || plan.fixed.length > 0 || plan.removed.length > 0) {
-    root.hooks = hooks;
-    // The Cursor CLI reads no hook file without its schema version.
-    if (target.shape === "flat" && root.version === undefined) root.version = 1;
+  if (changed(plan)) root.hooks = hooks;
+  // Cursor ignores even a fully wired file without its schema version.
+  if (target.shape === "flat" && root.version === undefined) {
+    root.version = 1;
+    plan.fixed.push("version: 1");
   }
   return plan;
 }
