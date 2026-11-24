@@ -70,6 +70,7 @@ import {
   glanceViewport,
   moveIndex,
   paneFingerprint,
+  dashPaneKey as paneKey,
   routeDashKey,
   scrollLabel,
 } from "../dash-tick.js";
@@ -168,10 +169,6 @@ export function requireDashTmux(
   );
   process.exitCode = 1;
   return false;
-}
-
-function paneKey(pane: PaneView): string {
-  return `${pane.host_id}:${pane.pane}`;
 }
 
 function nextSort(sort: DashSort): DashSort {
@@ -934,7 +931,9 @@ export function App({ dashStore, initial }: DashProps) {
       // Opening the prompt is answering the agent, the same fact tmux focus
       // reports, so it acknowledges the pane's done/blocked/crashed.
       const target = selected;
-      void acknowledgeAttention(store, target, (pane) => clearPane(pane)).then((result) => {
+      void acknowledgeAttention(store, target, (pane, server) =>
+        clearPane(pane, tmux, server),
+      ).then((result) => {
         if (!result.ok) setInputError(result.message);
         else if (target.attention.length > 0) {
           const identity = requireIdentity();
