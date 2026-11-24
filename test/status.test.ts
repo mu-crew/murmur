@@ -291,8 +291,8 @@ test("a remote worker has no back-reference when no local pane matches", () => {
   expect(result.panes.find((pane) => pane.pane === "%50")?.attached_pane).toBeNull();
 });
 
-function remoteWorkerStore(name: string) {
-  store.addPeer("dev", "dev", "ssh -t dev tmux attach -t {pane}");
+function remoteWorkerStore(name: string, jumpCommand = "ssh -t dev tmux attach -t {pane}") {
+  store.addPeer("dev", "dev", jumpCommand);
   store.replacePeerSnapshot("dev", {
     ok: true,
     at: 1_000,
@@ -325,8 +325,8 @@ function remoteWorkerStore(name: string) {
   });
 }
 
-function attachedPaneFor(name: string, argv: string) {
-  remoteWorkerStore(name);
+function attachedPaneFor(name: string, argv: string, jumpCommand?: string) {
+  remoteWorkerStore(name, jumpCommand);
   const result = status(store, IDENTITY, 1_000, () => false, undefined, {
     mux: fakeMux({
       localPaneProcesses: () => [{ pane: asPaneId("%7"), current_command: "ssh", arguments: argv }],
@@ -364,12 +364,24 @@ test("an environment prefix is not what makes a match, because ps never returns 
 // missed the case the back-reference exists for -- a second attach through the
 // default ssh jump command is what fails on a session-capped host.
 test("a jump through the peer's configured command is detected by its pane id", () => {
-  expect(attachedPaneFor("remote-1", "et dev -c tmux attach -t %50")).toBe("%7");
+  expect(
+    attachedPaneFor(
+      "remote-1",
+      "et dev -c tmux attach -t %50",
+      "et dev -c 'tmux attach -t {pane}'",
+    ),
+  ).toBe("%7");
 });
 
 test("a pane id is matched whole, not as a prefix", () => {
   // %50 must not be found inside %500.
-  expect(attachedPaneFor("remote-1", "et dev -c tmux attach -t %500")).toBeNull();
+  expect(
+    attachedPaneFor(
+      "remote-1",
+      "et dev -c tmux attach -t %500",
+      "et dev -c 'tmux attach -t {pane}'",
+    ),
+  ).toBeNull();
 });
 
 test("a longer agent name is not matched by a shorter one's prefix", () => {
@@ -949,4 +961,74 @@ test("a local attachment is credited only to the pane on the server it names", (
     beta: "%55",
   });
   expect(attached("ssh dev tmux attach -t %1")).toEqual({ alpha: "%55", beta: null });
+});
+
+test("an attachment is credited to the peer its argv connects to, not the first with that pane id", () => {
+  // Two peers both reporting %9. Matching on the pane id and the transport
+  // name alone credited the attachment to whichever peer came first, and jump
+  // then focused that local pane instead of reaching the other host.
+  const peerWith = (name: string, target: string) => {
+    store.addPeer(name, target, `ssh -t '${target}' env LC_CTYPE=C.UTF-8 {attach}`);
+    const base = remotePane("%9");
+    store.replacePeerSnapshot(name, {
+      ok: true,
+      at: 1_000,
+      snapshot: {
+        ...remoteSnapshot([
+          { ...base, agent: base.agent && { ...base.agent, agent_name: name, agent_id: name } },
+        ]),
+        host_id: `host-${name}`,
+      },
+    });
+  };
+  peerWith("first", "first.example");
+  peerWith("second", "second.example");
+  const attached = (argv: string, command = "ssh") => {
+    const result = status(store, IDENTITY, 1_000, () => false, undefined, {
+      mux: fakeMux({
+        localPaneProcesses: () => [
+          { pane: asPaneId("%55"), current_command: command, arguments: argv },
+        ],
+      }),
+    });
+    return Object.fromEntries(result.panes.map((pane) => [pane.agent_name, pane.attached_pane]));
+  };
+
+  expect(attached("ssh -t second.example env LC_CTYPE=C.UTF-8 tmux attach -t %9")).toEqual({
+    first: null,
+    second: "%55",
+  });
+  expect(attached("ssh -p 2222 -l me first.example tmux attach -t %9")).toEqual({
+    first: "%55",
+    second: null,
+  });
+  // An unrelated local ssh session naming the same pane id is nobody's.
+  expect(attached("ssh -t elsewhere.example tmux attach -t %9")).toEqual({
+    first: null,
+    second: null,
+  });
+});
+
+test("an opaque transport earns no attachment, since its argv cannot name the host", () => {
+  store.addPeer("dev", "dev.example", "jump-dev {attach}");
+  const base = remotePane("%9");
+  store.replacePeerSnapshot("dev", {
+    ok: true,
+    at: 1_000,
+    snapshot: remoteSnapshot([
+      { ...base, agent: base.agent && { ...base.agent, agent_name: "w", agent_id: "w" } },
+    ]),
+  });
+  const result = status(store, IDENTITY, 1_000, () => false, undefined, {
+    mux: fakeMux({
+      localPaneProcesses: () => [
+        {
+          pane: asPaneId("%55"),
+          current_command: "jump-dev",
+          arguments: "jump-dev tmux attach -t %9",
+        },
+      ],
+    }),
+  });
+  expect(result.panes.find((pane) => pane.pane === "%9")?.attached_pane).toBeNull();
 });

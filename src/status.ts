@@ -1,4 +1,5 @@
 import { agentLabel } from "./agents.js";
+import { commandNames, connectsToPeer } from "./attachment.js";
 import { type Channel, hasWarmSocket, ssh } from "./channel.js";
 import { type CollectOptions, collect, needsInteractiveAuth } from "./collector.js";
 import type { NodeIdentity } from "./identity.js";
@@ -23,13 +24,6 @@ import {
 type Counts = StateCounts;
 
 type StatusOptions = { mux?: Mux };
-
-function commandNames(command: string): string[] {
-  return [...command.matchAll(/(?:^|[\s'"/])([\w.-]+)(?=$|[\s'"])/g)].flatMap((match) => {
-    const name = match[1]?.replace(/^-+/, "");
-    return name ? [name] : [];
-  });
-}
 
 /**
  * Whether a local pane's command line is an attachment to `agentName`.
@@ -240,10 +234,10 @@ export function status(
   const orchestratedCounts = emptyCounts();
   const panes = paneViews(store, identity, now);
   const peers = store.peers();
-  const commandsByPeer = new Map(
+  const peersByHost = new Map(
     peers
       .filter((peer): peer is typeof peer & { host_id: string } => peer.host_id !== null)
-      .map((peer) => [peer.host_id, new Set(commandNames(peer.jump_command))]),
+      .map((peer) => [peer.host_id, peer]),
   );
   // Only remote rows can have a local attachment, and only ones naming an agent:
   // the name is the sole thing the local argv can be matched against.
@@ -255,15 +249,21 @@ export function status(
     // Only panes running a command some peer's jump command names can match, so
     // the process read is limited to those (usually none).
     const candidates = new Set(
-      attachable.flatMap((pane) => [...(commandsByPeer.get(pane.host_id) ?? [])]),
+      attachable.flatMap((pane) => commandNames(peersByHost.get(pane.host_id)?.jump_command ?? "")),
     );
     for (const process of (options.mux ?? tmux).localPaneProcesses(candidates)) {
-      const remote = attachable.find(
-        (pane) =>
-          commandsByPeer.get(pane.host_id)?.has(process.current_command) &&
-          attachesPane(process.arguments, pane.agent_name, pane.pane, pane.server),
-      );
-      if (remote) remote.attached_pane = process.pane;
+      // The argv must connect to the row's peer, not merely name its pane: two
+      // peers can both report %9. More than one match is a guess, so none.
+      const matches = attachable.filter((pane) => {
+        const peer = peersByHost.get(pane.host_id);
+        return (
+          peer !== undefined &&
+          connectsToPeer(process.arguments, peer) &&
+          attachesPane(process.arguments, pane.agent_name, pane.pane, pane.server)
+        );
+      });
+      const [remote] = matches;
+      if (remote && matches.length === 1) remote.attached_pane = process.pane;
     }
   }
   markRemoteWorkers(panes, options.mux ?? tmux);

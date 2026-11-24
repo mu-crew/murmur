@@ -425,10 +425,10 @@ export function registerPeer(program: Command): void {
         const refused = broken.some((row) => row.error && sessionChannelBusy(row.error));
         const localPanes = refused ? tmux.localPaneProcesses() : [];
         for (const row of broken) {
-          const jump = store.peers().find((peer) => peer.name === row.name)?.jump_command;
+          const peer = store.peers().find((candidate) => candidate.name === row.name);
           const culprit =
-            refused && jump && row.error && sessionChannelBusy(row.error)
-              ? attachmentHoldingPeer(jump, localPanes)
+            refused && peer && row.error && sessionChannelBusy(row.error)
+              ? attachmentHoldingPeer(peer, localPanes)
               : null;
           const detail = culprit
             ? `ssh session limit reached -- pane ${culprit} is your own attachment to this peer. Close it, then collect.`
