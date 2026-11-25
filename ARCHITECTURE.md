@@ -1704,10 +1704,11 @@ each was cheaper to accept than to solve:
    loses the previous occupant's attention, which is intended, and two
    sequential agents in one pane cannot each hold their own `done`.
 9. **A peer demanding interactive auth is collectable only while a session is
-   open.** Every background ssh murmur runs (the attach is plain `ssh -t`)
-   sets `BatchMode=yes` ("never prompt", not "never authenticate"), so a host
-   wanting a prompt per connection is reached only over an existing master. Ambient collects skip such a peer instead
-   of failing on every tick, keep its cached snapshot, and the dash header names
+   open.** Every background ssh murmur runs sets `BatchMode=yes` ("never
+   prompt", not "never authenticate"); the attach is `ssh -t` and, with a
+   `jump_command`, runs that instead. A host wanting a prompt per connection
+   is reached only over an existing master. Ambient collects skip such a peer
+   instead of failing on every tick, keep its cached snapshot, and the dash header names
    the fix, `ssh -MNf -S <ControlPath> <host>`: `-N -f` so it holds no session
    slot, `-M -S` so the socket lands where `SSH_OPTIONS` reads, since OpenSSH
    defaults to neither. Eternal Terminal cannot be that master, but it can

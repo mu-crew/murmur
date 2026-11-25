@@ -93,16 +93,17 @@ way is up to its sshd, so check before relying on it.
 ## Recovery: a wedged master
 
 `ssh -O check -S <ControlPath> dev` says `Master running` but every command
-over murmur's socket fails. Rebuild it, and kill its `ProxyCommand` child too, which outlives the master
-and poisons the replacement. The `pkill` pattern names the `-S` socket so it
-never touches a master of your own:
+over murmur's socket fails. Rebuild it, and kill its `ProxyCommand` child
+too, which outlives the master and poisons the replacement. The `pkill`
+pattern names the `-S` socket so it never touches a master of your own:
 
 ```sh
+ssh -O exit -S '~/.ssh/control/%r@%h:%p' dev  # a master opened by plain ssh
 pkill -f 'ssh -MNf -S .*/control/.* dev$'   # murmur's master
 pkill -f '<proxy command> .*dev'            # its ProxyCommand child, if any
 rm -f ~/.ssh/control/'<user>@<host>:22'     # the stale socket
 ssh -MNf -S '~/.ssh/control/%r@%h:%p' dev   # rebuild
-ssh -O check -S '~/.ssh/control/%r@%h:%p' dev  # expect: Master running (pid=...)
+ssh -O check -S '~/.ssh/control/%r@%h:%p' dev  # Master running
 ```
 
 ## Reading the fleet
