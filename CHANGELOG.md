@@ -5,6 +5,18 @@ so it says what changed for a user rather than listing every commit.
 
 ## Unreleased
 
+## 2.6.0
+
+**Node floor raised to 22.14.** Matches the lockfile (`better-sqlite3`, Ink,
+Commander) and avoids a `better-sqlite3` segfault on Node 22.13 and older;
+CI now tests both Node 22.14 and Node 26.
+
+**Reliable state, cache, and doctor checks.** Inbox event receipts commit to
+SQLite before files are unlinked; `status --cached` runs zero local helpers;
+retargeting a peer drops its stale snapshot and fences in-flight collects;
+helper-path caching rescans `PATH` if a cached path loses execute permission;
+`murmur init` repairs a versionless Cursor hook file.
+
 **Jumps act only on what they can prove is the target.** An attachment through
 a ProxyJump or ProxyCommand is no longer credited to the direct peer, nor one
 whose tmux flags come before `-L` to the default server. A reused wrapper moves
