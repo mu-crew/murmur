@@ -47,8 +47,8 @@ export function registerCollect(program: Command): void {
         const peersByName = new Map(store.peers().map((peer) => [peer.name, peer]));
         for (const result of results) {
           if (result.ok || !result.error) continue;
-          const jump = peersByName.get(result.peer)?.jump_command;
-          const culprit = jump && busy ? attachmentHoldingPeer(jump, localPanes) : null;
+          const peer = peersByName.get(result.peer);
+          const culprit = peer && busy ? attachmentHoldingPeer(peer, localPanes) : null;
           process.stderr.write(`murmur: ${describeFailure(result.peer, result.error, culprit)}\n`);
         }
 

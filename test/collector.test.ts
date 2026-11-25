@@ -2,6 +2,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, test } from "vitest";
+import { sshResolver } from "../src/attachment.js";
 import type { Channel } from "../src/channel.js";
 import {
   attachmentHoldingPeer,
@@ -176,23 +177,43 @@ test("a culprit is ignored for a failure that is not a channel refusal", () => {
   );
 });
 
-test("the attachment is found by the jump command's own program names", () => {
-  const panes = [
-    { pane: "%1", current_command: "zsh" },
-    { pane: "%210", current_command: "ssh" },
-  ];
-  expect(attachmentHoldingPeer("ssh -t dev tmux attach -t {pane}", panes)).toBe("%210");
-  // A wrapper transport is matched the same way, since the names come out of
-  // whatever the operator stored.
+test("the attachment holding a peer is the one whose argv connects to that peer", () => {
+  const dev = { target: "dev.example", jump_command: "ssh -t dev {attach}" };
+  const ssh = (pane: string, args: string) => ({ pane, arguments: args });
+  // Real `ssh -G`, blind to the operator's own ssh_config.
+  const resolve = sshResolver(["-F", "/dev/null"]);
+  // The collect's own target, or the jump command's destination: both are
+  // this peer.
   expect(
-    attachmentHoldingPeer("et dev -c 'tmux attach -t {pane}'", [
-      { pane: "%7", current_command: "et" },
+    attachmentHoldingPeer(
+      dev,
+      [{ pane: "%1", arguments: "-zsh" }, ssh("%210", "ssh -t dev tmux attach -t %9")],
+      resolve,
+    ),
+  ).toBe("%210");
+  expect(attachmentHoldingPeer(dev, [ssh("%3", "ssh -o Port=22 dev.example")], resolve)).toBe("%3");
+  // The effective destination, as `ssh -G` resolves it: an override reroutes
+  // the operand, and a session elsewhere does not hold this peer's channel.
+  expect(
+    attachmentHoldingPeer(dev, [ssh("%9", "ssh -o HostName=other.example dev.example")], resolve),
+  ).toBeNull();
+  // A wrapper transport is matched the same way.
+  expect(
+    attachmentHoldingPeer({ target: "dev", jump_command: "et dev -c {attach}" }, [
+      { pane: "%7", arguments: "et dev -c tmux attach -t %9" },
     ]),
   ).toBe("%7");
-  // Nothing local is attached: no blame to assign.
+  // Any foreground ssh used to be blamed. Closing an unrelated session would
+  // not free this peer's channel.
+  expect(attachmentHoldingPeer(dev, [ssh("%4", "ssh other.example")], resolve)).toBeNull();
+  // Two candidates: no telling which holds the channel, so blame neither.
   expect(
-    attachmentHoldingPeer("ssh -t dev tmux attach -t {pane}", [
-      { pane: "%1", current_command: "zsh" },
+    attachmentHoldingPeer(dev, [ssh("%5", "ssh dev"), ssh("%6", "ssh dev.example")], resolve),
+  ).toBeNull();
+  // An opaque transport cannot say where it connects.
+  expect(
+    attachmentHoldingPeer({ target: "dev", jump_command: "jump-dev {attach}" }, [
+      { pane: "%8", arguments: "jump-dev dev" },
     ]),
   ).toBeNull();
 });

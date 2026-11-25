@@ -44,9 +44,9 @@
  * isolating it.
  */
 
-import { mkdtempSync, rmSync } from "node:fs";
+import { accessSync, constants, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { afterAll } from "vitest";
 
 /**
@@ -153,6 +153,40 @@ const REDIRECTED = {
 
 for (const name of CLEARED) delete process.env[name];
 for (const [name, value] of Object.entries(REDIRECTED)) process.env[name] = value;
+
+/**
+ * ssh, fenced: any ssh a test starts -- directly, through `helperPath`, or in a
+ * built-CLI child -- must name its config with `-F`, or it is refused as an
+ * unreachable host (255). ssh reads ~/.ssh/config from the passwd home, not
+ * $HOME, so no redirect above reaches it, and the developer's config can
+ * rewrite `dev`, deny it, or run a `Match exec`. A status test once resolved
+ * its fixture through whatever that config said.
+ */
+const fence = join(sandbox, "bin");
+const searchPath = (process.env.PATH ?? "").split(delimiter).filter((dir) => dir !== fence);
+const realSsh = searchPath
+  .map((dir) => join(dir, "ssh"))
+  .find((candidate) => {
+    try {
+      accessSync(candidate, constants.X_OK);
+      return true;
+    } catch {
+      return false;
+    }
+  });
+mkdirSync(fence, { recursive: true });
+writeFileSync(
+  join(fence, "ssh"),
+  [
+    "#!/bin/sh",
+    `for arg in "$@"; do case "$arg" in -F*) ${realSsh ? `exec '${realSsh.replaceAll("'", `'\\''`)}' "$@"` : "exit 255"} ;; esac; done`,
+    `echo "murmur test rig: refusing ssh without -F (it would read the developer's ssh config): ssh $*" >&2`,
+    "exit 255",
+    "",
+  ].join("\n"),
+  { mode: 0o755 },
+);
+process.env.PATH = [fence, ...searchPath].join(delimiter);
 
 /** Every variable the rig controls, cleared or redirected. The drift guard's set. */
 const OWNED = [...CLEARED, ...(Object.keys(REDIRECTED) as (keyof typeof REDIRECTED)[])] as const;

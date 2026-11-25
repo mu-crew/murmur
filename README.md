@@ -106,8 +106,8 @@ line. Jumps on the default server behave as before. Known limits:
 
 - A hand-started `ssh` / `et` pane to a peer may be reused as the attachment
   even when it shows another pane.
-- Server labels that hash alike can share a wrapper session.
-- Wrappers left behind by 2.2.x are not adopted or retired.
+- Wrappers from an older murmur (no route stamp) are not adopted or retired; a
+  jump opens the next session name instead.
 - A custom jump template that redirects the attach is trusted.
 - Activity on another tmux client during the jump can change where it lands.
 

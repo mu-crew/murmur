@@ -4,9 +4,23 @@ import type { Status } from "./status.js";
 import { age, type PaneView } from "./view.js";
 import { cachedWidth } from "./width-cache.js";
 
+/**
+ * The dash's selection, card and preview identity for a row: host, server and
+ * pane, shared with the side panel. Pane ids repeat across servers of one host.
+ */
+export function dashPaneKey(pane: PaneView): string {
+  return JSON.stringify([
+    pane.host_id,
+    pane.server.kind,
+    pane.server.kind === "default" ? null : pane.server.value,
+    pane.pane,
+  ]);
+}
+
 export function paneFingerprint(pane: PaneView): string {
   return JSON.stringify([
     pane.host_id,
+    pane.server,
     pane.pane,
     pane.updated_at,
     pane.activity,

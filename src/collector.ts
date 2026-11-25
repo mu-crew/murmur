@@ -1,5 +1,6 @@
 import { publishAgentStates } from "./agent-state.js";
 import { type AlertRunner, alertHook, fireAlerts, runHook } from "./alert.js";
+import { type AttachPeer, connectsToPeer, type SshResolver, sshResolver } from "./attachment.js";
 import { type Channel, hasWarmSocket } from "./channel.js";
 import { loadIdentity, type NodeIdentity } from "./identity.js";
 import { type DrainOptions, drainInbox } from "./inbox.js";
@@ -468,27 +469,24 @@ export function describeFailure(peer: string, message: string, culprit?: string 
 }
 
 /**
- * The local pane attached to `peer`, if one is open.
+ * The local pane attached to `peer`, if exactly one is open.
  *
  * Deliberately does NOT use `attached_pane` from a pane view: that requires a
  * successful collect to have produced the remote row first, and on a capped host
  * the attachment is exactly what prevents the collect. Depending on it would
  * make the diagnosis unavailable in the only case that needs it.
  *
- * Matches a local pane whose foreground command is one of the names in the
- * peer's jump command, which is how the same match is made in `status`.
+ * Same peer match as `status` (`connectsToPeer`): the argv must connect to this
+ * peer, since advice to close a pane must not name an unrelated ssh session.
+ * Two candidates decline: either may be the one holding the channel.
  */
 export function attachmentHoldingPeer(
-  jumpCommand: string,
-  panes: readonly { pane: string; current_command: string }[],
+  peer: AttachPeer,
+  panes: readonly { pane: string; arguments: string }[],
+  resolve: SshResolver = sshResolver(),
 ): string | null {
-  const names = new Set(
-    [...jumpCommand.matchAll(/(?:^|[\s'"/])([\w.-]+)(?=$|[\s'"])/g)].flatMap((match) => {
-      const name = match[1]?.replace(/^-+/, "");
-      return name ? [name] : [];
-    }),
-  );
-  return panes.find((pane) => names.has(pane.current_command))?.pane ?? null;
+  const matches = panes.filter((pane) => connectsToPeer(pane.arguments, peer, resolve));
+  return matches.length === 1 ? (matches[0]?.pane ?? null) : null;
 }
 
 /**

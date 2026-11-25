@@ -81,3 +81,15 @@ test("{attach} is one quoted argument in an opaque transport template", () => {
     "transport --command 'tmux -L '\\''co'\\''\\'\\'''\\''op; echo BAD'\\'' attach -t '\\''%9; echo BAD'\\'''",
   );
 });
+
+test("a placeholder spelled inside a substituted value is not substituted again", () => {
+  // `{attach}` went in first and `{pane}` was then replaced inside it, so a
+  // socket path containing `{pane}` was rewritten to another socket.
+  const rendered = renderJumpCommand("ssh -t h {attach}", {
+    server: { kind: "path", value: "/tmp/tmux-{pane}.sock" },
+    pane: asPaneId("%34"),
+  });
+  expect(rendered).toBe(
+    "ssh -t h 'tmux -S '\\''/tmp/tmux-{pane}.sock'\\'' attach -t '\\''%34'\\'''",
+  );
+});

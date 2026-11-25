@@ -2,7 +2,12 @@ import { agentLabel, terminalText } from "./agents.js";
 import { visibleWidth } from "./ansi-width.js";
 import { DASH_GLYPH, hostColor } from "./dash-paint.js";
 import type { DashPrefs } from "./dash-prefs.js";
-import { type CompactRowLayout, compactRowLayout, compactRowParts } from "./dash-tick.js";
+import {
+  type CompactRowLayout,
+  compactRowLayout,
+  compactRowParts,
+  dashPaneKey,
+} from "./dash-tick.js";
 import { dashRows } from "./dash-view.js";
 import {
   age,
@@ -13,14 +18,8 @@ import {
   renderState,
 } from "./view.js";
 
-export function sidepanelPaneKey(pane: PaneView): string {
-  return JSON.stringify([
-    pane.host_id,
-    pane.server.kind,
-    pane.server.kind === "default" ? null : pane.server.value,
-    pane.pane,
-  ]);
-}
+/** The dash's row key: host, server and pane. */
+export const sidepanelPaneKey = dashPaneKey;
 
 export type SidepanelRow = {
   key: string;

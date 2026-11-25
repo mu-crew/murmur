@@ -3,6 +3,7 @@ import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { sshResolver } from "../src/attachment.js";
 import type { Channel } from "../src/channel.js";
 import { ssh } from "../src/channel.js";
 import { createIdentity, type NodeIdentity } from "../src/identity.js";
@@ -26,6 +27,9 @@ const stores: Store[] = [];
 let store: Store;
 
 const IDENTITY: NodeIdentity = { host_id: "LOCAL", display_name: "here" };
+// Real `ssh -G`, blind to the operator's ssh_config; the suite's ssh refuses
+// any argv without `-F` (test/setup.ts).
+const isolatedSsh = sshResolver(["-F", "/dev/null"]);
 
 beforeEach(() => {
   process.env.MURMUR_STATE_DIR = mkdtempSync(join(tmpdir(), "murmur-status-"));
@@ -330,8 +334,8 @@ test("a remote worker has no back-reference when no local pane matches", () => {
   expect(result.panes.find((pane) => pane.pane === "%50")?.attached_pane).toBeNull();
 });
 
-function remoteWorkerStore(name: string) {
-  store.addPeer("dev", "dev", "ssh -t dev tmux attach -t {pane}");
+function remoteWorkerStore(name: string, jumpCommand = "ssh -t dev tmux attach -t {pane}") {
+  store.addPeer("dev", "dev", jumpCommand);
   store.replacePeerSnapshot("dev", {
     ok: true,
     at: 1_000,
@@ -364,12 +368,13 @@ function remoteWorkerStore(name: string) {
   });
 }
 
-function attachedPaneFor(name: string, argv: string) {
-  remoteWorkerStore(name);
+function attachedPaneFor(name: string, argv: string, jumpCommand?: string) {
+  remoteWorkerStore(name, jumpCommand);
   const result = status(store, IDENTITY, 1_000, () => false, undefined, {
     mux: fakeMux({
       localPaneProcesses: () => [{ pane: asPaneId("%7"), current_command: "ssh", arguments: argv }],
     }),
+    resolveSsh: isolatedSsh,
   });
   return result.panes.find((pane) => pane.pane === "%50")?.attached_pane ?? null;
 }
@@ -403,12 +408,24 @@ test("an environment prefix is not what makes a match, because ps never returns 
 // missed the case the back-reference exists for -- a second attach through the
 // default ssh jump command is what fails on a session-capped host.
 test("a jump through the peer's configured command is detected by its pane id", () => {
-  expect(attachedPaneFor("remote-1", "et dev -c tmux attach -t %50")).toBe("%7");
+  expect(
+    attachedPaneFor(
+      "remote-1",
+      "et dev -c tmux attach -t %50",
+      "et dev -c 'tmux attach -t {pane}'",
+    ),
+  ).toBe("%7");
 });
 
 test("a pane id is matched whole, not as a prefix", () => {
   // %50 must not be found inside %500.
-  expect(attachedPaneFor("remote-1", "et dev -c tmux attach -t %500")).toBeNull();
+  expect(
+    attachedPaneFor(
+      "remote-1",
+      "et dev -c tmux attach -t %500",
+      "et dev -c 'tmux attach -t {pane}'",
+    ),
+  ).toBeNull();
 });
 
 test("a longer agent name is not matched by a shorter one's prefix", () => {
@@ -980,6 +997,7 @@ test("a local attachment is credited only to the pane on the server it names", (
           { pane: asPaneId("%55"), current_command: "ssh", arguments: argv },
         ],
       }),
+      resolveSsh: isolatedSsh,
     });
     return Object.fromEntries(result.panes.map((pane) => [pane.agent_name, pane.attached_pane]));
   };
@@ -988,4 +1006,110 @@ test("a local attachment is credited only to the pane on the server it names", (
     beta: "%55",
   });
   expect(attached("ssh dev tmux attach -t %1")).toEqual({ alpha: "%55", beta: null });
+  // tmux takes its global flags in any order, so a selector after another
+  // flag still names the server, and a no-arg flag alone is still the default.
+  expect(attached("ssh dev tmux -u -L 'private é' attach -t %1")).toEqual({
+    alpha: null,
+    beta: "%55",
+  });
+  expect(attached("ssh dev tmux -2u attach -t %1")).toEqual({ alpha: "%55", beta: null });
+  // A flag that is not read, `-S` overriding `-L` as tmux does, a config
+  // file, or two attaches: the server cannot be named, so neither is credited.
+  for (const argv of [
+    "ssh dev tmux -X attach -t %1",
+    "ssh dev tmux -S /tmp/elsewhere -L 'private é' attach -t %1",
+    "ssh dev tmux -f /tmp/conf attach -t %1",
+    "ssh dev tmux -L 'private é' attach -t %1 ; tmux attach -t %1",
+  ]) {
+    expect(attached(argv), argv).toEqual({ alpha: null, beta: null });
+  }
+});
+
+test("an attachment is credited to the peer its argv connects to, not the first with that pane id", () => {
+  // Two peers both reporting %9. Matching on the pane id and the transport
+  // name alone credited the attachment to whichever peer came first, and jump
+  // then focused that local pane instead of reaching the other host.
+  const peerWith = (name: string, target: string) => {
+    store.addPeer(name, target, `ssh -t '${target}' env LC_CTYPE=C.UTF-8 {attach}`);
+    const base = remotePane("%9");
+    store.replacePeerSnapshot(name, {
+      ok: true,
+      at: 1_000,
+      snapshot: {
+        ...remoteSnapshot([
+          { ...base, agent: base.agent && { ...base.agent, agent_name: name, agent_id: name } },
+        ]),
+        host_id: `host-${name}`,
+      },
+    });
+  };
+  peerWith("first", "first.example");
+  peerWith("second", "second.example");
+  const attached = (argv: string, command = "ssh") => {
+    const result = status(store, IDENTITY, 1_000, () => false, undefined, {
+      mux: fakeMux({
+        localPaneProcesses: () => [
+          { pane: asPaneId("%55"), current_command: command, arguments: argv },
+        ],
+      }),
+      resolveSsh: isolatedSsh,
+    });
+    return Object.fromEntries(result.panes.map((pane) => [pane.agent_name, pane.attached_pane]));
+  };
+
+  expect(attached("ssh -t second.example env LC_CTYPE=C.UTF-8 tmux attach -t %9")).toEqual({
+    first: null,
+    second: "%55",
+  });
+  expect(attached("ssh -p 22 -i key first.example tmux attach -t %9")).toEqual({
+    first: "%55",
+    second: null,
+  });
+  // ssh connects where the overrides say, not where the operand says: this is
+  // neither peer, and a port or login change is another sshd or another
+  // user's tmux.
+  for (const argv of [
+    "ssh -o HostName=elsewhere.example first.example tmux attach -t %9",
+    "ssh -oHostName=second.example first.example tmux attach -t %9",
+    "ssh -p 2222 first.example tmux attach -t %9",
+    "ssh -l someone-else first.example tmux attach -t %9",
+    // Same hostname, user and port through a bastion is the bastion's
+    // first.example, another machine.
+    "ssh -J bastion.example first.example tmux attach -t %9",
+    "ssh -o ProxyCommand=bastion-pipe first.example tmux attach -t %9",
+  ]) {
+    expect(attached(argv), argv).toEqual({
+      first: null,
+      second: argv.includes("HostName=second") ? "%55" : null,
+    });
+  }
+  // An unrelated local ssh session naming the same pane id is nobody's.
+  expect(attached("ssh -t elsewhere.example tmux attach -t %9")).toEqual({
+    first: null,
+    second: null,
+  });
+});
+
+test("an opaque transport earns no attachment, since its argv cannot name the host", () => {
+  store.addPeer("dev", "dev.example", "jump-dev {attach}");
+  const base = remotePane("%9");
+  store.replacePeerSnapshot("dev", {
+    ok: true,
+    at: 1_000,
+    snapshot: remoteSnapshot([
+      { ...base, agent: base.agent && { ...base.agent, agent_name: "w", agent_id: "w" } },
+    ]),
+  });
+  const result = status(store, IDENTITY, 1_000, () => false, undefined, {
+    mux: fakeMux({
+      localPaneProcesses: () => [
+        {
+          pane: asPaneId("%55"),
+          current_command: "jump-dev",
+          arguments: "jump-dev tmux attach -t %9",
+        },
+      ],
+    }),
+  });
+  expect(result.panes.find((pane) => pane.pane === "%9")?.attached_pane).toBeNull();
 });

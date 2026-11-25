@@ -1,5 +1,10 @@
 import type { Command } from "commander";
-import { currentJumpCommand, renderJumpCommand } from "../jump-command.js";
+import {
+  currentJumpCommand,
+  renderJumpCommand,
+  supportsServer,
+  unsupportedServerMessage,
+} from "../jump-command.js";
 import { openStore, type Store } from "../store.js";
 import type { PeerRecord, SnapshotPane, TmuxServer } from "../types.js";
 
@@ -62,12 +67,22 @@ export function jumpCommand(store: Store, options: JumpCommandOptions): JumpComm
 
   const pane = matches[0];
   if (!pane?.agent?.agent_name) throw new Error("unreachable");
+  const template = currentJumpCommand(peer.jump_command, peer.target);
+  // Refused, not rendered: the printed command would run and land on the same
+  // pane id on the remote's default server.
+  if (!supportsServer(template, pane.server)) {
+    process.stderr.write(
+      `${unsupportedServerMessage(peer, peer.target, pane.agent.agent_name, pane.pane)}\n`,
+    );
+    process.exitCode = 2;
+    throw new JumpCommandError();
+  }
   return {
     host: peer.name,
     agent: pane.agent.agent_name,
     pane: pane.pane,
     server: pane.server,
-    command: renderJumpCommand(currentJumpCommand(peer.jump_command, peer.target), pane),
+    command: renderJumpCommand(template, pane),
   };
 }
 

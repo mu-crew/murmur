@@ -487,6 +487,8 @@ host it is the remote tmux that reads the key.
 
 1. **In a murmur-controlled remote session** it detaches. The wrapper's own
    restore command then returns the local client to where the jump started.
+   The client is recognised by tty, pid and creation time; with an older murmur
+   on either end it is not recognised, and the key falls through to rule 3.
 2. **In the dash** it goes back to the pane you pressed the key in last. If that
    pane is gone it goes to its window. If the window is gone too, it stays in
    the dash and says `nothing to go back to`.
@@ -572,11 +574,13 @@ start.
 be ssh:
 
 ```bash
-murmur peer set dev --jump-command 'et dev -c "tmux attach -t {pane}"'
+murmur peer set dev --jump-command 'et dev -c {attach}'
 ```
 
-murmur substitutes `{pane}` and runs the rest unparsed. Default is
-`ssh -t <target> env LC_CTYPE=C.UTF-8 tmux attach`. The explicit UTF-8 locale
+murmur substitutes `{attach}` (a quoted `tmux attach` naming the pane's server)
+and runs the rest unparsed. `{pane}` is a bare `%N`, so it only reaches the
+default server; jumps to a named-server pane refuse it. Default is
+`ssh -t <target> env LC_CTYPE=C.UTF-8 {attach}`. The explicit UTF-8 locale
 keeps Nerd Font glyphs intact when the remote SSH login has no locale. Override
 the command when sshd sets `MaxSessions 1` — see [SSH.md](../SSH.md).
 

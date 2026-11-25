@@ -13,6 +13,7 @@ import {
   dashHelpSections,
   dashInputFocus,
   dashNavigation,
+  dashPaneKey,
   dashVisibleCards,
   fetchedText,
   formatFetchedAge,
@@ -728,4 +729,17 @@ test("the glance gate drops a reply for an older request or another pane", () =>
   expect(gate.accept(newer, "a", "a")).toBe(true);
   gate.supersede();
   expect(gate.accept(newer, "a", "a")).toBe(false);
+});
+
+test("the same pane id on two tmux servers of one host is two rows to select and preview", () => {
+  // Pane ids are unique per host AND server. A key without the server made the
+  // second row resolve to the first: selecting it highlighted, previewed and
+  // acted on the other server's pane.
+  const first = pane({ pane: asPaneId("%0") });
+  const second = pane({ pane: asPaneId("%0"), server: { kind: "label", value: "other" } });
+  const rows = [first, second];
+  expect(rows.findIndex((row) => dashPaneKey(row) === dashPaneKey(second))).toBe(1);
+  // The preview refetches on a fingerprint change, so a switch between the two
+  // must change it.
+  expect(paneFingerprint(second)).not.toBe(paneFingerprint(first));
 });
