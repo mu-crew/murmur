@@ -1,19 +1,19 @@
 import { spawnSync } from "node:child_process";
-import { type JumpResult, jumpToAgent, terminalText } from "./agents.js";
-import { hasWarmSocket } from "./channel.js";
+import { type JumpResult, jumpToAgent, outsideTmux, terminalText } from "./agents.js";
 import { findHelper } from "./helper-path.js";
 import type { NodeIdentity } from "./identity.js";
 import { renderJumpCommand } from "./jump-command.js";
-import { parseJumpTarget } from "./jump-target.js";
 import { type Mux, tmux } from "./mux.js";
-import { status } from "./status.js";
+import { resolveAgent } from "./steer.js";
 import type { Store } from "./store.js";
 import type { PaneView } from "./view.js";
 
 export type JumpDeps = {
   /** Runs fzf for the hardware-tap confirmation; same tty as the caller. */
   fzf: (args: string[], input: string, env: NodeJS.ProcessEnv) => string;
-  jump?: (store: Store, agent: PaneView) => JumpResult;
+  jump?: (store: Store, agent: PaneView, client?: string) => JumpResult;
+  /** Whether stdin is a terminal; injectable for the JSON no-tty guard. */
+  interactive?: () => boolean;
   mux?: Mux;
   warm?: (target: string) => boolean;
 };
@@ -50,36 +50,77 @@ export function reportJumpFailure(message: string): void {
 
 const fail = reportJumpFailure;
 
-export function runJump(store: Store, identity: NodeIdentity, token: string, deps: JumpDeps): void {
+export type JumpOptions = {
+  /** tmux client to move (`switch-client -c`), for a caller outside that client. */
+  client?: string;
+  /** Print one JSON object on stdout for success and failure instead of stderr text. */
+  json?: boolean;
+};
+
+type Reporter = (reason: string, message: string) => void;
+
+function reporter(token: string, options: JumpOptions): { fail: Reporter; ok: () => void } {
+  if (!options.json) return { fail: (_reason, message) => fail(message), ok: () => {} };
+  return {
+    fail: (reason, message) => {
+      process.stdout.write(`${JSON.stringify({ ok: false, reason, message })}\n`);
+      process.exitCode = 1;
+    },
+    ok: () => process.stdout.write(`${JSON.stringify({ ok: true, jump_target: token })}\n`),
+  };
+}
+
+export function runJump(
+  store: Store,
+  identity: NodeIdentity,
+  token: string,
+  deps: JumpDeps,
+  options: JumpOptions = {},
+): void {
   const mux = deps.mux ?? tmux;
-  const warm = deps.warm ?? hasWarmSocket;
-  const jumpTo = deps.jump ?? jumpToAgent;
-  const address = parseJumpTarget(token);
-  if (!address) {
-    fail("not a valid jump target.");
-    return;
-  }
-  const latest = status(store, identity, Date.now(), warm, undefined, { mux });
-  const agent = latest.panes.find(
-    (candidate) =>
-      candidate.pane === address.pane &&
-      candidate.host_id === address.host_id &&
-      JSON.stringify(candidate.server) === JSON.stringify(address.server),
-  );
+  const jumpTo =
+    deps.jump ??
+    ((jumpStore, target, client) =>
+      jumpToAgent(jumpStore, target, tmux, undefined, process.env, client));
+  const out = reporter(token, options);
+  const found = resolveAgent(store, identity, token, { mux, warm: deps.warm });
   // A miss means the pane went away between the collect and the keypress. Said
   // out loud: in a popup a silent return is indistinguishable from a dead key.
-  if (!agent) {
-    fail(`${address.pane} is no longer here.`);
+  if (!found.ok) {
+    out.fail(found.reason, found.message);
     return;
   }
+  const { agent } = found;
   if (agent.attached_pane) {
-    if (!mux.attach(agent.attached_pane)) {
-      fail(`could not focus local attachment ${agent.attached_pane}.`);
-    }
+    const focused =
+      options.client === undefined
+        ? mux.attach(agent.attached_pane)
+        : mux.attach(agent.attached_pane, undefined, options.client);
+    if (!focused) {
+      out.fail("attach_failed", `could not focus local attachment ${agent.attached_pane}.`);
+    } else out.ok();
+    return;
+  }
+
+  // JSON callers are scripts: with no tmux client to move and no Rex to open a
+  // tab in, the attach needs a terminal that is not there. Say so up front.
+  const interactive = deps.interactive ?? (() => Boolean(process.stdin.isTTY));
+  if (
+    options.json &&
+    options.client === undefined &&
+    !process.env.TMUX &&
+    outsideTmux() === "inherit" &&
+    !interactive()
+  ) {
+    out.fail(
+      "no_tty",
+      "not inside tmux or Rex and stdin is not a terminal; pass --client <tmux client> to jump.",
+    );
     return;
   }
 
   if (!agent.local) {
+    const latest = found.latest;
     const peer = store.peers().find((candidate) => candidate.host_id === agent.host_id);
     const needsTap = latest.peers.find((candidate) => candidate.name === agent.host)?.needs_session;
     if (peer && needsTap) {
@@ -102,12 +143,11 @@ export function runJump(store: Store, identity: NodeIdentity, token: string, dep
     }
   }
 
-  const jump = jumpTo(store, agent);
+  const jump = jumpTo(store, agent, options.client);
   // A popup closes the moment this returns, so a bare failure looked exactly
   // like "enter did nothing". Say what happened and fail loudly.
-  if (!jump.ok) {
-    fail(jump.message);
-  }
+  if (!jump.ok) out.fail(jump.reason, jump.message);
+  else out.ok();
 }
 
 /** Runs fzf on the caller's tty, stderr inherited, the way the picker does. */

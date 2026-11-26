@@ -9,8 +9,10 @@ export function registerJump(program: Command): void {
     .command("jump")
     .description("Jump to an agent by the jump_target from `status --json`")
     .argument("<target>", "opaque panes[].jump_target token")
-    .action(async (target: string) => {
+    .option("--client <client>", "tmux client to move (switch-client -c)")
+    .option("--json", "print one JSON object for success or failure")
+    .action(async (target: string, options: { client?: string; json?: boolean }) => {
       const { runJumpCommand } = await import("./jump-run.js");
-      runJumpCommand(target);
+      runJumpCommand(target, options);
     });
 }

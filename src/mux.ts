@@ -91,7 +91,7 @@ export interface Mux {
   // failures into null, and a silently failed jump looked exactly like "enter
   // did nothing" -- the symptom the remote probe exists to prevent, reproduced
   // locally.
-  attach(pane: PaneId, server?: TmuxServer): boolean;
+  attach(pane: PaneId, server?: TmuxServer, client?: string): boolean;
   windowForPane(pane: PaneId, server?: TmuxServer): WindowId | null;
   panesInWindow(window: WindowId, server?: TmuxServer): PaneId[] | null;
   capture(pane: PaneId, lines?: number, server?: TmuxServer): string | null;
@@ -679,7 +679,7 @@ export const tmux: Mux = {
     for (const call of chainedTmuxCalls(publishCommands(window, plan))) runTmux(call, server);
   },
 
-  attach(pane, server?: TmuxServer) {
+  attach(pane, server?: TmuxServer, client?: string) {
     // ONE call, targeting the pane. tmux resolves a bare `%N` to its session,
     // window and pane together, which is the whole reason this takes the
     // address rather than a session and window.
@@ -701,7 +701,12 @@ export const tmux: Mux = {
     // Both were symptoms of addressing by window when the model says the pane
     // is the address, so both go away together here rather than being patched
     // one at a time.
-    return runTmux(["switch-client", "-t", pane], server) !== null;
+    // `-c` names the client to move when the caller is not inside it (mural,
+    // a script): a bare switch-client lets tmux pick one.
+    const args = client
+      ? ["switch-client", "-c", client, "-t", pane]
+      : ["switch-client", "-t", pane];
+    return runTmux(args, server) !== null;
   },
 
   // Sibling panes, for recomputing each pane and the window aggregate. Null is
