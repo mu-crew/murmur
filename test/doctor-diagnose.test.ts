@@ -1,3 +1,6 @@
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { expect, test } from "vitest";
 import { warmSocketCommand } from "../src/channel.js";
 import {
@@ -7,6 +10,7 @@ import {
   type LocalPeer,
   type RosterEntry,
   type SurveyResult,
+  scanStaleWiring,
 } from "../src/doctor.js";
 import { SNAPSHOT_VERSION } from "../src/types.js";
 
@@ -653,4 +657,64 @@ test("no tmux server and no Rex is an observation about this node", () => {
 
 test("Rex alone is a local multiplexer: no finding", () => {
   expect(diagnose(localNode([], { mux: { tmux: [], rex: true } }), [])).toEqual([]);
+});
+
+test("scanStaleWiring finds leftover 2.x hooks and pi package and ignores a clean home", () => {
+  const home = mkdtempSync(join(tmpdir(), "murmur-stale-"));
+  try {
+    expect(scanStaleWiring(home, {})).toEqual([]);
+
+    mkdirSync(join(home, ".claude"), { recursive: true });
+    writeFileSync(
+      join(home, ".claude", "settings.json"),
+      JSON.stringify({ hooks: { Stop: [{ hooks: [{ command: "murmur hook claude" }] }] } }),
+    );
+    mkdirSync(join(home, ".codex"), { recursive: true });
+    writeFileSync(
+      join(home, ".codex", "hooks.json"),
+      JSON.stringify({ hooks: { Stop: [{ command: "murmur hook codex" }] } }),
+    );
+    writeFileSync(join(home, ".codex", "config.toml"), 'notify = ["murmur", "notify"]\n');
+    mkdirSync(join(home, ".cursor"), { recursive: true });
+    writeFileSync(
+      join(home, ".cursor", "hooks.json"),
+      JSON.stringify({ hooks: { stop: [{ command: "murmur hook cursor" }] } }),
+    );
+    mkdirSync(join(home, ".muse"), { recursive: true });
+    writeFileSync(
+      join(home, ".muse", "settings.json"),
+      JSON.stringify({ hooks: { Stop: [{ command: "murmur hook muse" }] } }),
+    );
+    mkdirSync(join(home, ".pi", "agent", "extensions"), { recursive: true });
+    writeFileSync(
+      join(home, ".pi", "agent", "settings.json"),
+      JSON.stringify({ packages: ["npm:@mu-crew/mu", "npm:@mu-crew/murmur"] }),
+    );
+    symlinkSync(
+      "/nonexistent/murmur-pi.ts",
+      join(home, ".pi", "agent", "extensions", "murmur-pi.ts"),
+    );
+
+    const stale = scanStaleWiring(home, {});
+    expect(stale.map((s) => [s.harness, s.remedy])).toEqual([
+      [
+        "claude",
+        `# remove murmur hook/notify entries from ${join(home, ".claude", "settings.json")}`,
+      ],
+      ["codex", `# remove murmur hook/notify entries from ${join(home, ".codex", "hooks.json")}`],
+      ["cursor", `# remove murmur hook/notify entries from ${join(home, ".cursor", "hooks.json")}`],
+      ["muse", `# remove murmur hook/notify entries from ${join(home, ".muse", "settings.json")}`],
+      ["codex", `# remove the murmur notify line from ${join(home, ".codex", "config.toml")}`],
+      ["pi", "pi remove npm:@mu-crew/murmur"],
+      ["pi", `rm -f ${join(home, ".pi", "agent", "extensions", "murmur-pi.ts")}`],
+    ]);
+
+    const findings = diagnose(localNode([], { staleWiring: stale }), []);
+    expect(
+      findings.every((f) => f.kind === "stale-2x-wiring" && f.severity === "observation"),
+    ).toBe(true);
+    expect(findings).toHaveLength(7);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
 });

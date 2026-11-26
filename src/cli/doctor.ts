@@ -15,6 +15,7 @@ import {
   type MuxCheck,
   reachableFromHere,
   type SurveyResult,
+  scanStaleWiring,
   surveyPeer,
   type Topology,
   type TopologyNode,
@@ -164,6 +165,11 @@ const GROUP: Record<FindingKind, { heading: string; because: string | null }> = 
   "no-local-mux": {
     heading: "No local multiplexer",
     because: "Nothing here for murmur to read; peers still work.",
+  },
+  "stale-2x-wiring": {
+    heading: "Stale murmur 2.x wiring",
+    because:
+      "murmur 3 removed hooks and the pi extension; these old entries are dead weight or fail on every turn.",
   },
 };
 
@@ -448,6 +454,7 @@ export function registerDoctor(program: Command): void {
           display_name: identity.display_name,
           peers,
           mux: await checkMux(),
+          staleWiring: scanStaleWiring(),
         };
         const findings = diagnose(local, surveys);
 

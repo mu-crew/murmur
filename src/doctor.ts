@@ -1,3 +1,6 @@
+import { existsSync, lstatSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { type Channel, warmSocketCommand } from "./channel.js";
 import { versionCell } from "./cli/peer.js";
 import {
@@ -222,7 +225,8 @@ export type FindingKind =
   | "stock-tmux"
   | "program-status-off"
   | "program-resume-off"
-  | "no-local-mux";
+  | "no-local-mux"
+  | "stale-2x-wiring";
 
 export type Finding = {
   kind: FindingKind;
@@ -292,7 +296,141 @@ export type LocalNode = {
    * nothing, and no mux finding is made.
    */
   mux?: MuxCheck;
+  /** Leftover murmur 2.x harness hooks or pi extension found on this node. */
+  staleWiring?: readonly StaleWiring[];
 };
+
+/** One leftover murmur 2.x hook or pi extension still present on disk. */
+export type StaleWiring = {
+  harness: string;
+  path: string;
+  detail: string;
+  remedy: string;
+};
+
+const STALE_HOOK_RE = /\bmurmur\s+(?:hook|notify)\b/;
+
+function readTextSafe(path: string): string | null {
+  try {
+    return readFileSync(path, "utf8");
+  } catch {
+    return null;
+  }
+}
+
+function hasJsonMurmurHook(text: string): boolean {
+  try {
+    const parsed: unknown = JSON.parse(text);
+    const walk = (node: unknown): boolean => {
+      if (typeof node === "string") return STALE_HOOK_RE.test(node);
+      if (Array.isArray(node)) return node.some(walk);
+      if (node !== null && typeof node === "object") {
+        return Object.values(node).some(walk);
+      }
+      return false;
+    };
+    return walk(parsed);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Scan standard harness config paths for leftover murmur 2.x hooks or the
+ * retired pi extension. Read-only and fail-silent on missing/unreadable files.
+ */
+export function scanStaleWiring(
+  home: string = homedir(),
+  env: NodeJS.ProcessEnv = process.env,
+): StaleWiring[] {
+  const found: StaleWiring[] = [];
+  const claudeDir = env.CLAUDE_CONFIG_DIR?.trim() || join(home, ".claude");
+  const codexDir = env.CODEX_HOME?.trim() || join(home, ".codex");
+  const piDir = env.PI_CODING_AGENT_DIR?.trim() || join(home, ".pi", "agent");
+
+  const jsonHooks: readonly [string, string][] = [
+    ["claude", join(claudeDir, "settings.json")],
+    ["codex", join(codexDir, "hooks.json")],
+    ["cursor", join(home, ".cursor", "hooks.json")],
+    ["muse", join(home, ".muse", "settings.json")],
+  ];
+  for (const [harness, path] of jsonHooks) {
+    const text = readTextSafe(path);
+    if (text !== null && hasJsonMurmurHook(text)) {
+      found.push({
+        harness,
+        path,
+        detail: `stale murmur 2.x hook in ${path}`,
+        remedy: `# remove murmur hook/notify entries from ${path}`,
+      });
+    }
+  }
+
+  const codexToml = join(codexDir, "config.toml");
+  const tomlText = readTextSafe(codexToml);
+  if (tomlText !== null && /^\s*notify\s*=.*murmur/m.test(tomlText)) {
+    found.push({
+      harness: "codex",
+      path: codexToml,
+      detail: `stale murmur notify line in ${codexToml}`,
+      remedy: `# remove the murmur notify line from ${codexToml}`,
+    });
+  }
+
+  const piSettings = join(piDir, "settings.json");
+  const piText = readTextSafe(piSettings);
+  if (piText !== null) {
+    try {
+      const parsed = JSON.parse(piText) as { packages?: unknown };
+      const pkgs = Array.isArray(parsed?.packages) ? parsed.packages : [];
+      const hasMurmur = pkgs.some(
+        (entry) =>
+          (typeof entry === "string" && entry.includes("@mu-crew/murmur")) ||
+          (entry !== null &&
+            typeof entry === "object" &&
+            typeof (entry as { source?: unknown }).source === "string" &&
+            (entry as { source: string }).source.includes("@mu-crew/murmur")),
+      );
+      if (hasMurmur) {
+        found.push({
+          harness: "pi",
+          path: piSettings,
+          detail: `@mu-crew/murmur package still listed in ${piSettings}`,
+          remedy: "pi remove npm:@mu-crew/murmur",
+        });
+      }
+    } catch {
+      // Unreadable JSON: ignore.
+    }
+  }
+
+  const legacyPiExt = join(piDir, "extensions", "murmur-pi.ts");
+  try {
+    if (existsSync(legacyPiExt) || lstatSync(legacyPiExt).isSymbolicLink()) {
+      found.push({
+        harness: "pi",
+        path: legacyPiExt,
+        detail: `legacy murmur-pi extension at ${legacyPiExt}`,
+        remedy: `rm -f ${legacyPiExt}`,
+      });
+    }
+  } catch {
+    // Absent: normal.
+  }
+
+  return found;
+}
+
+function staleWiringFindings(stale: readonly StaleWiring[]): Finding[] {
+  return stale.map((item) => ({
+    kind: "stale-2x-wiring",
+    severity: "observation",
+    subject: item.harness,
+    message: `${item.harness}: ${item.detail} (murmur 3 removed hooks and the pi extension)`,
+    detail: item.detail,
+    remedy: item.remedy,
+  }));
+}
 
 /**
  * This node's multiplexers, as `doctor` found them: each local tmux server's
@@ -728,6 +866,9 @@ export function diagnose(local: LocalNode, surveys: SurveyResult[]): Finding[] {
   }
 
   findings.push(...mux.filter((finding) => finding.severity === "observation"));
+  if (local.staleWiring && local.staleWiring.length > 0) {
+    findings.push(...staleWiringFindings(local.staleWiring));
+  }
 
   // Returned in the order they were appended, which is already problems first
   // and then the operator's own peer order. There is no sort: a comparator here

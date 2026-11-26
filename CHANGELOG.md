@@ -5,6 +5,14 @@ so it says what changed for a user rather than listing every commit.
 
 ## Unreleased
 
+## 3.0.1
+
+**Stale 2.x wiring detection in `murmur doctor`.** `murmur doctor` now scans
+Claude Code, Codex, Cursor, Muse Code, and Pi configs for leftover murmur 2.x
+`murmur hook` / `murmur notify` entries, `npm:@mu-crew/murmur` packages, and
+legacy `murmur-pi.ts` symlinks, reporting each as an observation with cleanup
+steps.
+
 ## 3.0.0
 
 **Needs vtmux or Rex.** murmur now reads every local pane from its multiplexer
