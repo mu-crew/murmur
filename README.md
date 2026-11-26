@@ -82,9 +82,22 @@ Agents inside herdr's own panes are not visible to it.
 
 ## Install
 
-Needs [vtmux](https://github.com/martintrojer/vtmux) (or Rex), `fzf`, and
-Node 22.14+. Multi-machine: ssh access, murmur on each node. On stock tmux,
-which drops OSC 7501, use murmur 2.x (`npm i -g @mu-crew/murmur@2`).
+Needs [vtmux](https://github.com/martintrojer/vtmux) **>= 3.8-rc3** (or Rex),
+`fzf`, and Node 22.14+. Multi-machine: ssh access, murmur on each node.
+
+**Vanilla tmux 3.8:** stock tmux drops OSC 7501 and OSC 7577, so murmur 3.0
+sees none of your local panes (remote peers running vtmux or Rex still appear,
+and jumping to them works). If you stay on stock tmux, use murmur 2.x, which is
+maintained on the `release/2.x` branch (`npm i -g @mu-crew/murmur@2`). It is the
+clean way out.
+
+**Why vtmux.** OSC 7501 (program status) and OSC 7577 (program resume) are open
+terminal protocols that vtmux and Rex implement and pi, Claude Code and Codex
+speak natively (Cursor is bridged in about 100 lines). Using them deleted
+about 20,000 lines of harness hooks, inboxes, process-chain walking, pi
+extensions and per-pane, window and session tmux option publishing, and made
+window, pane and session decorations instant, with focus clearing done by the
+multiplexer.
 
 On every node that runs agents:
 
@@ -93,7 +106,7 @@ npm install -g @mu-crew/murmur
 murmur init                      # this node's identity
 ```
 
-and in `.tmux.conf`:
+and in `.tmux.conf` (both options are required; vtmux >= 3.8-rc3):
 
 ```tmux
 set -s vtmux-program-status on

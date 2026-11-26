@@ -10,9 +10,12 @@ own state over [OSC 7501](https://www.superlogical.com/rex/docs/build/program-st
 (Program Status) and how to relaunch it over
 [OSC 7577](https://www.superlogical.com/rex/docs/build/program-resume)
 (Program Resume), and the multiplexer keeps both records per pane. That needs
-**vtmux** (or Rex): stock tmux drops both sequences, so murmur 3 sees none of
-its panes. On stock tmux, stay on murmur 2.x (`npm i -g @mu-crew/murmur@2`,
-branch `release/2.x`).
+**vtmux >= 3.8-rc3** (or Rex): stock tmux 3.8 drops both sequences, so murmur 3
+sees none of its local panes (remote peers running vtmux or Rex still appear
+and jump works). **On vanilla tmux 3.8, use murmur 2.x** (`npm i -g
+@mu-crew/murmur@2`, branch `release/2.x`): it is the clean out. Using the two
+protocols is why murmur 3 no longer needs harness hooks, inboxes, process-chain
+walking, a pi extension or `@murmur_*` option publishing.
 
 On every node that runs agents:
 
@@ -20,7 +23,7 @@ On every node that runs agents:
 murmur init                      # this node's identity; nothing else to install
 ```
 
-and in `.tmux.conf` (vtmux):
+and in `.tmux.conf` (vtmux >= 3.8-rc3; both options are required):
 
 ```tmux
 set -s vtmux-program-status on   # keep OSC 7501 records: murmur's only state source
