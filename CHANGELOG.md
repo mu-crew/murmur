@@ -5,7 +5,7 @@ so it says what changed for a user rather than listing every commit.
 
 ## Unreleased
 
-## 3.0.0-alpha.1
+## 3.0.0
 
 **Needs vtmux or Rex.** murmur now reads every local pane from its multiplexer
 in one `list-panes -a` per tmux server: programs report their own state over
