@@ -581,25 +581,76 @@ test("suppression is scoped to the gated peer, not to every peer", () => {
   ]);
 });
 
-test("a pane inbox at its cap is an observation naming the drain", () => {
+const VTMUX = { vtmux: "3.8-rc3", version: "3.8", programStatus: "on", programResume: "on" };
+
+test("a vtmux server with both OSC options on raises nothing", () => {
+  const findings = diagnose(
+    localNode([], { mux: { tmux: [{ server: "default", info: VTMUX }], rex: false } }),
+    [],
+  );
+  expect(findings).toEqual([]);
+});
+
+test("stock tmux is a problem: murmur 3 cannot see its panes", () => {
   const findings = diagnose(
     localNode([], {
-      inbox: [
-        { key: "abc", waiting: 10 },
-        { key: "def", waiting: 9 },
-      ],
-      inboxCap: 10,
-      display_name: "laptop",
+      mux: {
+        tmux: [
+          {
+            server: "-L mule",
+            info: { vtmux: null, version: "3.8", programStatus: null, programResume: null },
+          },
+        ],
+        rex: false,
+      },
     }),
     [],
   );
   expect(findings).toEqual([
     expect.objectContaining({
-      kind: "inbox-full",
-      severity: "observation",
-      subject: "laptop",
-      detail: "inbox abc: 10 events waiting",
-      remedy: "murmur status",
+      kind: "stock-tmux",
+      severity: "problem",
+      subject: "-L mule",
+      detail: "stock tmux 3.8: no OSC 7501, panes invisible",
     }),
   ]);
+});
+
+test("vtmux with program status off is a problem; resume off is an observation", () => {
+  const findings = diagnose(
+    localNode([], {
+      mux: {
+        tmux: [
+          { server: "default", info: { ...VTMUX, programStatus: "off", programResume: null } },
+          { server: "-L mule", info: { ...VTMUX, programResume: "off" } },
+        ],
+        rex: false,
+      },
+    }),
+    [],
+  );
+  expect(
+    findings.map((entry) => [entry.kind, entry.severity, entry.subject, entry.remedy]),
+  ).toEqual([
+    ["program-status-off", "problem", "default", "tmux set -s vtmux-program-status on"],
+    ["program-resume-off", "observation", "default", "tmux set -s vtmux-program-resume on"],
+    ["program-resume-off", "observation", "-L mule", "tmux -L mule set -s vtmux-program-resume on"],
+  ]);
+});
+
+test("no tmux server and no Rex is an observation about this node", () => {
+  const findings = diagnose(
+    localNode([], {
+      display_name: "laptop",
+      mux: { tmux: [{ server: "default", info: null }], rex: false },
+    }),
+    [],
+  );
+  expect(findings).toEqual([
+    expect.objectContaining({ kind: "no-local-mux", severity: "observation", subject: "laptop" }),
+  ]);
+});
+
+test("Rex alone is a local multiplexer: no finding", () => {
+  expect(diagnose(localNode([], { mux: { tmux: [], rex: true } }), [])).toEqual([]);
 });

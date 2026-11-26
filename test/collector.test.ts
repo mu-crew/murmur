@@ -17,10 +17,11 @@ import {
   unreachableIntervalMs,
 } from "../src/collector.js";
 import { asPaneId, asSessionId, asWindowId } from "../src/ids.js";
+import { PILL_WORDS } from "../src/local.js";
 import { openStore, type Store } from "../src/store.js";
-import { SNAPSHOT_VERSION, type Snapshot, type SnapshotPane } from "../src/types.js";
+import { SNAPSHOT_VERSION, type Snapshot, type SnapshotPane, serverKey } from "../src/types.js";
 import { STALENESS_MS } from "../src/view.js";
-import { fakeMux } from "./helpers/fake-mux.js";
+import { vtmuxMux, vtmuxRow } from "./helpers/panes.js";
 
 const stores: Store[] = [];
 let store: Store;
@@ -44,25 +45,22 @@ function pane(id: string): SnapshotPane {
     session_name: null,
     window_name: null,
     agent: {
-      agent_id: `agent-${id}`,
       activity: "running",
       agent_name: null,
-      pi_session: null,
       workstream: null,
       role: null,
       cli: "pi",
       harness: null,
       driver: "human",
-      model: null,
-      provider: null,
-      context_tokens: null,
-      context_window: null,
-      provider_effort: null,
-      usage: null,
       pending: null,
-      effort: null,
-      context_pct: null,
-      claimed_at: 1,
+      pane_title: null,
+      title: null,
+      message: null,
+      progress: null,
+      blocked_kind: null,
+      resume_command: null,
+      resume_cwd: null,
+      cwd: null,
       updated_at: 1,
     },
     attention: [],
@@ -71,7 +69,7 @@ function pane(id: string): SnapshotPane {
 
 function snapshot(panes: SnapshotPane[], hostId = "REMOTE", over: Partial<Snapshot> = {}): string {
   return JSON.stringify({
-    murmur_snapshot: 7,
+    murmur_snapshot: 8,
     host_id: hostId,
     display_name: "Remote",
     murmur_version: "0.2.0",
@@ -375,12 +373,11 @@ test("a peer that fails late is reported, not an unhandled rejection", async () 
   }
 });
 
-test("an empty peer list touches no channel and still reconciles locally", async () => {
-  // The single-machine path. `reconcileLocal` is the only housekeeping left and
+test("an empty peer list touches no channel and still reads locally", async () => {
+  // The single-machine path. The local read is the only housekeeping left and
   // it must run with zero peers, which is why it lives on collect rather than on
   // export: export only runs when a PEER asks over ssh, so a laptop with no
-  // peers reconciled never and four dead crew rows sat in the picker
-  // indefinitely.
+  // peers would never notice a pane vanish.
   let calls = 0;
   const spy: Channel = {
     exec: async () => {
@@ -388,83 +385,61 @@ test("an empty peer list touches no channel and still reconciles locally", async
       return "";
     },
   };
+  const rows = [vtmuxRow({ pane: "%99", state: "working", app: "pi" })];
+  const mux = vtmuxMux(new Map([[serverKey({ kind: "default" }), rows]]));
 
-  // A local agent whose pane is GONE. Reconciliation must remove it, and the
-  // assertion has to be that removal rather than the empty result: the empty
-  // result is true whether or not reconcileLocal ran, so a sweep deleted the
-  // call and this test stayed green while its own name promised otherwise.
-  store.claimAgent({
-    location: {
-      server: { kind: "default" },
-      session: asSessionId("$0"),
-      window: asWindowId("@1"),
-      pane: asPaneId("%99"),
-      session_name: null,
-      window_name: null,
-    },
-    // Dead: a vanished pane with a live owner keeps its row.
-    owner_pid: 2 ** 22,
-    meta: {
-      agent_name: null,
-      pi_session: null,
-      workstream: null,
-      role: null,
-      cli: "pi",
-      driver: "human",
-    },
-  });
-  expect(store.localPanes()).toHaveLength(1);
-
-  await expect(
-    collect(store, spy, Date.now(), { mux: fakeMux({ livePanes: () => new Set() }) }),
-  ).resolves.toEqual([]);
-  expect(calls).toBe(0);
-  // The housekeeping actually happened.
+  await expect(collect(store, spy, 1_000, { mux, rex: false })).resolves.toEqual([]);
   expect(store.localPanes()).toEqual([]);
+  // The pane vanished while working: the next collect, peers or none, records
+  // the crash. The assertion has to be that row rather than the empty result,
+  // which is true whether or not the local read ran.
+  rows.length = 0;
+  await expect(collect(store, spy, 2_000, { mux, rex: false })).resolves.toEqual([]);
+  expect(calls).toBe(0);
+  expect(store.localPanes()).toMatchObject([
+    { pane: "%99", attention: [{ kind: "crashed", requested_at: 2_000, source: "murmur" }] },
+  ]);
 });
 
-test("collect reconciles each tmux server independently with one query per server", async () => {
-  const base = {
-    session: asSessionId("$0"),
-    window: asWindowId("@1"),
-    pane: asPaneId("%34"),
-    session_name: null,
-    window_name: null,
-  };
-  const meta = {
-    agent_name: null,
-    pi_session: null,
-    workstream: null,
-    role: null,
-    cli: "pi",
-    harness: null,
-    driver: "human" as const,
-  };
-  store.claimAgent({
-    location: { ...base, server: { kind: "default" } },
-    owner_pid: 2 ** 22,
-    meta,
-  });
-  store.claimAgent({
-    location: { ...base, server: { kind: "label", value: "mule" } },
-    owner_pid: 2 ** 22,
-    meta,
-  });
-
-  const queried: string[] = [];
-  await collect(store, { exec: async () => "" }, Date.now(), {
-    mux: fakeMux({
-      livePanes: (server = { kind: "default" }) => {
-        queried.push(server.kind === "default" ? "default" : `${server.kind}:${server.value}`);
-        return server.kind === "default" ? new Set() : null;
-      },
-    }),
-  });
-
-  expect(queried).toEqual(["default", "label:mule"]);
-  expect(store.localPanes()).toMatchObject([
-    { server: { kind: "label", value: "mule" }, pane: "%34" },
+test("collect reads each tmux server independently with one query per server", async () => {
+  const mule = { kind: "label", value: "mule" } as const;
+  const answers = new Map<string, string[][] | null>([
+    [serverKey({ kind: "default" }), [vtmuxRow({ pane: "%34", state: "working" })]],
+    [serverKey(mule), [vtmuxRow({ pane: "%34", state: "working" })]],
   ]);
+  const queried: string[] = [];
+  const mux = vtmuxMux(answers, {
+    listPanes: (_fields, server) => {
+      queried.push(serverKey(server));
+      const answer = answers.get(serverKey(server));
+      return answer === undefined ? [] : answer;
+    },
+  });
+  await collect(store, { exec: async () => "" }, 1_000, { mux, rex: false });
+  expect(queried).toEqual([serverKey({ kind: "default" }), serverKey(mule)]);
+
+  // The default server answers "no panes", mule cannot be asked: only the
+  // definite answer is evidence, so only default's %34 crashed.
+  answers.set(serverKey({ kind: "default" }), []);
+  answers.set(serverKey(mule), null);
+  queried.length = 0;
+  await collect(store, { exec: async () => "" }, 2_000, { mux, rex: false });
+  expect(queried).toEqual([serverKey({ kind: "default" }), serverKey(mule)]);
+  expect(store.localPanes()).toMatchObject([{ server: { kind: "default" }, pane: "%34" }]);
+
+  // A server whose socket vanished is still asked, because a previous collect
+  // saw it: "no server running" is what retires its panes.
+  answers.delete(serverKey(mule));
+  const gone = vtmuxMux(new Map([[serverKey({ kind: "default" }), []]]), {
+    listPanes: (_fields, server) => {
+      queried.push(serverKey(server));
+      return [];
+    },
+  });
+  queried.length = 0;
+  await collect(store, { exec: async () => "" }, 3_000, { mux: gone, rex: false });
+  expect(queried).toContain(serverKey(mule));
+  expect(store.localPanes().map((entry) => entry.server.kind)).toEqual(["default", "label"]);
 });
 
 test("collect never writes to stderr, whatever the peer does", async () => {
@@ -929,48 +904,46 @@ test("the auth category does not overlap unreachability", () => {
   expect(describeFailure("dev", auth)).not.toContain("unreachable");
 });
 
-test("collect republishes a pane that reconciliation marks crashed", async () => {
-  const location = {
-    server: { kind: "default" as const },
-    session: asSessionId("$0"),
-    window: asWindowId("@1"),
-    pane: asPaneId("%1"),
-    session_name: null,
-    window_name: null,
-  };
-  const claim = store.claimAgent({
-    location,
-    owner_pid: 2 ** 22,
-    meta: {
-      agent_name: "worker-1",
-      pi_session: null,
-      workstream: "mu",
-      role: null,
-      cli: "pi",
-      driver: "orchestrated",
-    },
-  });
-  if (claim.outcome === "refused") throw new Error("refused");
-  store.setActivity({
-    agent_id: claim.agent_id,
-    owner_pid: 2 ** 22,
-    activity: "running",
-    location,
-  });
-  const panes: [string, string | null][] = [];
-  const windows: [string, string | null][] = [];
+test("collect writes the pill counts from the same read, and only what changed", async () => {
+  // Human panes count by state; crew panes count only when they need a human,
+  // and all of them in `crew`. One write per changed word, none for a pill the
+  // server already holds.
+  const rows = [
+    vtmuxRow({ pane: "%1", state: "working" }),
+    vtmuxRow({ pane: "%2", state: "blocked", kind: "permission" }),
+    vtmuxRow({ pane: "%3", state: "done", mu_agent: "w-1" }),
+    vtmuxRow({ pane: "%4", state: "working", id: "mu/delegates", mu_agent: "w-2" }),
+  ];
+  const mux = vtmuxMux(rows);
+  await collect(store, { exec: async () => "" }, 1_000, { mux, rex: false });
 
-  await collect(store, { exec: async () => "" }, Date.now(), {
-    mux: fakeMux({
-      livePanes: () => new Set([asPaneId("%1")]),
-      panesInWindow: () => [asPaneId("%1")],
-      setPaneState: (pane, state) => void panes.push([pane, state]),
-      setWindowState: (window, state) => void windows.push([window, state]),
-    }),
-  });
+  const writes = mux.ran.flatMap((call) => call.commands);
+  expect(writes).toEqual(
+    expect.arrayContaining([
+      ["set-option", "-gq", "@murmur_count_working", "1"],
+      ["set-option", "-gq", "@murmur_count_blocked", "1"],
+      ["set-option", "-gq", "@murmur_count_crew", "2"],
+    ]),
+  );
+  expect(writes.map((command) => command[2])).not.toContain("@murmur_count_done");
+  expect(writes.map((command) => command[2])).not.toContain("@murmur_count_waiting");
 
-  expect(panes).toEqual([["%1", "crashed"]]);
-  expect(windows).toEqual([["@1", "crashed"]]);
+  // The server now holds those values, and the next read says so.
+  for (const row of rows) {
+    row.splice(-PILL_WORDS.length, PILL_WORDS.length, ...["", "", "1", "", "1", "", "", "2"]);
+  }
+  mux.ran.length = 0;
+  await collect(store, { exec: async () => "" }, 2_000, { mux, rex: false });
+  expect(mux.ran).toEqual([]);
+
+  // The blocked pane vanishes mid-work: its count falls to zero and is unset,
+  // so a format can test presence, and the crash murmur recorded is counted.
+  rows.splice(1, 1);
+  await collect(store, { exec: async () => "" }, 3_000, { mux, rex: false });
+  expect(mux.ran.flatMap((call) => call.commands)).toEqual([
+    ["set-option", "-gq", "@murmur_count_crashed", "1"],
+    ["set-option", "-gqu", "@murmur_count_blocked"],
+  ]);
 });
 
 const BUSY =

@@ -7,6 +7,7 @@ import { SNAPSHOT_VERSION, versionCell } from "../src/cli/peer.js";
 import { collect } from "../src/collector.js";
 import { createIdentity } from "../src/identity.js";
 import { VERSION } from "../src/index.js";
+import { buildSnapshot } from "../src/local.js";
 import { openStore } from "../src/store.js";
 import type { PeerRecord, Snapshot } from "../src/types.js";
 import { runBuiltCli } from "./helpers/built.js";
@@ -22,7 +23,7 @@ function cell(over: Partial<Pick<PeerRecord, "murmur_version" | "snapshot_versio
 /** A document, as a peer's `murmur export` would print it. */
 function wire(over: Partial<Snapshot> = {}): string {
   return JSON.stringify({
-    murmur_snapshot: 7,
+    murmur_snapshot: 8,
     host_id: "REMOTE",
     display_name: "bubba",
     murmur_version: "0.1.4",
@@ -34,12 +35,7 @@ function wire(over: Partial<Snapshot> = {}): string {
 
 test("this node's own snapshot states its version and speaks the current snapshot", () => {
   const identity = createIdentity("here");
-  const store = openStore();
-  const snapshot = store.buildLocalSnapshot(identity, {
-    server: { kind: "default" },
-    panes: new Set(),
-  });
-  store.close();
+  const snapshot = buildSnapshot(identity, []);
 
   // A real semver, and the SAME one the SDK advertises. Two readers of
   // package.json (index.ts for the SDK, store.ts for the document) must not be
@@ -48,7 +44,7 @@ test("this node's own snapshot states its version and speaks the current snapsho
   expect(snapshot.murmur_version).toBe(VERSION);
   // A literal, not the constant. Comparing the document against the constant
   // passes whatever the constant is, so it cannot notice a bump at all.
-  expect(snapshot.murmur_snapshot).toBe(7);
+  expect(snapshot.murmur_snapshot).toBe(8);
 });
 
 test("a collect records what the peer is running, out of the document itself", async () => {
@@ -79,7 +75,7 @@ test("a peer speaking snapshot v2 is refused with expected 6 and actual 2", asyn
   );
 
   expect(results[0]).toMatchObject({ ok: false, unreachable: false });
-  expect(store.peers()[0]?.last_error).toContain("murmur_snapshot: expected 7, got 2");
+  expect(store.peers()[0]?.last_error).toContain("murmur_snapshot: expected 8, got 2");
   expect(store.peers()[0]?.snapshot).toBeNull();
   store.close();
 });
@@ -198,7 +194,7 @@ test("peer list shows a VERSION column once a peer has reported, and names a rea
     ok: true,
     at: Date.now(),
     snapshot: {
-      murmur_snapshot: 7,
+      murmur_snapshot: 8,
       host_id: "M",
       display_name: "macmini",
       murmur_version: "0.1.4",

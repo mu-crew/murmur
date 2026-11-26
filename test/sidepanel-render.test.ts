@@ -25,27 +25,26 @@ function pane(over: Partial<PaneView> = {}): PaneView {
     activity: "running",
     attention: [],
     freshness: "fresh",
-    agent_id: "agent-1",
     agent_name: "worker-1",
-    pi_session: null,
     workstream: "murmur",
     role: null,
     cli: "pi",
     harness: null,
     driver: "human",
-    model: null,
-    provider: null,
-    effort: null,
-    provider_effort: null,
-    context_pct: null,
-    context_tokens: null,
-    context_window: null,
-    usage: null,
     pending: null,
     updated_at: 1,
     snapshot_at: null,
     fetched_at: null,
     attached_pane: null,
+    pane_title: null,
+    title: null,
+    message: null,
+    progress: null,
+    blocked_kind: null,
+    resume_command: null,
+    resume_cwd: null,
+    cwd: null,
+    focused: false,
     runs_on: null,
     ...over,
   };
@@ -323,7 +322,7 @@ test("a merged chunk of navigation keys moves once per key", async () => {
   Object.assign(output, { isTTY: true, columns: 40, rows: 12 });
   output.on("data", (chunk: Buffer) => writes.push(chunk));
   const panes = [1, 2, 3, 4, 5].map((n) =>
-    pane({ pane: asPaneId(`%${n}`), agent_id: `agent-${n}`, agent_name: `worker-${n}` }),
+    pane({ pane: asPaneId(`%${n}`), agent_name: `worker-${n}` }),
   );
   const instance = renderInk(
     createElement(App, {
@@ -352,7 +351,7 @@ test("a merged chunk of navigation keys moves once per key", async () => {
 });
 
 test("the harness tag shows in both layouts; null harness has none", () => {
-  const claude = pane({ harness: "claude", model: "opus-4", effort: "medium" });
+  const claude = pane({ harness: "claude", message: "opus-4" });
   expect(renderFrame(view([claude]))).toContain("running · claude · here");
   expect(renderFrame(view([claude]), true)).toContain("claude");
   expect(renderFrame(view([pane({ harness: "cursor-agent" })]))).toContain(
@@ -360,7 +359,9 @@ test("the harness tag shows in both layouts; null harness has none", () => {
   );
   const none = renderFrame(view([pane({ harness: null })]));
   expect(none).toContain("running · here · 2m");
-  expect(renderFrame(view([pane({ harness: "codex", model: "gpt-5" })]), true)).toContain("codex");
+  expect(renderFrame(view([pane({ harness: "codex", message: "gpt-5" })]), true)).toContain(
+    "codex",
+  );
 });
 
 test("a pi row is unchanged except the tag", () => {

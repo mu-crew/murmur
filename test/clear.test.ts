@@ -2,452 +2,97 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeEach, expect, test } from "vitest";
-import { clearPane, namedServer } from "../src/cli/clear.js";
-import { asPaneId, asSessionId, asWindowId, type WindowId } from "../src/ids.js";
-import { openStore, type Store } from "../src/store.js";
-import type { AgentMeta, Location } from "../src/types.js";
-import { fakeMux } from "./helpers/fake-mux.js";
+import { clearPane, paneServer } from "../src/cli/clear.js";
+import { asPaneId, asSessionId, asWindowId } from "../src/ids.js";
+import { openStore } from "../src/store.js";
+import type { Location, TmuxServer } from "../src/types.js";
+
+/**
+ * `murmur clear`: dismiss the one kind of attention murmur owns.
+ *
+ * From 3.0 every other attention is the program's own (OSC 7501), and vtmux
+ * clears `done` and `error` itself when the pane is focused, so a clear has
+ * exactly one row it may touch: the `crashed` row murmur recorded for a pane
+ * that vanished mid-work.
+ */
 
 beforeEach(() => {
   process.env.MURMUR_STATE_DIR = mkdtempSync(join(tmpdir(), "murmur-clear-"));
 });
 
-function location(pane: string, window = "@1"): Location {
+function at(server: TmuxServer, pane: string): Location {
   return {
-    server: { kind: "default" },
-    session: asSessionId("$1"),
-    window: asWindowId(window),
+    server,
     pane: asPaneId(pane),
-    session_name: null,
+    session: asSessionId("$0"),
+    window: asWindowId("@1"),
+    session_name: "work",
     window_name: null,
   };
 }
 
-const META: AgentMeta = {
-  agent_name: "worker-1",
-  pi_session: null,
-  workstream: "murmur",
-  role: null,
-  cli: "pi",
-  driver: "human",
-};
-
-/** Seed the store, then close it: `clearPane` opens its own handle. */
-function seed(work: (store: Store) => void): void {
+function crashes(): string[] {
   const store = openStore();
   try {
-    work(store);
+    return store
+      .localPanes()
+      .map(
+        (pane) =>
+          `${pane.server.kind}:${"value" in pane.server ? pane.server.value : ""}:${pane.pane}`,
+      );
   } finally {
     store.close();
   }
 }
 
-function read<T>(work: (store: Store) => T): T {
+const DEFAULT: TmuxServer = { kind: "default" };
+const MULE: TmuxServer = { kind: "label", value: "mule" };
+
+test("clear dismisses the crash on that server's pane, and nothing else", () => {
   const store = openStore();
-  try {
-    return work(store);
-  } finally {
-    store.close();
-  }
-}
+  store.recordCrash(at(DEFAULT, "%1"));
+  store.recordCrash(at(MULE, "%1"));
+  store.recordCrash(at(DEFAULT, "%2"));
+  store.close();
 
-/** Window-state writes made by the clear hook. */
-function badgeRecorder(): {
-  writes: [WindowId, unknown][];
-  set: (window: WindowId, state: unknown) => void;
-} {
-  const writes: [WindowId, unknown][] = [];
-  return { writes, set: (window, state) => void writes.push([window, state]) };
-}
-
-test("focus acknowledges every kind of attention on the pane", () => {
-  // The reason clear exists. blocked, done and crashed all mean "look at me";
-  // focusing the pane IS looking, so the request is satisfied and must stop
-  // being shown -- otherwise the badge outlives the thing it reported.
-  //
-  // All kinds at once, in one statement, because (pane, kind) is the key and a
-  // crashed row must not survive a focus that acknowledged the done next to it.
-  seed((store) => {
-    for (const kind of ["blocked", "done"] as const) {
-      store.requestAttention({
-        kind,
-        location: location("%1"),
-        message: kind,
-        source: "pi",
-        driver: "human",
-      });
-    }
-    // Through the crash path, because that is the only writer of `crashed`.
-    store.recordCrash(location("%1"));
-  });
-  const badges = badgeRecorder();
-
-  clearPane(
-    "%1",
-    fakeMux({
-      windowForPane: () => asWindowId("@1"),
-      panesInWindow: () => [asPaneId("%1")],
-      setWindowState: badges.set,
-    }),
-  );
-
-  expect(read((store) => store.localPanes())).toEqual([]);
-  expect(badges.writes).toEqual([["@1", null]]);
+  // A pane id is unique only per server: the mule %1 is a different pane.
+  expect(clearPane("%1", MULE)).toBe(1);
+  expect(crashes()).toEqual(["default::%1", "default::%2"]);
+  // Clearing again finds nothing: idempotent, as a key binding needs.
+  expect(clearPane("%1", MULE)).toBe(0);
 });
 
-test("focus cannot touch the agent in the pane, whatever it is doing", () => {
-  // Focus can only run `DELETE FROM attention WHERE pane = ?`. There is no state
-  // it must refuse to clear, because there is nothing it can clear except
-  // attention -- which is what keeps a focus hook from wiping the report of a
-  // running agent, as it once did for 50 of 84 turns on one agent. Asserted for
-  // a RUNNING agent with a live pid, which is the case that used to be destroyed.
-  const before = read((store) => {
-    const claim = store.claimAgent({
-      location: location("%1"),
-      owner_pid: process.pid,
-      meta: META,
-    });
-    store.setActivity({
-      agent_id: "agent_id" in claim ? claim.agent_id : "",
-      owner_pid: process.pid,
-      activity: "running",
-      location: location("%1"),
-    });
-    return store.localPanes();
-  });
-
-  const badges = badgeRecorder();
-  clearPane(
-    "%1",
-    fakeMux({
-      windowForPane: () => asWindowId("@1"),
-      panesInWindow: () => [asPaneId("%1")],
-      setWindowState: badges.set,
-    }),
-  );
-
-  expect(read((store) => store.localPanes())).toEqual(before);
-  expect(before[0]?.agent).toMatchObject({ activity: "running", agent_name: "worker-1" });
-  expect(badges.writes).toEqual([["@1", "running"]]);
+test("clear is silent and total when there is nothing to clear or no store to ask", () => {
+  expect(clearPane("", DEFAULT)).toBe(0);
+  expect(clearPane("%404", DEFAULT)).toBe(0);
+  // A store that cannot be opened is no crash to clear, not an error: a key
+  // binding runs this and has nowhere to show one.
+  const broken = mkdtempSync(join(tmpdir(), "murmur-clear-broken-"));
+  writeFileSync(join(broken, "state.db"), "not a database");
+  process.env.MURMUR_STATE_DIR = join(broken, "state.db", "nested");
+  expect(clearPane("%1", DEFAULT)).toBe(0);
 });
 
-test("a pane murmur has never seen still gets its badge cleared", () => {
-  // The tms picker and the status bar read @murmur_window_state from tmux, not from
-  // murmur. A badge murmur never wrote -- an orphan from the agent-attention
-  // era, or a window it never recorded -- used to be unclearable, so the glyph
-  // sat in the picker forever because nothing else would ever clear it.
-  const badges = badgeRecorder();
-
-  clearPane(
-    "%unknown",
-    fakeMux({ windowForPane: () => asWindowId("@42"), setWindowState: badges.set }),
-  );
-
-  expect(badges.writes).toEqual([["@42", null]]);
-});
-
-test("a sibling pane that still wants attention keeps the badge lit", () => {
-  // The badge is a WINDOW option while "the user looked" is only true of one
-  // pane, so focusing a shell next to a finished agent must not wipe its badge.
-  //
-  // The question is asked of ATTENTION only: a busy agent next door is not a
-  // reason to keep an attention badge lit.
-  seed((store) => {
-    store.requestAttention({
-      kind: "done",
-      location: location("%agent"),
-      message: "",
-      source: "pi",
-      driver: "human",
-    });
-    const claim = store.claimAgent({
-      location: location("%busy"),
-      owner_pid: process.pid,
-      meta: META,
-    });
-    store.setActivity({
-      agent_id: "agent_id" in claim ? claim.agent_id : "",
-      owner_pid: process.pid,
-      activity: "running",
-      location: location("%busy"),
-    });
-  });
-  const badges = badgeRecorder();
-  const mux = fakeMux({
-    windowForPane: () => asWindowId("@1"),
-    panesInWindow: () => [asPaneId("%agent"), asPaneId("%busy"), asPaneId("%shell")],
-    setWindowState: badges.set,
-  });
-
-  // Focusing the shell: the agent next door still wants attention.
-  clearPane("%shell", mux);
-  expect(badges.writes).toEqual([["@1", "done"]]);
-
-  // Focusing the finished agent leaves the busy sibling's activity projected
-  // onto the window rather than making it look idle.
-  clearPane("%agent", mux);
-  expect(badges.writes).toEqual([
-    ["@1", "done"],
-    ["@1", "running"],
-  ]);
-});
-
-test("clear is silent and total when nothing can answer", () => {
-  // It runs inside the tmux server, from a focus hook, so it must never throw
-  // and never print -- and it must still clear what it can.
-  expect(() => clearPane("")).not.toThrow();
-  expect(() =>
-    clearPane(
-      "%1",
-      fakeMux({
-        windowForPane: () => {
-          throw new Error("no tmux");
-        },
-      }),
-    ),
-  ).not.toThrow();
-});
-
-// The file's own rule, stated at the top of src/cli/clear.ts: keep the badge when
-// tmux OR THE STORE cannot answer. The store half used to do the opposite -- a
-// ternary passed null, erasing the badge without ever reading the attention it
-// reported. A locked state.db plus one focus event wiped a crashed glyph off a
-// window whose attention row was still there, and for a crashed agent nothing
-// ever repaints it.
-test("clear republishes the focused pane's own state", () => {
-  seed((store) => {
-    store.requestAttention({
-      kind: "done",
-      location: location("%1"),
-      message: "",
-      source: "pi",
-      driver: "human",
-    });
-    const claim = store.claimAgent({
-      location: location("%1"),
-      owner_pid: process.pid,
-      meta: META,
-    });
-    store.setActivity({
-      agent_id: "agent_id" in claim ? claim.agent_id : "",
-      owner_pid: process.pid,
-      activity: "running",
-      location: location("%1"),
-    });
-  });
-  const panes: [string, string | null][] = [];
-
-  clearPane(
-    "%1",
-    fakeMux({
-      windowForPane: () => asWindowId("@1"),
-      panesInWindow: () => [asPaneId("%1")],
-      setPaneState: (pane, state) => void panes.push([pane, state]),
-    }),
-  );
-
-  expect(panes).toEqual([["%1", "running"]]);
-});
-
-test("an unopenable store leaves the badge alone rather than erasing it", () => {
-  const badges: [string, string | null][] = [];
-  const mux = fakeMux({
-    windowForPane: () => asWindowId("@1"),
-    setWindowState: (window: WindowId, state: string | null) => {
-      badges.push([window, state]);
-    },
-  });
-
-  // Unopenable, not merely empty: a path whose parent is a FILE cannot be
-  // created as a directory, which is the closest stand-in for the locked or
-  // unwritable database this guards against.
-  const parent = mkdtempSync(join(tmpdir(), "murmur-clear-blocked-"));
-  const asFile = join(parent, "occupied");
-  writeFileSync(asFile, "not a directory");
-  process.env.MURMUR_STATE_DIR = join(asFile, "state");
-
-  expect(() => clearPane("%1", mux)).not.toThrow();
-  expect(badges).toEqual([]);
-});
-
-test("another window's attention cannot light this window's badge", () => {
-  // The window state is scoped to the FOCUSED window, and the projection enforces that
-  // by filtering local panes down to the ones tmux says are in it. Nothing
-  // tested the filter: every other case here stubs `panesInWindow` to return
-  // every seeded pane, so the filter was a no-op in all of them and deleting it
-  // left 342 tests passing.
-  //
-  // Without it, the badge is computed from EVERY pane on the machine, so a
-  // blocked agent in some other window projects `blocked` onto whichever window
-  // you happen to focus.
-  seed((store) => {
-    store.requestAttention({
-      kind: "blocked",
-      location: location("%elsewhere", "@9"),
-      message: "",
-      source: "pi",
-      driver: "human",
-    });
-  });
-  const badges = badgeRecorder();
-
-  clearPane(
-    "%focused",
-    fakeMux({
-      windowForPane: () => asWindowId("@1"),
-      // tmux's answer is the authority on membership, and it says the blocked
-      // pane is not here.
-      panesInWindow: () => [asPaneId("%focused")],
-      setWindowState: badges.set,
-    }),
-  );
-
-  expect(badges.writes).toEqual([["@1", null]]);
-});
-
-test("a window whose only agent is idle clears to null, not to idle", () => {
-  // `idle` is the absence of a signal, so it must never be painted as one: the
-  // window option is unset instead. The `state !== "idle"` guard in the projection
-  // is what does that, and it was also unprotected -- mutating it away kept the
-  // whole suite green while every focused window started reporting `idle`.
-  seed((store) => {
-    store.claimAgent({ location: location("%idle"), owner_pid: process.pid, meta: META });
-  });
-  const badges = badgeRecorder();
-
-  clearPane(
-    "%idle",
-    fakeMux({
-      windowForPane: () => asWindowId("@1"),
-      panesInWindow: () => [asPaneId("%idle")],
-      setWindowState: badges.set,
-    }),
-  );
-
-  expect(badges.writes).toEqual([["@1", null]]);
-});
-
-test("clear on its own pane is one tmux read: the view supplies location and targets", () => {
-  seed((store) => {
-    store.requestAttention({
-      kind: "done",
-      location: location("%1"),
-      message: "",
-      source: "pi",
-      driver: "human",
-    });
-  });
-  const badges = badgeRecorder();
-  const reads: string[] = [];
-
-  clearPane(
-    "%1",
-    fakeMux({
-      currentWindow: () => {
-        reads.push("currentWindow");
-        return null;
-      },
-      currentView: () => {
-        reads.push("currentView");
-        return {
-          location: location("%1"),
-          targets: {
-            session: asSessionId("$1"),
-            windowPanes: [asPaneId("%1")],
-            sessionPanes: [asPaneId("%1")],
-          },
-          focused: true,
-        };
-      },
-      windowForPane: () => {
-        reads.push("windowForPane");
-        return null;
-      },
-      panesInWindow: () => {
-        reads.push("panesInWindow");
-        return [];
-      },
-      setWindowState: badges.set,
-    }),
-  );
-
-  expect(reads).toEqual(["currentView"]);
-  expect(read((store) => store.localPanes())).toEqual([]);
-  expect(badges.writes).toEqual([["@1", null]]);
-});
-
-test("clear for another pane re-reads targets when that pane is in another window", () => {
-  const badges = badgeRecorder();
-  const reads: string[] = [];
-
-  clearPane(
-    "%9",
-    fakeMux({
-      currentView: () => ({
-        location: location("%1", "@1"),
-        targets: { session: null, windowPanes: [asPaneId("%1")], sessionPanes: [asPaneId("%1")] },
-        focused: false,
-      }),
-      windowForPane: () => asWindowId("@2"),
-      panesInWindow: (window) => {
-        reads.push(window);
-        return [asPaneId("%9")];
-      },
-      setWindowState: badges.set,
-    }),
-  );
-
-  expect(reads).toEqual(["@2"]);
-  expect(badges.writes).toEqual([["@2", null]]);
-});
-
-test("clear for a pane of a named server acknowledges that server's pane, not the caller's", () => {
-  // mu acknowledging a failed turn on its own tmux server (`murmur clear -L`)
-  // while running under another one, or none.
-  const labelled = { kind: "label", value: "mu-private" } as const;
-  seed((store) => {
-    for (const server of [labelled, { kind: "default" } as const]) {
-      store.requestAttention({
-        kind: "error",
-        location: { ...location("%5"), server },
-        message: "overloaded",
-        source: "claude",
-        driver: "orchestrated",
-      });
-    }
-  });
-  const badges = badgeRecorder();
-  const asked: unknown[] = [];
-  clearPane(
-    "%5",
-    fakeMux({
-      currentView: () => {
-        throw new Error("the caller's view says nothing about a named server");
-      },
-      windowForPane: (_pane, server) => {
-        asked.push(server);
-        return asWindowId("@1");
-      },
-      panesInWindow: () => [asPaneId("%5")],
-      setWindowState: badges.set,
-    }),
-    labelled,
-  );
-  expect(asked).toEqual([labelled]);
-  const left = read((store) => store.localPanes());
-  // Only the default server's pane %5 still asks for attention.
-  expect(left.map((pane) => [pane.server.kind, pane.attention.map((row) => row.kind)])).toEqual([
-    ["default", ["error"]],
-  ]);
-  expect(badges.writes).toEqual([["@1", null]]);
-});
-
-test("clear's -L and -S name a server; with neither, the caller's tmux decides", () => {
-  expect(namedServer({ socketName: "mu-private" })).toEqual({ kind: "label", value: "mu-private" });
-  expect(namedServer({ socketName: "default" })).toEqual({ kind: "default" });
-  expect(namedServer({ socketPath: "/run/mu/tmux.sock" })).toEqual({
+test("clear's -L, -S and --rex name a server; with none, the caller's tmux decides", () => {
+  expect(paneServer({ socketName: "default" }, {})).toEqual({ kind: "default" });
+  expect(paneServer({ socketName: "mule" }, {})).toEqual(MULE);
+  expect(paneServer({ socketPath: "/var/run/x.sock" }, {})).toEqual({
     kind: "path",
-    value: "/run/mu/tmux.sock",
+    value: "/var/run/x.sock",
   });
-  expect(namedServer({})).toBeUndefined();
+  expect(paneServer({ rex: true, socketName: "mule" }, {})).toEqual({ kind: "rex" });
+  // $TMUX names the server a key binding runs in.
+  expect(paneServer({}, { TMUX: "/var/run/y.sock,123,0" })).toEqual({
+    kind: "path",
+    value: "/var/run/y.sock",
+  });
+  expect(paneServer({}, {})).toEqual({ kind: "default" });
+});
+
+test("a Rex block's crash is cleared by its block id", () => {
+  const store = openStore();
+  store.recordCrash(at({ kind: "rex" }, "block:1f2e"));
+  store.close();
+  expect(clearPane("block:1f2e", paneServer({ rex: true }))).toBe(1);
+  expect(crashes()).toEqual([]);
 });

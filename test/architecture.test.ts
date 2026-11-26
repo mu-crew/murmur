@@ -20,7 +20,7 @@ function walkSource(dir: string): string[] {
 }
 
 function sourceFiles(): string[] {
-  return ["src", "extension"].flatMap(walkSource);
+  return walkSource("src");
 }
 
 test("only the store owns SQL", () => {
@@ -45,16 +45,16 @@ test("only the store owns SQL", () => {
 });
 
 test("no source file writes crashed attention outside the store", () => {
-  // `crashed` is reconciliation's conclusion: it asserts an owning process died
-  // without saying so, which only the node that probed that pid may decide.
-  // `RequestableKind` enforces this in the type system, and this catches the
-  // other route -- a literal reaching the column some other way.
+  // A `crashed` row of murmur's own is the local read's conclusion: a pane
+  // vanished mid-work, which only the store's memory of the last collect can
+  // say. Every other crash is the multiplexer's (`pane_dead_status`), mapped
+  // in one place. A literal reaching an attention row some other way would be
+  // a third, unaccountable writer.
   const offenders = sourceFiles()
     .filter((path) => path !== join("src", "store.ts"))
     .filter((path) => {
-      // Comment lines stripped first. The docblock on `RequestableKind` quotes
-      // the forbidden call to explain why it is forbidden, and a scanner that
-      // cannot tell code from prose reports the explanation as the violation.
+      // Comment lines stripped first: a scanner that cannot tell code from
+      // prose reports an explanation as the violation.
       const code = readFileSync(path, "utf8")
         .split("\n")
         .filter((line) => !/^\s*(?:\/\/|\*|\/\*)/.test(line))
@@ -63,36 +63,6 @@ test("no source file writes crashed attention outside the store", () => {
     });
 
   expect(offenders).toEqual([]);
-});
-
-test("the effort vocabulary is spelled once", () => {
-  // A closed protocol vocabulary written out more than once drifts, and this
-  // repo has already paid for that: `SNAPSHOT_VERSION` existed as four literals
-  // and the copy in `peer.ts` made `peer list` report every correctly upgraded
-  // peer as incompatible.
-  //
-  // `effort` had the same shape -- the type, the wire validator, the producer's
-  // filter and the SQLite CHECK each listed the seven levels independently.
-  // Drift there is worse than cosmetic: the producer would silently drop a valid
-  // pi report, or the validator would reject an otherwise good peer snapshot,
-  // and the three failures look nothing alike.
-  //
-  // Checked by counting the LITERALS rather than by comparing lists: a
-  // comparison would pass while four identical copies sat in four files, which
-  // is the state this guards against.
-  const offenders = sourceFiles()
-    .filter((path) => {
-      const source = readFileSync(path, "utf8");
-      // `xhigh` is the distinctive member: it appears in no other vocabulary in
-      // this codebase, so a file containing it is spelling the effort list.
-      return /["']xhigh["']/.test(source);
-    })
-    .sort();
-
-  // ONE spelling now. The schema's CHECK clause is generated from the same
-  // tuple, so SQL being unable to import costs a template interpolation rather
-  // than a second list to keep in step.
-  expect(offenders).toEqual([join("src", "types.ts")]);
 });
 
 test("only the ansi module decides what escape sequences survive", () => {

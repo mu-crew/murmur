@@ -12,9 +12,9 @@ import { jumpTarget, parseJumpTarget } from "../src/jump-target.js";
 import { status, statusJson, statusWithCollect, tmuxStatus } from "../src/status.js";
 import { openStore, type Store } from "../src/store.js";
 import type {
-  AgentMeta,
   AttentionKind,
   Driver,
+  LocalPane,
   Location,
   Snapshot,
   SnapshotPane,
@@ -22,9 +22,12 @@ import type {
 import { STALENESS_MS } from "../src/view.js";
 import { builtArtifact } from "./helpers/built.js";
 import { fakeMux } from "./helpers/fake-mux.js";
+import { localPane, recordedPanes, vtmuxMux, vtmuxRow } from "./helpers/panes.js";
 
 const stores: Store[] = [];
 let store: Store;
+/** This node's live panes, as one local read would answer them. */
+let local: LocalPane[] = [];
 
 const IDENTITY: NodeIdentity = { host_id: "LOCAL", display_name: "here" };
 // Real `ssh -G`, blind to the operator's ssh_config; the suite's ssh refuses
@@ -35,6 +38,7 @@ beforeEach(() => {
   process.env.MURMUR_STATE_DIR = mkdtempSync(join(tmpdir(), "murmur-status-"));
   store = openStore();
   stores.push(store);
+  local = [];
   // Never a real ssh from a unit test: a hung exec is the honest default,
   // because every caller of statusWithCollect must survive one.
   vi.spyOn(ssh, "exec").mockImplementation(async () => await new Promise<string>(() => {}));
@@ -56,18 +60,6 @@ function location(pane: string): Location {
   };
 }
 
-function meta(over: Partial<AgentMeta> = {}): AgentMeta {
-  return {
-    agent_name: null,
-    pi_session: null,
-    workstream: "murmur",
-    role: null,
-    cli: "pi",
-    driver: "human",
-    ...over,
-  };
-}
-
 /** A local pane with an agent, optionally running, optionally wanting attention. */
 function localAgent(
   pane: string,
@@ -75,37 +67,35 @@ function localAgent(
     activity?: "running" | "stopped";
     driver?: Driver;
     attention?: AttentionKind[];
+    message?: string;
+    at?: number;
   } = {},
 ): void {
-  const claim = store.claimAgent({
-    location: location(pane),
-    owner_pid: process.pid,
-    meta: meta({ driver: options.driver ?? "human" }),
-  });
-  if (options.activity === "running") {
-    store.setActivity({
-      agent_id: "agent_id" in claim ? claim.agent_id : "",
-      owner_pid: process.pid,
-      activity: "running",
-      location: location(pane),
-    });
-  }
-  for (const kind of options.attention ?? []) {
-    if (kind === "crashed") store.recordCrash(location(pane));
-    else
-      store.requestAttention({
+  const driver = options.driver ?? "human";
+  local.push(
+    localPane({
+      ...location(pane),
+      agent: {
+        activity: options.activity ?? "stopped",
+        workstream: "murmur",
+        driver,
+        agent_name: driver === "orchestrated" ? `crew${pane}` : null,
+        updated_at: options.at ?? 1_000,
+      },
+      attention: (options.attention ?? []).map((kind) => ({
         kind,
-        location: location(pane),
-        message: "",
+        message: options.message ?? "",
         source: "pi",
-        driver: "human",
-      });
-  }
+        driver,
+        requested_at: options.at ?? 1_000,
+      })),
+    }),
+  );
 }
 
 function remoteSnapshot(panes: SnapshotPane[], generatedAt = 1_000): Snapshot {
   return {
-    murmur_snapshot: 7,
+    murmur_snapshot: 8,
     host_id: "REMOTE",
     display_name: "container-id-nobody-can-type",
     murmur_version: "0.2.0",
@@ -132,25 +122,22 @@ function remotePane(pane: string, over: Partial<SnapshotPane> = {}): SnapshotPan
     session_name: "far",
     window_name: pane,
     agent: {
-      agent_id: `agent-${pane}`,
       activity: "running",
       agent_name: null,
-      pi_session: null,
       workstream: null,
       role: null,
       cli: "pi",
       harness: null,
       driver: "human",
-      model: null,
-      provider: null,
-      context_tokens: null,
-      context_window: null,
-      provider_effort: null,
-      usage: null,
       pending: null,
-      effort: null,
-      context_pct: null,
-      claimed_at: 1,
+      pane_title: null,
+      title: null,
+      message: null,
+      progress: null,
+      blocked_kind: null,
+      resume_command: null,
+      resume_cwd: null,
+      cwd: null,
       updated_at: 1,
     },
     attention: [],
@@ -158,9 +145,10 @@ function remotePane(pane: string, over: Partial<SnapshotPane> = {}): SnapshotPan
   };
 }
 
-test("built status --cached reads named peer and local crew rows without helpers", () => {
+test("built status --cached reads named peer and local rows without helpers", () => {
   createIdentity("here");
-  localAgent("%1", { driver: "orchestrated" });
+  // A local row the store holds, since the stubbed tmux below answers nothing.
+  store.recordCrash(location("%1"));
   store.addPeer("dev", "dev.example", "ssh dev.example {attach}");
   const remote = remotePane("%2");
   if (!remote.agent) throw new Error("expected a remote agent fixture");
@@ -203,7 +191,7 @@ test("counts group by render state, and attention beats activity", () => {
   localAgent("%5");
   localAgent("%6", { attention: ["error", "done"] });
 
-  const result = status(store, IDENTITY);
+  const result = status(store, IDENTITY, local);
 
   expect(result.counts).toEqual({
     crashed: 1,
@@ -224,7 +212,7 @@ test("counts group by render state, and attention beats activity", () => {
 test("status --json rows carry the harness: a local pi row says pi, a row without an agent null", () => {
   localAgent("%1");
   localAgent("%2", { attention: ["done"] });
-  const rows = JSON.parse(JSON.stringify(status(store, IDENTITY))).panes;
+  const rows = JSON.parse(JSON.stringify(status(store, IDENTITY, local))).panes;
   const harness = (pane: string) =>
     rows.find((row: { pane: string }) => row.pane === pane)?.harness;
   expect(harness("%1")).toBe("pi");
@@ -240,32 +228,29 @@ test("a remote worker points back to its matching local attachment", () => {
     snapshot: remoteSnapshot([
       remotePane("%50", {
         agent: {
-          agent_id: "remote-worker",
           activity: "running",
           agent_name: "worker-1",
-          pi_session: null,
           workstream: "murmur",
           role: null,
           cli: "pi",
           harness: null,
           driver: "orchestrated",
-          model: null,
-          provider: null,
-          context_tokens: null,
-          context_window: null,
-          provider_effort: null,
-          usage: null,
           pending: null,
-          effort: null,
-          context_pct: null,
-          claimed_at: 1,
+          pane_title: null,
+          title: null,
+          message: null,
+          progress: null,
+          blocked_kind: null,
+          resume_command: null,
+          resume_cwd: null,
+          cwd: null,
           updated_at: 1,
         },
       }),
     ]),
   });
 
-  const result = status(store, IDENTITY, 1_000, () => false, undefined, {
+  const result = status(store, IDENTITY, local, 1_000, () => false, undefined, {
     mux: fakeMux({
       localPaneProcesses: () => [
         {
@@ -283,6 +268,15 @@ test("a remote worker points back to its matching local attachment", () => {
     agent_name: "worker-1",
     workstream: "murmur",
     attached_pane: asPaneId("%7"),
+    pane_title: null,
+    title: null,
+    message: null,
+    progress: null,
+    blocked_kind: null,
+    resume_command: null,
+    resume_cwd: null,
+    cwd: null,
+    focused: false,
   });
 });
 
@@ -294,32 +288,29 @@ test("a remote worker has no back-reference when no local pane matches", () => {
     snapshot: remoteSnapshot([
       remotePane("%50", {
         agent: {
-          agent_id: "remote-worker",
           activity: "running",
           agent_name: "worker-1",
-          pi_session: null,
           workstream: "murmur",
           role: null,
           cli: "pi",
           harness: null,
           driver: "orchestrated",
-          model: null,
-          provider: null,
-          context_tokens: null,
-          context_window: null,
-          provider_effort: null,
-          usage: null,
           pending: null,
-          effort: null,
-          context_pct: null,
-          claimed_at: 1,
+          pane_title: null,
+          title: null,
+          message: null,
+          progress: null,
+          blocked_kind: null,
+          resume_command: null,
+          resume_cwd: null,
+          cwd: null,
           updated_at: 1,
         },
       }),
     ]),
   });
 
-  const result = status(store, IDENTITY, 1_000, () => false, undefined, {
+  const result = status(store, IDENTITY, local, 1_000, () => false, undefined, {
     mux: fakeMux({
       localPaneProcesses: () => [
         {
@@ -342,25 +333,22 @@ function remoteWorkerStore(name: string, jumpCommand = "ssh -t dev tmux attach -
     snapshot: remoteSnapshot([
       remotePane("%50", {
         agent: {
-          agent_id: "remote-worker",
           activity: "running",
           agent_name: name,
-          pi_session: null,
           workstream: "murmur",
           role: null,
           cli: "pi",
           harness: null,
           driver: "orchestrated",
-          model: null,
-          provider: null,
-          context_tokens: null,
-          context_window: null,
-          provider_effort: null,
-          usage: null,
           pending: null,
-          effort: null,
-          context_pct: null,
-          claimed_at: 1,
+          pane_title: null,
+          title: null,
+          message: null,
+          progress: null,
+          blocked_kind: null,
+          resume_command: null,
+          resume_cwd: null,
+          cwd: null,
           updated_at: 1,
         },
       }),
@@ -370,7 +358,7 @@ function remoteWorkerStore(name: string, jumpCommand = "ssh -t dev tmux attach -
 
 function attachedPaneFor(name: string, argv: string, jumpCommand?: string) {
   remoteWorkerStore(name, jumpCommand);
-  const result = status(store, IDENTITY, 1_000, () => false, undefined, {
+  const result = status(store, IDENTITY, local, 1_000, () => false, undefined, {
     mux: fakeMux({
       localPaneProcesses: () => [{ pane: asPaneId("%7"), current_command: "ssh", arguments: argv }],
     }),
@@ -440,7 +428,7 @@ test("a remote pane keeps its own node's fields and takes its node's freshness",
     snapshot: remoteSnapshot([remotePane("%50")]),
   });
 
-  const result = status(store, IDENTITY, 121_001);
+  const result = status(store, IDENTITY, local, 121_001);
 
   const remote = result.panes.find((pane) => pane.pane === "%50");
   expect(remote).toMatchObject({
@@ -457,50 +445,13 @@ test("a remote pane keeps its own node's fields and takes its node's freshness",
   expect(result.counts.running).toBe(1);
 });
 
-// A mu remote worker over a `session` transport: its only pane is the local
-// ssh client, so the row is local, and mu's `@mu_host` option is the one
-// record of where the agent runs.
-test("a local crew pane mu marked with @mu_host runs on that host", () => {
-  localAgent("%1", { driver: "orchestrated" });
-  localAgent("%2", { driver: "orchestrated" });
-  localAgent("%3");
-  const asked: string[] = [];
-  const result = status(store, IDENTITY, 1_000, () => false, undefined, {
-    mux: fakeMux({
-      paneOptionValues: (option) => {
-        asked.push(option);
-        return new Map([
-          [asPaneId("%1"), "linuxpc"],
-          // A human row is never a mu worker, whatever its pane says.
-          [asPaneId("%3"), "linuxpc"],
-        ]);
-      },
-    }),
-  });
-
-  const runsOn = Object.fromEntries(result.panes.map((pane) => [pane.pane, pane.runs_on]));
-  expect(runsOn).toEqual({ "%1": "linuxpc", "%2": null, "%3": null });
-  expect(result.panes.find((pane) => pane.pane === "%1")).toMatchObject({ local: true });
-  // One read per tmux server, not per pane.
-  expect(asked).toEqual(["@mu_host"]);
-});
-
-test("no crew pane here, no tmux read for @mu_host", () => {
-  localAgent("%1");
-  const read = vi.fn(() => new Map());
-  status(store, IDENTITY, 1_000, () => false, undefined, {
-    mux: fakeMux({ paneOptionValues: read }),
-  });
-  expect(read).not.toHaveBeenCalled();
-});
-
 test("local panes are always fresh, and no read path probes a pid", () => {
   // A local pane is authored by this node, so there is nothing to be stale
   // about. Freshness answers "how recently did we reach the node that told us",
   // and for our own panes the answer is always "now".
   localAgent("%1", { activity: "running" });
 
-  const result = status(store, IDENTITY, Date.now() + 86_400_000);
+  const result = status(store, IDENTITY, local, Date.now() + 86_400_000);
 
   expect(result.panes[0]).toMatchObject({ local: true, freshness: "fresh", host: "here" });
   // The whole returned graph, structurally: no pid crosses into a view, so
@@ -509,68 +460,19 @@ test("local panes are always fresh, and no read path probes a pid", () => {
   expect(JSON.stringify(result)).not.toContain(String(process.pid));
 });
 
-test("an attention-only pane is a listable row with no agent", () => {
-  // The codex case: a harness murmur never instrumented, whose only trace is a
-  // notification. It has no agent row, and it must still be visible and
-  // jumpable -- which is why `attention` carries its own location.
-  store.requestAttention({
-    kind: "blocked",
-    location: location("%7"),
-    message: "needs input",
-    source: "codex",
-    driver: "human",
-  });
-
-  const result = status(store, IDENTITY);
+test("a crash murmur recorded is a listable row, named as it was last seen", () => {
+  // A pane that vanished mid-work has no program left to report it: its row
+  // is murmur's own, and it must still be visible and jumpable.
+  store.recordCrash(location("%7"), 1_000);
+  const result = status(store, IDENTITY, recordedPanes(store));
 
   expect(result.panes).toHaveLength(1);
-  expect(result.panes[0]).toMatchObject({
-    pane: "%7",
-    activity: null,
-    agent_id: null,
-    // No agent row means no reported driver, and `human` is the answer that
-    // keeps the row visible in the picker.
-    driver: "human",
-  });
-  // Each request carries its OWN clock now, which is what lets the sort age a
-  // row by the kind it renders as rather than by the newest fact on the pane.
+  expect(result.panes[0]).toMatchObject({ pane: "%7", activity: "stopped", driver: "human" });
   expect(result.panes[0]?.attention).toEqual([
-    { kind: "blocked", requested_at: expect.any(Number), message: "needs input" },
+    { kind: "crashed", requested_at: 1_000, message: "pane vanished while working" },
   ]);
-  expect(result.counts.blocked).toBe(1);
-});
-
-test("an attention-only pane is aged by its NEWEST request", () => {
-  // A pane with no agent row has no `updated_at` of its own, so `newestAttention`
-  // supplies one -- and it is the only source of age for every codex-style row.
-  // Nothing asserted its VALUE: the attention-only test above matches on five
-  // keys and `updated_at` is not among them, so returning 0 passed the whole
-  // suite while the picker rendered a two-minute-old notification as 56 years
-  // old. Returning the OLDEST instead of the newest also passed.
-  //
-  // Two kinds at different times, so both mutations fail: a fixed 0 misses the
-  // value, and a min picks 1_000.
-  store.requestAttention({
-    kind: "blocked",
-    location: location("%7"),
-    message: "",
-    source: "codex",
-    driver: "human",
-    now: 1_000,
-  });
-  store.requestAttention({
-    kind: "done",
-    location: location("%7"),
-    message: "",
-    source: "codex",
-    driver: "human",
-    now: 5_000,
-  });
-
-  const result = status(store, IDENTITY);
-
-  expect(result.panes).toHaveLength(1);
-  expect(result.panes[0]?.updated_at).toBe(5_000);
+  expect(result.panes[0]?.updated_at).toBe(1_000);
+  expect(result.counts.crashed).toBe(1);
 });
 
 test("human and orchestrated panes are counted separately but both listed", () => {
@@ -578,7 +480,7 @@ test("human and orchestrated panes are counted separately but both listed", () =
   localAgent("%2", { activity: "running", driver: "orchestrated" });
   localAgent("%3", { activity: "running", driver: "orchestrated" });
 
-  const result = status(store, IDENTITY);
+  const result = status(store, IDENTITY, local);
 
   expect(result.counts.blocked).toBe(1);
   expect(result.counts.running).toBe(0);
@@ -593,20 +495,12 @@ test("tmux status emits urgent counts and never agent-supplied text", () => {
   localAgent("%3", { attention: ["done"] });
   localAgent("%4", { activity: "running" });
   localAgent("%5");
-  // An attention-only pane whose text is hostile. `blocked` rather than
-  // `crashed` because crashes are reconciliation's to write and carry no
-  // caller-supplied message -- the claim under test is that NO agent-supplied
-  // text reaches the status bar, and a blocked row carries the same fields.
-  store.requestAttention({
-    kind: "blocked",
-    location: location("%6"),
-    message: injection,
-    source: injection,
-    driver: "human",
-  });
+  // A program whose own words are hostile: the claim under test is that NO
+  // agent-supplied text reaches the status bar.
+  localAgent("%6", { attention: ["blocked"], message: injection });
   store.addPeer(injection, injection);
 
-  const output = tmuxStatus(status(store, IDENTITY));
+  const output = tmuxStatus(status(store, IDENTITY, local));
 
   expect(output).toBe("crashed\t1\nblocked\t2\ndone\t1\nworking\t1\nidle\t1\n");
   expect(output).not.toContain(injection);
@@ -623,25 +517,25 @@ test("a crew agent that needs a human is counted, one that does not is not", () 
   localAgent("%3", { driver: "orchestrated", attention: ["done"] });
   localAgent("%4", { driver: "orchestrated", activity: "running" });
 
-  expect(tmuxStatus(status(store, IDENTITY))).toBe("crashed\t1\nblocked\t1\ncrew\t4\n");
+  expect(tmuxStatus(status(store, IDENTITY, local))).toBe("crashed\t1\nblocked\t1\ncrew\t4\n");
 });
 
 test("tmux status reports the total for a crew-only fleet", () => {
   localAgent("%1", { driver: "orchestrated", activity: "running" });
 
-  expect(tmuxStatus(status(store, IDENTITY))).toBe("crew\t1\n");
+  expect(tmuxStatus(status(store, IDENTITY, local))).toBe("crew\t1\n");
 });
 
 test("tmux status omits the crew record when no crew agents exist", () => {
   localAgent("%1", { activity: "running" });
 
-  expect(tmuxStatus(status(store, IDENTITY))).toBe("working\t1\n");
+  expect(tmuxStatus(status(store, IDENTITY, local))).toBe("working\t1\n");
 });
 
 test("status works with no peers configured", () => {
   localAgent("%1", { activity: "running" });
 
-  const result = status(store, IDENTITY);
+  const result = status(store, IDENTITY, local);
 
   expect(result.peers).toEqual([]);
   expect(result.counts.running).toBe(1);
@@ -654,7 +548,7 @@ test("a peer that has never been reached is stale, not fresh", () => {
   // an unreachable host added with `peer add` rendered as up to date.
   store.addPeer("ghost", "192.0.2.1");
 
-  const view = status(store, IDENTITY);
+  const view = status(store, IDENTITY, local);
 
   expect(view.peers[0]).toMatchObject({ fetched_at: null, stale: true });
 });
@@ -668,11 +562,11 @@ test("a peer's staleness is the view's freshness verdict, not a second threshold
   store.addPeer("dev", "dev");
   store.replacePeerSnapshot("dev", { ok: true, at, snapshot: remoteSnapshot([remotePane("%50")]) });
 
-  const edge = status(store, IDENTITY, at + STALENESS_MS);
+  const edge = status(store, IDENTITY, local, at + STALENESS_MS);
   expect(edge.peers[0]?.stale).toBe(false);
   expect(edge.panes.find((pane) => pane.pane === "%50")?.freshness).toBe("fresh");
 
-  const over = status(store, IDENTITY, at + STALENESS_MS + 1);
+  const over = status(store, IDENTITY, local, at + STALENESS_MS + 1);
   expect(over.peers[0]?.stale).toBe(true);
   expect(over.panes.find((pane) => pane.pane === "%50")?.freshness).toBe("stale");
 });
@@ -689,7 +583,7 @@ test("snapshot_at and fetched_at are not interchangeable", () => {
     snapshot: remoteSnapshot([remoteAgentPane("%50", old)], old),
   });
 
-  const view = status(store, IDENTITY, now);
+  const view = status(store, IDENTITY, local, now);
   const pane = view.panes.find((candidate) => candidate.host_id === "REMOTE");
 
   // The NODE is fresh: we reached it just now.
@@ -724,11 +618,10 @@ test("statusWithCollect awaits the collect before reading", async () => {
 
   let settled = false;
   // The mux is named, not defaulted: `statusWithCollect` collects, and a collect
-  // reconciles local rows against `mux.livePanes()`, which defaults to the real
-  // tmux -- so this test otherwise asked the developer's live server whether the
-  // fixture panes were alive.
+  // reads every local tmux server.
   const pending = statusWithCollect(store, IDENTITY, Date.now(), channel, {
-    mux: fakeMux({ livePanes: () => new Set([asPaneId("%1")]) }),
+    mux: vtmuxMux([vtmuxRow({ pane: "%1", state: "working" })]),
+    rex: false,
   }).then((view) => {
     settled = true;
     return view;
@@ -741,78 +634,22 @@ test("statusWithCollect awaits the collect before reading", async () => {
   const view = await pending;
 
   // And the returned view reflects the sync that just ran, not the one before.
-  expect(view.panes.map((pane) => pane.pane)).toContain("%far");
+  expect(view.panes.map((pane) => pane.pane)).toEqual(expect.arrayContaining(["%far", "%1"]));
   expect(view.peers[0]?.fetched_at).not.toBeNull();
   expect(() => store.close()).not.toThrow();
 });
 
-test("a pane's age comes from its newest fact, agent row or attention request", () => {
-  // `updated_at` used to be the agent row's clock with attention as a mere
-  // FALLBACK, so a pane holding an agent discarded every attention timestamp --
-  // including a newer one.
-  //
-  // The writer this hurt is the one that structurally cannot touch an agent row:
-  // `murmur notify` writes attention alone, so a codex agent blocked seconds ago
-  // on a pane whose pi last reported hours earlier carried a two-hour age into
-  // the sort and into the row the picker painted.
-  //
-  // Two blocked panes, so state cannot decide the order and age has to.
-  const stale = store.claimAgent({
-    location: location("%stale"),
-    owner_pid: process.pid,
-    meta: meta({}),
-  });
-  store.setActivity({
-    agent_id: "agent_id" in stale ? stale.agent_id : "",
-    owner_pid: process.pid,
-    activity: "running",
-    location: location("%stale"),
-    now: 1_000,
-  });
-  // Blocked long ago, on a pane whose agent has spoken recently.
-  store.requestAttention({
-    kind: "blocked",
-    location: location("%stale"),
-    message: "",
-    source: "codex",
-    driver: "human",
-    now: 2_000,
-  });
+test("blocked panes lead oldest-first: the longer wait is the one starving", () => {
+  // Two blocked panes, so state cannot decide the order and age has to. A
+  // pane's age is when it entered its state (`pane_program_state_time`).
+  localAgent("%fresh", { attention: ["blocked"], at: 9_000 });
+  localAgent("%stale", { attention: ["blocked"], at: 2_000 });
 
-  const fresh = store.claimAgent({
-    location: location("%fresh"),
-    owner_pid: process.pid,
-    meta: meta({}),
-  });
-  store.setActivity({
-    agent_id: "agent_id" in fresh ? fresh.agent_id : "",
-    owner_pid: process.pid,
-    activity: "running",
-    location: location("%fresh"),
-    now: 1_000,
-  });
-  // Blocked JUST NOW, on a pane whose agent last reported at the same old time.
-  store.requestAttention({
-    kind: "blocked",
-    location: location("%fresh"),
-    message: "",
-    source: "codex",
-    driver: "human",
-    now: 9_000,
-  });
+  const result = status(store, IDENTITY, local);
 
-  const result = status(store, IDENTITY);
-
-  // The newest REQUEST supplies the age, whatever the agent rows say.
   const byPane = new Map(result.panes.map((pane) => [pane.pane as string, pane]));
   expect(byPane.get("%fresh")?.updated_at).toBe(9_000);
   expect(byPane.get("%stale")?.updated_at).toBe(2_000);
-
-  // And the LONGER wait leads, because `blocked` is a request that starves: the
-  // pane asking since 2_000 has been waiting seven seconds longer than the one
-  // asking since 9_000. This assertion read the other way round while one age
-  // rule served every state, which is the bug `OLDEST_FIRST` fixes -- see
-  // view.test.ts for the whole table.
   expect(result.panes.map((pane) => pane.pane)).toEqual(["%stale", "%fresh"]);
 });
 
@@ -831,7 +668,7 @@ test("a peer that cannot authenticate unattended is marked needs_session", () =>
   // `ssh <host>` is the only thing that fixes it.
   gatedPeer("dev", "Permission denied (keyboard-interactive).");
 
-  const result = status(store, IDENTITY, 3_000, () => false);
+  const result = status(store, IDENTITY, local, 3_000, () => false);
 
   expect(result.peers[0]).toMatchObject({ name: "dev", needs_session: true });
 });
@@ -842,7 +679,7 @@ test("a warm socket clears needs_session without a collect", () => {
   // clears on the next READ. No successful fetch required, no flag to reset.
   gatedPeer("dev", "Permission denied (keyboard-interactive).");
 
-  const result = status(store, IDENTITY, 3_000, () => true);
+  const result = status(store, IDENTITY, local, 3_000, () => true);
 
   expect(result.peers[0]?.needs_session).toBe(false);
 });
@@ -864,7 +701,7 @@ test("a switched-off box is not asked to re-auth", () => {
     error: "ssh: connect to host linuxpc port 22: Operation timed out",
   });
 
-  const result = status(store, IDENTITY, 3_000, () => false);
+  const result = status(store, IDENTITY, local, 3_000, () => false);
 
   expect(result.peers[0]?.needs_session).toBe(false);
 });
@@ -884,7 +721,7 @@ test("a peer refused on auth is asked to re-auth even if it never once worked", 
     error: "Permission denied (keyboard-interactive).",
   });
 
-  const result = status(store, IDENTITY, 3_000, () => false);
+  const result = status(store, IDENTITY, local, 3_000, () => false);
 
   expect(result.peers[0]).toMatchObject({ name: "dev", needs_session: true });
 });
@@ -895,7 +732,7 @@ test("an unreachable peer is not asked to re-auth", () => {
   // prompt -- the advice would be unactionable.
   gatedPeer("dev", "Connection closed by UNKNOWN port 65535");
 
-  const result = status(store, IDENTITY, 3_000, () => false);
+  const result = status(store, IDENTITY, local, 3_000, () => false);
 
   expect(result.peers[0]?.needs_session).toBe(false);
 });
@@ -910,7 +747,7 @@ test("the warm-socket probe runs only for auth-class candidates", () => {
   store.replacePeerSnapshot("bubba", { ok: true, at: 1_000, snapshot: remoteSnapshot([]) });
 
   const probed: string[] = [];
-  status(store, IDENTITY, 3_000, (target) => {
+  status(store, IDENTITY, local, 3_000, (target) => {
     probed.push(target);
     return false;
   });
@@ -924,7 +761,7 @@ test("status --json contract: stable fields are present with their types", () =>
   localAgent("%3", { attention: ["blocked"], driver: "orchestrated" });
   const json = JSON.parse(
     JSON.stringify(
-      statusJson(status(store, IDENTITY, Date.now(), () => false, {}, { mux: fakeMux() })),
+      statusJson(status(store, IDENTITY, local, Date.now(), () => false, {}, { mux: fakeMux() })),
     ),
   );
   expect(Array.isArray(json.peers)).toBe(true);
@@ -979,7 +816,7 @@ test("a local attachment is credited only to the pane on the server it names", (
     const base = remotePane("%1", over);
     return {
       ...base,
-      agent: base.agent && { ...base.agent, agent_name, agent_id: `id-${agent_name}` },
+      agent: base.agent && { ...base.agent, agent_name },
     };
   };
   store.replacePeerSnapshot("dev", {
@@ -991,7 +828,7 @@ test("a local attachment is credited only to the pane on the server it names", (
     ]),
   });
   const attached = (argv: string) => {
-    const result = status(store, IDENTITY, 1_000, () => false, undefined, {
+    const result = status(store, IDENTITY, local, 1_000, () => false, undefined, {
       mux: fakeMux({
         localPaneProcesses: () => [
           { pane: asPaneId("%55"), current_command: "ssh", arguments: argv },
@@ -1036,9 +873,7 @@ test("an attachment is credited to the peer its argv connects to, not the first 
       ok: true,
       at: 1_000,
       snapshot: {
-        ...remoteSnapshot([
-          { ...base, agent: base.agent && { ...base.agent, agent_name: name, agent_id: name } },
-        ]),
+        ...remoteSnapshot([{ ...base, agent: base.agent && { ...base.agent, agent_name: name } }]),
         host_id: `host-${name}`,
       },
     });
@@ -1046,7 +881,7 @@ test("an attachment is credited to the peer its argv connects to, not the first 
   peerWith("first", "first.example");
   peerWith("second", "second.example");
   const attached = (argv: string, command = "ssh") => {
-    const result = status(store, IDENTITY, 1_000, () => false, undefined, {
+    const result = status(store, IDENTITY, local, 1_000, () => false, undefined, {
       mux: fakeMux({
         localPaneProcesses: () => [
           { pane: asPaneId("%55"), current_command: command, arguments: argv },
@@ -1097,10 +932,10 @@ test("an opaque transport earns no attachment, since its argv cannot name the ho
     ok: true,
     at: 1_000,
     snapshot: remoteSnapshot([
-      { ...base, agent: base.agent && { ...base.agent, agent_name: "w", agent_id: "w" } },
+      { ...base, agent: base.agent && { ...base.agent, agent_name: "w" } },
     ]),
   });
-  const result = status(store, IDENTITY, 1_000, () => false, undefined, {
+  const result = status(store, IDENTITY, local, 1_000, () => false, undefined, {
     mux: fakeMux({
       localPaneProcesses: () => [
         {
@@ -1112,4 +947,55 @@ test("an opaque transport earns no attachment, since its argv cannot name the ho
     }),
   });
   expect(result.panes.find((pane) => pane.pane === "%9")?.attached_pane).toBeNull();
+});
+
+test("status --json carries each pane's resume record, local and remote", () => {
+  // OSC 7577, for a resolver such as mural: how to relaunch the program, and
+  // where. Null, never absent, for a program that published none.
+  local.push(
+    localPane({
+      ...location("%1"),
+      agent: {
+        resume_command: "pi --session /home/u/.pi/sessions/a.jsonl",
+        resume_cwd: "/work",
+        cwd: "/work/sub",
+      },
+    }),
+  );
+  localAgent("%2");
+  store.addPeer("dev", "dev.example");
+  const remote = remotePane("%9");
+  if (!remote.agent) throw new Error("expected a remote agent fixture");
+  remote.agent.resume_command = "claude --resume 0b5c";
+  remote.agent.resume_cwd = "/srv";
+  store.replacePeerSnapshot("dev", { ok: true, at: 1_000, snapshot: remoteSnapshot([remote]) });
+
+  const json = JSON.parse(
+    JSON.stringify(
+      statusJson(status(store, IDENTITY, local, 1_000, () => false, {}, { mux: fakeMux() })),
+    ),
+  );
+  const byPane = Object.fromEntries(json.panes.map((pane: { pane: string }) => [pane.pane, pane]));
+  expect(byPane["%1"]).toMatchObject({
+    resume_command: "pi --session /home/u/.pi/sessions/a.jsonl",
+    resume_cwd: "/work",
+    cwd: "/work/sub",
+  });
+  expect(byPane["%2"]).toMatchObject({ resume_command: null, resume_cwd: null });
+  expect(byPane["%9"]).toMatchObject({
+    local: false,
+    resume_command: "claude --resume 0b5c",
+    resume_cwd: "/srv",
+  });
+});
+
+test("status --json names the waiting state for an agent with delegates out", () => {
+  // `mu/delegates` under `working` reads as `waiting`: the agent ended its turn
+  // and its delegates' answers will re-run it.
+  local.push(localPane({ ...location("%1"), agent: { activity: "stopped", pending: 3 } }));
+  const json = statusJson(
+    status(store, IDENTITY, local, 1_000, () => false, {}, { mux: fakeMux() }),
+  );
+  expect(json.panes[0]).toMatchObject({ render_state: "waiting", pending: 3 });
+  expect(json.counts.waiting).toBe(1);
 });

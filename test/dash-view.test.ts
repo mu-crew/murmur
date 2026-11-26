@@ -36,27 +36,26 @@ function view(over: Partial<PaneView> = {}): PaneView {
     activity: "running",
     attention: [],
     freshness: "fresh",
-    agent_id: "a-1",
     agent_name: null,
-    pi_session: null,
     workstream: null,
     role: null,
     cli: "pi",
     harness: null,
     driver: "human",
-    model: null,
-    provider: null,
-    effort: null,
-    provider_effort: null,
-    context_pct: null,
-    context_tokens: null,
-    context_window: null,
-    usage: null,
     pending: null,
     updated_at: 1_000,
     snapshot_at: null,
     fetched_at: null,
     attached_pane: null,
+    pane_title: null,
+    title: null,
+    message: null,
+    progress: null,
+    blocked_kind: null,
+    resume_command: null,
+    resume_cwd: null,
+    cwd: null,
+    focused: false,
     runs_on: null,
     ...over,
   };
@@ -107,14 +106,6 @@ test("crew rows are hidden unless prefs.crew, and agree with isVisible", () => {
 test("a crew row that needs a human stays visible with crew off", () => {
   const blocked = view({
     driver: "orchestrated",
-    model: null,
-    provider: null,
-    effort: null,
-    provider_effort: null,
-    context_pct: null,
-    context_tokens: null,
-    context_window: null,
-    usage: null,
     pending: null,
     attention: [{ kind: "blocked", requested_at: 500, message: "which approach?" }],
   });
@@ -228,15 +219,15 @@ test("the searchable text is name, workstream, session, host and rendered state"
 });
 
 test("a row with no agent_name is still searchable by the name the card paints", () => {
-  // `agentLabel` falls back to pi_session, then window_name, then the session
+  // `agentLabel` falls back to the pane title, then window_name, then the session
   // leaf. Searching the raw `agent_name` alone would make an adopted pane --
   // the common case for a human's own shell -- unfindable by the only name it
   // ever shows.
-  const adopted = view({ agent_name: null, pi_session: null, window_name: "scratchpad" });
+  const adopted = view({ agent_name: null, pane_title: null, window_name: "scratchpad" });
   expect(dashSearchText(adopted)).toContain("scratchpad");
   expect(dashMatches(adopted, "scratch")).toBe(true);
 
-  const bySession = view({ agent_name: null, pi_session: "review/tick", window_name: null });
+  const bySession = view({ agent_name: null, pane_title: "review/tick", window_name: null });
   expect(dashMatches(bySession, "review/tick")).toBe(true);
 });
 

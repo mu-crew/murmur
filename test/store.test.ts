@@ -5,19 +5,25 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import Database from "better-sqlite3";
 import { afterEach, beforeEach, expect, test } from "vitest";
-import { asPaneId, asSessionId, asWindowId, type PaneId } from "../src/ids.js";
+import { asPaneId, asSessionId, asWindowId } from "../src/ids.js";
 import { dbPath } from "../src/paths.js";
 import { status } from "../src/status.js";
 import { openStore, type Store, StoreTooNewError } from "../src/store.js";
-import { type AgentMeta, type Location, SNAPSHOT_VERSION } from "../src/types.js";
+import {
+  type Location,
+  type PaneState,
+  type SeenPane,
+  SNAPSHOT_VERSION,
+  type TmuxServer,
+} from "../src/types.js";
 import { builtArtifact } from "./helpers/built.js";
+import { recordedPanes } from "./helpers/panes.js";
 
 /**
- * Every test here is a claim about what is IMPOSSIBLE, and each one names the
- * shipped incident it closes. The store is where category confusion used to be
- * expressible -- a notifier writing an agent's activity, a nested pi claiming a
- * live pane, a focus hook nulling owner metadata -- so these are the assertions
- * the schema exists to satisfy.
+ * The store holds what the multiplexer cannot remember for murmur, and nothing
+ * else: since when each live pane has held its state, which panes vanished
+ * mid-work (`crashed`), which alerts have fired, and the peer cache. Every
+ * test here is a claim about one of those, or about opening the file safely.
  */
 
 const stores: Store[] = [];
@@ -42,9 +48,11 @@ function store(): Store {
   return opened;
 }
 
+const DEFAULT: TmuxServer = { kind: "default" };
+
 function location(pane = "%1", over: Partial<Location> = {}): Location {
   return {
-    server: { kind: "default" },
+    server: DEFAULT,
     session: asSessionId("$0"),
     window: asWindowId("@0"),
     pane: asPaneId(pane),
@@ -54,695 +62,195 @@ function location(pane = "%1", over: Partial<Location> = {}): Location {
   };
 }
 
-/**
- * Claim a pane and return the agent id, failing loudly if the claim was refused.
- *
- * `ClaimResult` is a union whose `refused` arm carries no id, so a test that
- * reached for `.agent_id` on it would not typecheck -- and one that defaulted
- * the id would silently assert against a row nothing wrote.
- */
-function claimedId(s: Store, pane = "%1"): string {
-  const claim = s.claimAgent({ location: location(pane), owner_pid: process.pid, meta: meta() });
-  if (claim.outcome === "refused") throw new Error(`claim refused by pid ${claim.held_by_pid}`);
-  return claim.agent_id;
-}
-
-function meta(over: Partial<AgentMeta> = {}): AgentMeta {
+/** One pane as a collect saw it. */
+function seen(pane: string, state: PaneState, over: Partial<SeenPane> = {}): SeenPane {
   return {
+    ...location(pane),
+    state,
+    state_time: null,
     agent_name: "worker-1",
-    pi_session: null,
     workstream: "murmur",
-    role: null,
-    cli: "pi",
+    role: "implementer",
     driver: "orchestrated",
+    harness: "pi",
+    cli: "pi",
+    pane_title: null,
     ...over,
   };
 }
 
-/** Every column of the agents table, straight from SQLite. */
-function agentRows(): Record<string, unknown>[] {
-  const database = new Database(dbPath(), { readonly: true });
-  try {
-    return database.prepare("SELECT * FROM agents ORDER BY pane").all() as Record<
-      string,
-      unknown
-    >[];
-  } finally {
-    database.close();
-  }
-}
+// --- local memory ----------------------------------------------------------
 
-/**
- * Every key and every leaf value in an object graph, for the assertions whose
- * point is that something is ABSENT from the whole shape.
- *
- * Two walks rather than a substring search over `JSON.stringify`: a pid is a
- * short number, and `not.toContain("100")` matched the digits inside a
- * millisecond timestamp, so the guard failed for reasons that had nothing to do
- * with what it guards.
- */
-function keysOf(value: unknown, found: string[] = []): string[] {
-  if (Array.isArray(value)) {
-    for (const entry of value) keysOf(entry, found);
-  } else if (value !== null && typeof value === "object") {
-    for (const [key, entry] of Object.entries(value)) {
-      found.push(key);
-      keysOf(entry, found);
-    }
-  }
-  return found;
-}
-
-function leavesOf(value: unknown, found: unknown[] = []): unknown[] {
-  if (Array.isArray(value)) {
-    for (const entry of value) leavesOf(entry, found);
-  } else if (value !== null && typeof value === "object") {
-    for (const entry of Object.values(value)) leavesOf(entry, found);
-  } else {
-    found.push(value);
-  }
-  return found;
-}
-
-const alive = (pids: number[]) => (pid: number) => pids.includes(pid);
-const dead = () => false;
-
-// --- claim ----------------------------------------------------------------
-
-test("claiming a free pane inserts a stopped agent with a fresh uuid", () => {
+test("a state that holds keeps its age; a changed one is news at this collect", () => {
   const s = store();
+  const first = s.syncLocal([{ server: DEFAULT, panes: [seen("%1", "running")] }], 1_000);
+  expect(first.since.get(`default\0\0%1`)).toBe(1_000);
 
-  const result = s.claimAgent({ location: location(), owner_pid: 100, meta: meta(), now: 5 });
+  const held = s.syncLocal([{ server: DEFAULT, panes: [seen("%1", "running")] }], 2_000);
+  expect(held.since.get(`default\0\0%1`)).toBe(1_000);
 
-  expect(result.outcome).toBe("claimed");
-  const panes = s.localPanes();
-  expect(panes).toHaveLength(1);
-  expect(panes[0]?.agent).toMatchObject({
-    activity: "stopped",
-    claimed_at: 5,
-    updated_at: 5,
-    agent_name: "worker-1",
-    driver: "orchestrated",
-  });
-  // Not derived from the pane: a replacement owner must be a different row, so
-  // a late write from the previous owner cannot match it.
-  expect(panes[0]?.agent?.agent_id).not.toContain("%1");
+  const changed = s.syncLocal([{ server: DEFAULT, panes: [seen("%1", "done")] }], 3_000);
+  expect(changed.since.get(`default\0\0%1`)).toBe(3_000);
 });
 
-test("re-claiming as the same pid retains the agent_id and the activity", () => {
-  // pi re-runs the extension factory in the same process on /reload. A check
-  // that could not recognise its own claim would silence the real agent.
+test("the multiplexer's own state time wins over murmur's sighting", () => {
+  // `pane_program_state_time` is when the program changed state, which is
+  // what an alert's age and a sort should read -- not when murmur noticed.
   const s = store();
-  const first = s.claimAgent({ location: location(), owner_pid: 100, meta: meta(), now: 1 });
-  const agentId = "agent_id" in first ? first.agent_id : "";
-  s.setActivity({
-    agent_id: agentId,
-    owner_pid: 100,
-    activity: "running",
-    location: location(),
-    now: 2,
-  });
-
-  const again = s.claimAgent({
-    location: location(),
-    owner_pid: 100,
-    meta: meta({ role: "reviewer", pi_session: "Fix Auth" }),
-    now: 3,
-  });
-
-  expect(again).toEqual({ outcome: "retained", agent_id: agentId });
-  // The meta is rewritten, which is how a session named after the claim
-  // reaches the row (the extension re-claims on session_info_changed).
-  expect(s.localPanes()[0]?.agent).toMatchObject({
-    agent_id: agentId,
-    activity: "running",
-    role: "reviewer",
-    pi_session: "Fix Auth",
-    claimed_at: 1,
-    updated_at: 3,
-  });
+  const sync = s.syncLocal(
+    [{ server: DEFAULT, panes: [seen("%1", "blocked", { state_time: 500 })] }],
+    9_000,
+  );
+  expect(sync.since.get(`default\0\0%1`)).toBe(500);
 });
 
-test("a second live process claiming an owned pane is refused and writes nothing", () => {
+test.each<[PaneState, boolean]>([
+  ["running", true],
+  ["waiting", true],
+  ["blocked", true],
+  ["done", false],
+  ["idle", false],
+  ["error", false],
+  ["crashed", false],
+])("a pane that vanishes while %s crashed: %s", (state, crashed) => {
+  // Mid-work is a crash murmur must remember, since the multiplexer has
+  // nothing left to say about the pane; at rest it simply finished.
   const s = store();
-  s.claimAgent({ location: location(), owner_pid: 100, meta: meta(), now: 1 });
-  const before = agentRows();
-
-  const result = s.claimAgent({
-    location: location(),
-    owner_pid: 200,
-    meta: meta({ agent_name: "nested" }),
-    now: 2,
-    isAlive: alive([100]),
-  });
-
-  expect(result).toEqual({ outcome: "refused", held_by_pid: 100 });
-  expect(agentRows()).toEqual(before);
+  s.syncLocal([{ server: DEFAULT, panes: [seen("%1", state)] }], 1_000);
+  const sync = s.syncLocal([{ server: DEFAULT, panes: [] }], 2_000);
+  expect(sync.crashed).toEqual(crashed ? ["%1"] : []);
+  expect(s.localPanes()).toHaveLength(crashed ? 1 : 0);
 });
 
-test("an unprobeable owner refuses the new claimant: liveness fails closed", () => {
-  // pidAlive reports death only on ESRCH, so EPERM reads as alive. An unknown
-  // must never let a second writer displace a possibly-live owner.
+test("a crash carries the identity the pane was last seen with", () => {
   const s = store();
-  s.claimAgent({ location: location(), owner_pid: 100, meta: meta() });
+  s.syncLocal(
+    [{ server: DEFAULT, panes: [seen("%1", "waiting", { pane_title: "Fix auth" })] }],
+    1_000,
+  );
+  s.syncLocal([{ server: DEFAULT, panes: [] }], 2_000);
 
-  const result = s.claimAgent({
-    location: location(),
-    owner_pid: 200,
-    meta: meta(),
-    isAlive: () => true,
-  });
-
-  expect(result.outcome).toBe("refused");
-});
-
-test("a dead owner is replaced with a new agent_id, and its writes then fail", () => {
-  const s = store();
-  const first = s.claimAgent({ location: location(), owner_pid: 100, meta: meta(), now: 1 });
-  const oldId = "agent_id" in first ? first.agent_id : "";
-
-  const replaced = s.claimAgent({
-    location: location(),
-    owner_pid: 200,
-    meta: meta(),
-    now: 2,
-    isAlive: dead,
-  });
-
-  expect(replaced.outcome).toBe("replaced");
-  expect("previous_agent_id" in replaced && replaced.previous_agent_id).toBe(oldId);
-  const newId = "agent_id" in replaced ? replaced.agent_id : "";
-  expect(newId).not.toBe(oldId);
-  // The previous owner is now a stranger to the store.
-  expect(
-    s.setActivity({
-      agent_id: oldId,
-      owner_pid: 100,
-      activity: "running",
-      location: location(),
-    }),
-  ).toBe(false);
-  expect(s.releaseAgent({ agent_id: oldId, owner_pid: 100, location: location() })).toBe(false);
-});
-
-test("replacing a dead owner clears the previous occupant's attention", () => {
-  // That attention described a process that is gone; a human looking at the
-  // pane now sees a different agent.
-  const s = store();
-  s.claimAgent({ location: location(), owner_pid: 100, meta: meta() });
-  s.requestAttention({
-    kind: "done",
-    location: location(),
-    message: "",
-    source: "pi",
-    driver: "human",
-  });
-
-  s.claimAgent({ location: location(), owner_pid: 200, meta: meta(), isAlive: dead });
-
-  expect(s.localPanes()[0]?.attention).toEqual([]);
-});
-
-test("the same pane id on default and labelled servers has independent ownership", () => {
-  const s = store();
-  const defaultLocation = location("%34");
-  const labelledLocation = location("%34", { server: { kind: "label", value: "mule" } });
-
-  const first = s.claimAgent({ location: defaultLocation, owner_pid: 100, meta: meta(), now: 1 });
-  const second = s.claimAgent({
-    location: labelledLocation,
-    owner_pid: 200,
-    meta: meta({ agent_name: "mule-agent" }),
-    now: 2,
-  });
-
-  expect(first.outcome).toBe("claimed");
-  expect(second.outcome).toBe("claimed");
-  expect(s.localPanes()).toMatchObject([
-    { pane: "%34", server: { kind: "default" }, agent: { agent_name: "worker-1" } },
+  expect(s.localPanes()).toEqual([
     {
-      pane: "%34",
-      server: { kind: "label", value: "mule" },
-      agent: { agent_name: "mule-agent" },
+      ...location("%1"),
+      agent: {
+        activity: "stopped",
+        agent_name: "worker-1",
+        workstream: "murmur",
+        role: "implementer",
+        driver: "orchestrated",
+        cli: "pi",
+        harness: "pi",
+        pane_title: "Fix auth",
+        title: null,
+        message: null,
+        progress: null,
+        blocked_kind: null,
+        pending: null,
+        resume_command: null,
+        resume_cwd: null,
+        cwd: null,
+        updated_at: 2_000,
+      },
+      attention: [
+        {
+          kind: "crashed",
+          message: "pane vanished while waiting",
+          source: "murmur",
+          driver: "orchestrated",
+          requested_at: 2_000,
+        },
+      ],
     },
   ]);
 });
 
-test("claim, reclaim, refusal, release, and attention use the full server-pane key", () => {
+test("a crash is recorded once, and its age is when it was first seen", () => {
   const s = store();
-  const defaultLocation = location("%34");
-  const labelledLocation = location("%34", { server: { kind: "label", value: "mule" } });
-  const first = s.claimAgent({ location: defaultLocation, owner_pid: 100, meta: meta(), now: 1 });
-  const second = s.claimAgent({ location: labelledLocation, owner_pid: 200, meta: meta(), now: 2 });
-  if (!("agent_id" in first) || !("agent_id" in second)) throw new Error("claim refused");
+  s.syncLocal([{ server: DEFAULT, panes: [seen("%1", "running")] }], 1_000);
+  expect(s.syncLocal([{ server: DEFAULT, panes: [] }], 2_000).crashed).toEqual(["%1"]);
+  // Gone is gone: a second empty read concludes nothing new.
+  expect(s.syncLocal([{ server: DEFAULT, panes: [] }], 3_000).crashed).toEqual([]);
+  s.recordCrash(location("%1"), 4_000);
+  expect(s.localPanes().map((pane) => pane.attention[0]?.requested_at)).toEqual([2_000]);
+});
 
-  expect(
-    s.claimAgent({
-      location: labelledLocation,
-      owner_pid: 300,
-      meta: meta(),
-      isAlive: alive([200]),
-    }),
-  ).toEqual({ outcome: "refused", held_by_pid: 200 });
-  expect(s.claimAgent({ location: defaultLocation, owner_pid: 100, meta: meta(), now: 3 })).toEqual(
-    { outcome: "retained", agent_id: first.agent_id },
+test("a server that cannot be asked is no evidence, and changes nothing", () => {
+  // A null read is a timeout or a permission error, not "no panes": treating
+  // it as empty would paint every agent on the server `crashed`.
+  const s = store();
+  s.syncLocal([{ server: DEFAULT, panes: [seen("%1", "running")] }], 1_000);
+  expect(s.syncLocal([{ server: DEFAULT, panes: null }], 2_000).crashed).toEqual([]);
+  expect(s.localPanes()).toEqual([]);
+  // And the sighting survives it, with its age.
+  const back = s.syncLocal([{ server: DEFAULT, panes: [seen("%1", "running")] }], 3_000);
+  expect(back.since.get(`default\0\0%1`)).toBe(1_000);
+});
+
+test("each server is its own namespace, and a server seen once is asked again", () => {
+  // Pane ids are unique per server: `%1` on mule is not `%1` on default.
+  const s = store();
+  const mule: TmuxServer = { kind: "label", value: "mule" };
+  s.syncLocal(
+    [
+      { server: DEFAULT, panes: [seen("%1", "running")] },
+      { server: mule, panes: [seen("%1", "running", { server: mule })] },
+    ],
+    1_000,
   );
+  expect(s.knownServers()).toEqual([DEFAULT, mule]);
 
-  s.requestAttention({
-    kind: "done",
-    location: defaultLocation,
-    message: "default",
-    source: "pi",
-    driver: "human",
-  });
-  s.requestAttention({
-    kind: "done",
-    location: labelledLocation,
-    message: "mule",
-    source: "pi",
-    driver: "human",
-  });
-  expect(s.acknowledgePane(defaultLocation)).toBe(1);
-  expect(s.localPanes().find((pane) => pane.server.kind === "label")?.attention).toMatchObject([
-    { message: "mule" },
-  ]);
-  expect(
-    s.releaseAgent({ agent_id: first.agent_id, owner_pid: 100, location: defaultLocation }),
-  ).toBe(true);
-  expect(s.localPanes().find((pane) => pane.server.kind === "label")?.agent?.agent_id).toBe(
-    second.agent_id,
-  );
+  const sync = s.syncLocal([{ server: mule, panes: [] }], 2_000);
+  expect(sync.crashed).toEqual(["%1"]);
+  expect(s.localPanes().map((pane) => pane.server)).toEqual([mule]);
+  // Default was not asked this time, so its pane is still a sighting.
+  expect(s.knownServers()).toEqual([DEFAULT]);
 });
 
-// --- activity -------------------------------------------------------------
-
-test("setActivity requires the owner pid and cannot create a row", () => {
+test("a live pane at a crashed address is a new occupant, and clears the crash", () => {
   const s = store();
-  const claim = s.claimAgent({ location: location(), owner_pid: 100, meta: meta(), now: 1 });
-  const agentId = "agent_id" in claim ? claim.agent_id : "";
-
-  expect(
-    s.setActivity({
-      agent_id: agentId,
-      owner_pid: 999,
-      activity: "running",
-      location: location(),
-      now: 2,
-    }),
-  ).toBe(false);
-  expect(s.localPanes()[0]?.agent?.activity).toBe("stopped");
-
-  expect(
-    s.setActivity({
-      agent_id: "no-such-agent",
-      owner_pid: 100,
-      activity: "running",
-      location: location(),
-    }),
-  ).toBe(false);
-  expect(agentRows()).toHaveLength(1);
-
-  expect(
-    s.setActivity({
-      agent_id: agentId,
-      owner_pid: 100,
-      activity: "running",
-      location: location("%1", { window: asWindowId("@9") }),
-      now: 7,
-    }),
-  ).toBe(true);
-  expect(s.localPanes()[0]).toMatchObject({ window: "@9" });
-  expect(s.localPanes()[0]?.agent).toMatchObject({ activity: "running", updated_at: 7 });
+  s.recordCrash(location("%1"), 1_000);
+  s.syncLocal([{ server: DEFAULT, panes: [seen("%1", "idle")] }], 2_000);
+  expect(s.localPanes()).toEqual([]);
 });
 
-test("releaseAgent keeps attention, so a done raised at settle survives the exit", () => {
+test("acknowledging dismisses one pane's crash on one server, and nothing else", () => {
   const s = store();
-  const claim = s.claimAgent({ location: location(), owner_pid: 100, meta: meta() });
-  const agentId = "agent_id" in claim ? claim.agent_id : "";
-  s.requestAttention({
-    kind: "done",
-    location: location(),
-    message: "finished",
-    source: "pi",
-    driver: "human",
-  });
-
-  expect(s.releaseAgent({ agent_id: agentId, owner_pid: 100, location: location() })).toBe(true);
-
-  const panes = s.localPanes();
-  expect(panes[0]?.agent).toBeNull();
-  expect(panes[0]?.attention).toEqual([
-    {
-      kind: "done",
-      message: "finished",
-      source: "pi",
-      driver: "human",
-      requested_at: expect.any(Number),
-    },
-  ]);
-});
-
-// --- attention cannot touch an agent -------------------------------------
-
-test("a notifier cannot change any agent field", () => {
-  const s = store();
-  s.claimAgent({ location: location(), owner_pid: 100, meta: meta(), now: 1 });
-  const before = agentRows();
-
-  for (const kind of ["done", "blocked"] as const) {
-    s.requestAttention({
-      kind,
-      location: location(),
-      message: "someone is wanted",
-      source: "codex",
-      driver: "human",
-      now: 50,
-    });
-  }
-
-  expect(agentRows()).toEqual(before);
-});
-
-test("notify then clear leaves a live agent's row byte-for-byte unchanged", () => {
-  // The regression test for the measured incident: under the event model this
-  // sequence replaced `working` with `blocked` and nulled agent_name,
-  // workstream, role and driver on panes %250-%252 while all three pi
-  // processes were alive.
-  const s = store();
-  const claim = s.claimAgent({ location: location("%250"), owner_pid: 100, meta: meta(), now: 1 });
-  const agentId = "agent_id" in claim ? claim.agent_id : "";
-  s.setActivity({
-    agent_id: agentId,
-    owner_pid: 100,
-    activity: "running",
-    location: location("%250"),
-    now: 2,
-  });
-  const before = agentRows();
-
-  s.requestAttention({
-    kind: "blocked",
-    location: location("%250"),
-    message: "needs input",
-    source: "stdin-probe",
-    driver: "human",
-    now: 3,
-  });
-  s.acknowledgePane(location("%250"));
-
-  expect(agentRows()).toEqual(before);
-  expect(before[0]).toMatchObject({
-    activity: "running",
-    agent_name: "worker-1",
-    workstream: "murmur",
-    driver: "orchestrated",
-  });
-});
-
-test("a repeated attention request does not reset requested_at", () => {
-  // Age means "how long this has gone unmet", so a repeat must not restart the
-  // clock -- which also makes crash attention idempotent for free.
-  const s = store();
-  s.requestAttention({
-    kind: "blocked",
-    location: location(),
-    message: "a",
-    source: "x",
-    driver: "human",
-    now: 10,
-  });
-  s.requestAttention({
-    kind: "blocked",
-    location: location(),
-    message: "b",
-    source: "y",
-    driver: "human",
-    now: 99,
-  });
-
-  expect(s.localPanes()[0]?.attention).toEqual([
-    { kind: "blocked", message: "b", source: "y", driver: "human", requested_at: 10 },
-  ]);
-});
-
-test("a crew repeat cannot turn an unmet human request into crew", () => {
-  // The repeat keeps requested_at, so overwriting the driver too would move a
-  // still-unmet human request out of the human counts with its age intact.
-  // A sibling's `notify --pane` from a mu-placed harness is the real route.
-  const s = store();
-  const request = { kind: "done" as const, location: location(), message: "", source: "codex" };
-  s.requestAttention({ ...request, driver: "human", now: 10 });
-  s.requestAttention({ ...request, driver: "orchestrated", now: 20 });
-  expect(s.localPanes()[0]?.attention).toMatchObject([{ driver: "human", requested_at: 10 }]);
-
-  // The other way round is a human asking now, and it says so.
-  s.acknowledgePane(location());
-  s.requestAttention({ ...request, driver: "orchestrated", now: 30 });
-  s.requestAttention({ ...request, driver: "human", now: 40 });
-  expect(s.localPanes()[0]?.attention).toMatchObject([{ driver: "human", requested_at: 30 }]);
-});
-
-test("kinds coexist on one pane, and acknowledge clears them all for that pane only", () => {
-  const s = store();
-  for (const kind of ["blocked", "done"] as const) {
-    s.requestAttention({
-      kind,
-      location: location("%1"),
-      message: kind,
-      source: "x",
-      driver: "human",
-    });
-  }
+  const mule: TmuxServer = { kind: "label", value: "mule" };
   s.recordCrash(location("%1"));
-  s.requestAttention({
-    kind: "done",
-    location: location("%2"),
-    message: "",
-    source: "x",
-    driver: "human",
-  });
+  s.recordCrash(location("%1", { server: mule }));
+  s.recordCrash({ ...location("block:9"), server: { kind: "rex" } });
 
-  expect(s.localPanes()[0]?.attention.map((entry) => entry.kind)).toEqual([
-    "crashed",
-    "blocked",
-    "done",
-  ]);
-  expect(s.acknowledgePane(location("%1"))).toBe(3);
-  expect(s.localPanes().map((pane) => pane.pane)).toEqual(["%2"]);
+  expect(s.acknowledgePane({ server: mule, pane: asPaneId("%1") })).toBe(1);
+  expect(s.acknowledgePane({ server: mule, pane: asPaneId("%1") })).toBe(0);
+  expect(s.localPanes().map((pane) => pane.server.kind)).toEqual(["default", "rex"]);
 });
 
-// --- reconciliation ------------------------------------------------------
+// --- alert dedup -----------------------------------------------------------
 
-test("reconcileLocal with panes null writes nothing", () => {
-  // tmux failing to answer is absence of evidence, not evidence of death.
+test("each alert key is won once, by whichever process claims it first", () => {
   const s = store();
-  s.claimAgent({ location: location(), owner_pid: 100, meta: meta() });
-  s.requestAttention({
-    kind: "done",
-    location: location(),
-    message: "",
-    source: "pi",
-    driver: "human",
-  });
-  const before = agentRows();
-
-  expect(s.reconcileLocal({ server: { kind: "default" }, panes: null, isAlive: dead })).toEqual({
-    crashed: [],
-    removed: [],
-    attention_removed: [],
-  });
-  expect(agentRows()).toEqual(before);
-  expect(s.localPanes()[0]?.attention).toHaveLength(1);
+  const other = store();
+  expect(s.claimAlerts(["a", "b"], ["a", "b"], 1_000, 60_000)).toEqual(["a", "b"]);
+  expect(other.claimAlerts(["a", "b", "c"], ["a", "b", "c"], 1_001, 60_000)).toEqual(["c"]);
 });
 
-test("reconcileLocal distinguishes an empty pane list from a failed read", () => {
+test("an old claim is forgotten only once its event is gone", () => {
+  // A lagging reader must not re-fire an event still on screen; one that has
+  // left can be forgotten, so the table stays small.
   const s = store();
-  s.claimAgent({ location: location(), owner_pid: 100, meta: meta() });
-
-  expect(
-    s.reconcileLocal({ server: { kind: "default" }, panes: new Set(), isAlive: dead }).removed,
-  ).toEqual(["%1"]);
-  expect(s.localPanes()).toEqual([]);
+  s.claimAlerts(["a", "b"], ["a", "b"], 1_000, 60_000);
+  s.claimAlerts([], ["a"], 100_000, 60_000);
+  expect(s.claimAlerts(["a", "b"], ["a", "b"], 100_001, 60_000)).toEqual(["b"]);
 });
 
-test("a missing pane with a live owner keeps its row; the dead owner's row goes", () => {
-  // tmux saying "no panes" can be wrong: a `murmur status` with a test rig's
-  // TMUX_TMPDIR read an absent socket as an empty default server and deleted
-  // every agent on the machine. A live owner outweighs that answer.
-  const s = store();
-  s.claimAgent({ location: location("%1"), owner_pid: 100, meta: meta() });
-  s.claimAgent({ location: location("%2"), owner_pid: 200, meta: meta() });
-
-  const summary = s.reconcileLocal({
-    server: { kind: "default" },
-    panes: new Set(),
-    isAlive: alive([100]),
-  });
-
-  expect(summary.removed).toEqual(["%2"]);
-  expect(s.localPanes().map((pane) => pane.pane)).toEqual(["%1"]);
-});
-
-test("a dead running owner becomes stopped plus one crashed row, idempotently", () => {
-  const s = store();
-  const claim = s.claimAgent({ location: location(), owner_pid: 100, meta: meta(), now: 1 });
-  const agentId = "agent_id" in claim ? claim.agent_id : "";
-  s.setActivity({
-    agent_id: agentId,
-    owner_pid: 100,
-    activity: "running",
-    location: location(),
-    now: 2,
-  });
-
-  const first = s.reconcileLocal({
-    server: { kind: "default" },
-    panes: new Set([asPaneId("%1")]),
-    isAlive: dead,
-    now: 10,
-  });
-
-  expect(first.crashed).toEqual(["%1"]);
-  expect(s.localPanes()[0]?.agent?.activity).toBe("stopped");
-  expect(s.localPanes()[0]?.attention).toEqual([
-    // The dead agent's own driver: a crashed crew worker stays crew.
-    { kind: "crashed", message: "", source: "murmur", driver: "orchestrated", requested_at: 10 },
-  ]);
-
-  const after = agentRows();
-  s.reconcileLocal({
-    server: { kind: "default" },
-    panes: new Set([asPaneId("%1")]),
-    isAlive: dead,
-    now: 999,
-  });
-  expect(agentRows()).toEqual(after);
-  expect(s.localPanes()[0]?.attention[0]?.requested_at).toBe(10);
-});
-
-test("a vanished pane loses its agent and its attention; a stopped dead owner keeps attention", () => {
-  const s = store();
-  // Gone pane, with attention.
-  s.claimAgent({ location: location("%1"), owner_pid: 100, meta: meta() });
-  s.requestAttention({
-    kind: "done",
-    location: location("%1"),
-    message: "",
-    source: "pi",
-    driver: "human",
-  });
-  // Live pane, stopped owner that died after finishing, with a done nobody saw.
-  s.claimAgent({ location: location("%2"), owner_pid: 200, meta: meta() });
-  s.requestAttention({
-    kind: "done",
-    location: location("%2"),
-    message: "seen me",
-    source: "pi",
-    driver: "human",
-  });
-
-  const summary = s.reconcileLocal({
-    server: { kind: "default" },
-    panes: new Set([asPaneId("%2")]),
-    isAlive: dead,
-  });
-
-  expect(summary.removed).toEqual(["%1", "%2"]);
-  const panes = s.localPanes();
-  expect(panes.map((pane) => pane.pane)).toEqual(["%2"]);
-  expect(panes[0]?.agent).toBeNull();
-  expect(panes[0]?.attention.map((entry) => entry.message)).toEqual(["seen me"]);
-});
-
-test("attention for a pane that never had an agent is reaped when the pane goes", () => {
-  const s = store();
-  s.requestAttention({
-    kind: "blocked",
-    location: location("%7"),
-    message: "",
-    source: "codex",
-    driver: "human",
-  });
-
-  const summary = s.reconcileLocal({
-    server: { kind: "default" },
-    panes: new Set<PaneId>(),
-    isAlive: dead,
-  });
-
-  expect(summary.attention_removed).toEqual(["%7"]);
-  expect(s.localPanes()).toEqual([]);
-});
-
-// --- local read and snapshot shape ---------------------------------------
-
-test("localPanes joins by pane and exposes no owner_pid anywhere", () => {
-  const s = store();
-  s.claimAgent({ location: location("%1"), owner_pid: 100, meta: meta() });
-  s.requestAttention({
-    kind: "done",
-    location: location("%1"),
-    message: "",
-    source: "pi",
-    driver: "human",
-  });
-  s.claimAgent({ location: location("%2"), owner_pid: 200, meta: meta() });
-  s.requestAttention({
-    kind: "blocked",
-    location: location("%3"),
-    message: "",
-    source: "codex",
-    driver: "human",
-  });
-
-  const panes = s.localPanes();
-
-  expect(panes.map((pane) => pane.pane)).toEqual(["%1", "%2", "%3"]);
-  expect(panes[1]?.attention).toEqual([]);
-  expect(panes[2]?.agent).toBeNull();
-  // Structurally, over the whole object graph -- not by reading the type, and
-  // not by substring either: a pid searched for inside JSON.stringify's output
-  // matches the digits of any timestamp that happens to contain them, so
-  // `not.toContain("100")` failed whenever `Date.now()` read 1788100266997.
-  // Walking leaves compares values, which is the claim actually being made.
-  expect(keysOf(panes)).not.toContain("owner_pid");
-  expect(leavesOf(panes)).not.toContain(100);
-  expect(leavesOf(panes)).not.toContain(200);
-});
-
-test("buildLocalSnapshot reconciles, drops empty panes and never carries a pid", () => {
-  const s = store();
-  s.claimAgent({ location: location("%1"), owner_pid: process.pid, meta: meta(), now: 1 });
-  s.claimAgent({ location: location("%gone"), owner_pid: 100, meta: meta(), now: 1 });
-
-  const snapshot = s.buildLocalSnapshot(
-    { host_id: "H", display_name: "here" },
-    {
-      server: { kind: "default" },
-      panes: new Set([asPaneId("%1")]),
-      isAlive: alive([process.pid]),
-      now: 42,
-    },
-  );
-
-  expect(snapshot).toMatchObject({
-    murmur_snapshot: 7,
-    host_id: "H",
-    display_name: "here",
-    generated_at: 42,
-  });
-  expect(snapshot.murmur_version).toMatch(/^\d+\.\d+\.\d+/);
-  expect(snapshot.panes.map((pane) => pane.pane)).toEqual(["%1"]);
-  expect(JSON.stringify(snapshot)).not.toContain("owner_pid");
-});
-
-// --- peers ---------------------------------------------------------------
+// --- peers -------------------------------------------------------------------
 
 test("a successful fetch replaces the whole document; a pane absent after is gone", () => {
   const s = store();
   s.addPeer("dev", "dev.example");
   const base = {
-    murmur_snapshot: 7 as const,
+    murmur_snapshot: 8 as const,
     host_id: "REMOTE",
     display_name: "dev",
     murmur_version: "9.9.9",
@@ -796,7 +304,7 @@ test("a failed fetch keeps the previous snapshot and leaves fetched_at alone", (
     ok: true,
     at: 1_000,
     snapshot: {
-      murmur_snapshot: 7,
+      murmur_snapshot: 8,
       host_id: "REMOTE",
       display_name: "dev",
       murmur_version: "1.0.0",
@@ -849,7 +357,7 @@ test("addPeer with the same target keeps the cache and a custom jump command", (
     ok: true,
     at: 1_000,
     snapshot: {
-      murmur_snapshot: 7,
+      murmur_snapshot: 8,
       host_id: "REMOTE",
       display_name: "dev",
       murmur_version: "1.0.0",
@@ -874,7 +382,7 @@ test("addPeer with a new target drops the old node's cache", () => {
     ok: true,
     at: 1_000,
     snapshot: {
-      murmur_snapshot: 7,
+      murmur_snapshot: 8,
       host_id: "REMOTE",
       display_name: "dev",
       murmur_version: "1.0.0",
@@ -937,61 +445,6 @@ test("opening a current store does not wait for a reader pinning the WAL", () =>
   }
 });
 
-// --- constraints, asserted where SQLite itself is the enforcer -----------
-
-test("SQLite refuses a second agent row for one pane", () => {
-  const s = store();
-  s.claimAgent({ location: location(), owner_pid: 100, meta: meta() });
-  s.close();
-
-  const database = new Database(dbPath());
-  try {
-    const insert = () =>
-      database
-        .prepare(
-          `INSERT INTO agents (agent_id, server_kind, server_value, pane, owner_pid, activity, session, window, cli,
-                               driver, claimed_at, updated_at)
-           VALUES (?, 'default', '', '%1', 1, 'running', '$0', '@0', 'pi', 'human', 0, 0)`,
-        )
-        .run("second");
-    expect(insert).toThrow(/UNIQUE/);
-  } finally {
-    database.close();
-  }
-});
-
-test.each([
-  [
-    "activity",
-    "INSERT INTO agents (agent_id, server_kind, server_value, pane, owner_pid, activity, session, window, cli, driver, claimed_at, updated_at) VALUES ('a', 'default', '', '%9', 1, 'working', '$0', '@0', 'pi', 'human', 0, 0)",
-  ],
-  [
-    "driver",
-    "INSERT INTO agents (agent_id, server_kind, server_value, pane, owner_pid, activity, session, window, cli, driver, claimed_at, updated_at) VALUES ('a', 'default', '', '%9', 1, 'running', '$0', '@0', 'pi', 'robot', 0, 0)",
-  ],
-  [
-    "owner_pid",
-    "INSERT INTO agents (agent_id, server_kind, server_value, pane, owner_pid, activity, session, window, cli, driver, claimed_at, updated_at) VALUES ('a', 'default', '', '%9', 0, 'running', '$0', '@0', 'pi', 'human', 0, 0)",
-  ],
-  [
-    "kind",
-    "INSERT INTO attention (server_kind, server_value, pane, kind, message, source, driver, session, window, requested_at) VALUES ('default', '', '%9', 'working', '', 'x', 'human', '$0', '@0', 0)",
-  ],
-  [
-    "attention driver",
-    "INSERT INTO attention (server_kind, server_value, pane, kind, message, source, driver, session, window, requested_at) VALUES ('default', '', '%9', 'done', '', 'x', 'robot', '$0', '@0', 0)",
-  ],
-])("SQLite refuses an out-of-enum %s", (_field, sql) => {
-  const s = store();
-  s.close();
-  const database = new Database(dbPath());
-  try {
-    expect(() => database.prepare(sql).run()).toThrow(/CHECK constraint/);
-  } finally {
-    database.close();
-  }
-});
-
 // --- identity and legacy -------------------------------------------------
 
 test("openStore mints no identity", async () => {
@@ -1010,7 +463,7 @@ test("an existing database upgrades without losing peers", () => {
     ok: true,
     at: 1_000,
     snapshot: {
-      murmur_snapshot: 7,
+      murmur_snapshot: 8,
       host_id: "REMOTE",
       display_name: "dev",
       murmur_version: "1.0.0",
@@ -1018,7 +471,7 @@ test("an existing database upgrades without losing peers", () => {
       panes: [],
     },
   });
-  s.claimAgent({ location: location(), owner_pid: 100, meta: meta() });
+  s.recordCrash(location());
   s.close();
 
   const database = new Database(dbPath());
@@ -1026,19 +479,7 @@ test("an existing database upgrades without losing peers", () => {
   database.pragma("user_version = 3");
   database.close();
 
-  // This test claims an agent, so the rebuild legitimately reports discarding
-  // it. Swallowed here rather than left to print: a suite that writes expected
-  // warnings to its own output teaches people to stop reading them. The message
-  // itself has its own tests below.
-  const write = process.stderr.write.bind(process.stderr);
-  process.stderr.write = (() => true) as typeof process.stderr.write;
-  const reopened = (() => {
-    try {
-      return store();
-    } finally {
-      process.stderr.write = write;
-    }
-  })();
+  const reopened = store();
 
   // The fields a human typed survive; every observed column starts empty,
   // so a never-reached peer cannot render as fresh.
@@ -1062,12 +503,12 @@ test("an existing database upgrades without losing peers", () => {
 });
 
 test("a store from a newer murmur is refused and left exactly as it was", () => {
-  // The pi extension and the CLI are separate installs and can run different
-  // versions. Rebuilding downward made each side wipe the other's rows on every
-  // open; an older build must stay out of the way instead.
+  // Two installs on one machine can run different versions. Rebuilding
+  // downward made each side wipe the other's rows on every open; an older
+  // build must stay out of the way instead.
   const s = store();
   s.addPeer("dev", "dev.example");
-  s.claimAgent({ location: location(), owner_pid: 100, meta: meta() });
+  s.recordCrash(location());
   s.close();
   const database = new Database(dbPath());
   const newer = (database.pragma("user_version", { simple: true }) as number) + 1;
@@ -1082,7 +523,7 @@ test("a store from a newer murmur is refused and left exactly as it was", () => 
 
   const after = new Database(dbPath(), { readonly: true });
   expect(after.pragma("user_version", { simple: true })).toBe(newer);
-  expect(after.prepare("SELECT COUNT(*) AS n FROM agents").get()).toEqual({ n: 1 });
+  expect(after.prepare("SELECT COUNT(*) AS n FROM crashed").get()).toEqual({ n: 1 });
   expect(after.prepare("SELECT name FROM peers").all()).toEqual([{ name: "dev" }]);
   after.close();
   // The reset lock is released on the way out, so the next open is not delayed.
@@ -1099,13 +540,6 @@ test("a store from a newer murmur is refused and left exactly as it was", () => 
   expect(run.stderr).toMatch(/^murmur: .*newer murmur/);
   expect(run.stderr).not.toContain("    at ");
 
-  // Hooks stay silent and succeed: a codex or cursor turn must not fail on it.
-  const hook = spawnSync(
-    process.execPath,
-    [builtArtifact("cli.js"), "notify", "--pane", "%1", '{"type":"agent-turn-complete"}'],
-    { env: process.env, encoding: "utf8" },
-  );
-  expect({ status: hook.status, stderr: hook.stderr }).toEqual({ status: 0, stderr: "" });
   const untouched = new Database(dbPath(), { readonly: true });
   expect(untouched.pragma("user_version", { simple: true })).toBe(newer);
   untouched.close();
@@ -1114,65 +548,63 @@ test("a store from a newer murmur is refused and left exactly as it was", () => 
 test("a newer store whose compat stamp still includes this build is opened, not refused or reset", () => {
   // The "compatible since" stamp is for the NEXT release: a build that only adds
   // nullable columns bumps user_version and keeps the stamp, and this build must
-  // keep working against its store instead of refusing it -- the CLI and the pi
-  // extension upgrade separately, so either can be the older one for a while.
+  // keep working against its store instead of refusing it -- two installs
+  // upgrade separately, so either can be the older one for a while.
   const s = store();
   s.addPeer("dev", "dev.example");
-  s.claimAgent({ location: location(), owner_pid: 100, meta: meta() });
+  s.syncLocal([{ server: DEFAULT, panes: [seen("%1", "running")] }], 1_000);
   s.close();
   const database = new Database(dbPath());
   const ours = database.pragma("user_version", { simple: true }) as number;
   database.pragma(`user_version = ${ours + 1}`);
-  database.exec("ALTER TABLE agents ADD COLUMN later_column TEXT");
+  database.exec("ALTER TABLE seen ADD COLUMN later_column TEXT");
+  database.exec("ALTER TABLE crashed ADD COLUMN later_column TEXT");
   database.close();
 
   const reopened = store();
-  // Kept: no reset discarded the agent or the peer.
-  expect(reopened.localPanes().map((pane) => pane.agent?.agent_name)).toEqual(["worker-1"]);
+  // Kept: no reset discarded the sighting or the peer.
   expect(reopened.peers().map((peer) => peer.name)).toEqual(["dev"]);
   // And usable: a write that names its columns ignores the one it does not know.
-  expect(
-    reopened.claimAgent({ location: location("%2"), owner_pid: 101, meta: meta() }).outcome,
-  ).toBe("claimed");
+  expect(reopened.syncLocal([{ server: DEFAULT, panes: [] }], 2_000).crashed).toEqual(["%1"]);
+  expect(reopened.localPanes()).toHaveLength(1);
   reopened.close();
   const after = new Database(dbPath(), { readonly: true });
   expect(after.pragma("user_version", { simple: true })).toBe(ours + 1);
   after.close();
 });
 
-test("schema 11 gains inbox receipts without losing state or breaking the compatibility stamp", () => {
+test("a 2.x store (schema 12) is rebuilt as 3.0's, keeping only the peers", () => {
+  // 2.x kept agent rows, attention and an inbox; 3.0 keeps none of them. The
+  // compat stamp says 2.x's file is not ours, so it is reset once.
   const s = store();
   s.addPeer("dev", "dev.example");
-  s.claimAgent({ location: location(), owner_pid: 100, meta: meta() });
   s.close();
-  const old = new Database(dbPath());
-  old.exec("DROP TABLE inbox_receipts; PRAGMA user_version = 11");
-  old.close();
-
-  const upgraded = store();
-  expect(upgraded.localPanes().map((pane) => pane.agent?.agent_name)).toEqual(["worker-1"]);
-  expect(upgraded.peers().map((peer) => peer.name)).toEqual(["dev"]);
-  upgraded.close();
-  const database = new Database(dbPath(), { readonly: true });
-  expect(database.pragma("user_version", { simple: true })).toBe(12);
-  expect(database.prepare("SELECT path FROM inbox_receipts").all()).toEqual([]);
-  expect(database.prepare("SELECT compatible_since FROM compat").all()).toEqual([
-    { compatible_since: 10 },
-  ]);
-  const columns = (database.prepare("PRAGMA table_info(agents)").all() as { name: string }[]).map(
-    (column) => column.name,
-  );
-  expect(columns).toEqual(expect.arrayContaining(["last_text_run", "generation_run"]));
+  const database = new Database(dbPath());
+  database.exec("DROP TABLE seen; CREATE TABLE agents (pane TEXT)");
+  database.exec("UPDATE compat SET compatible_since = 10");
+  database.pragma("user_version = 12");
   database.close();
+
+  const reopened = store();
+  expect(reopened.peers().map((peer) => peer.name)).toEqual(["dev"]);
+  reopened.close();
+  const after = new Database(dbPath(), { readonly: true });
+  expect(after.pragma("user_version", { simple: true })).toBe(13);
+  const tables = (
+    after.prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name").all() as {
+      name: string;
+    }[]
+  ).map((row) => row.name);
+  expect(tables).toEqual(["alerted", "compat", "crashed", "peers", "seen"]);
+  after.close();
 });
 
 test("a store from before the compat stamp is reset once, keeping peers", () => {
-  // Schema 9 had no stamp and no inbox columns. The one upgrade cost of the
-  // inbox release is this reset: agent and attention rows go, and the next
-  // events (or pi's next claim) restore them.
+  // Schema 9 had no stamp. Everything but the peers is re-observed at the
+  // next collect, so a reset costs nothing a person typed.
   const s = store();
   s.addPeer("dev", "dev.example");
-  s.claimAgent({ location: location(), owner_pid: 100, meta: meta() });
+  s.recordCrash(location());
   s.close();
   const database = new Database(dbPath());
   database.exec("DROP TABLE compat");
@@ -1185,7 +617,7 @@ test("a store from before the compat stamp is reset once, keeping peers", () => 
   reopened.close();
   const after = new Database(dbPath(), { readonly: true });
   expect(after.prepare("SELECT compatible_since FROM compat").all()).toEqual([
-    { compatible_since: 10 },
+    { compatible_since: 13 },
   ]);
   after.close();
 });
@@ -1197,7 +629,7 @@ test("a corrupt database is rebuilt rather than crashing every command", () => {
   // pragma is what throws -- straight through `needsReset`'s catch, which
   // answered "no reset needed" for precisely the file that needed one. Every
   // command that opens the store then died on the same pragma with a raw
-  // SqliteError: the status bar on every tick, and every focus hook.
+  // SqliteError: the status bar on every tick.
   //
   // Nothing here is history, so throwing it away is free. That is exactly the
   // argument the version-mismatch path already makes.
@@ -1221,41 +653,6 @@ test("a corrupt database is rebuilt rather than crashing every command", () => {
   // And the rebuilt file is a working store, not merely an opened one.
   reopened.addPeer("bubba", "bubba.example");
   expect(reopened.peers().map((peer) => peer.name)).toEqual(["bubba"]);
-});
-
-// The rebuild is correct and documented; it was SILENT, and that is what made a
-// documented upgrade look like data loss. Measured in the field: a schema bump on
-// a machine whose murmur is a symlinked dev checkout wiped every agent row while
-// doctor stayed clean and all peers survived, so the picker just went empty.
-test("a rebuild says how many rows it discarded", () => {
-  const warnings: string[] = [];
-  const write = process.stderr.write.bind(process.stderr);
-  process.stderr.write = ((chunk: string) => {
-    warnings.push(String(chunk));
-    return true;
-  }) as typeof process.stderr.write;
-
-  try {
-    const s = store();
-    s.addPeer("dev", "dev.example");
-    s.claimAgent({ location: location(), owner_pid: 100, meta: meta() });
-    s.close();
-
-    const database = new Database(dbPath());
-    database.pragma("user_version = 1");
-    database.close();
-
-    store().close();
-  } finally {
-    process.stderr.write = write;
-  }
-
-  const said = warnings.join("");
-  expect(said).toContain("1 agent row(s)");
-  expect(said).toContain("1 peer(s) kept");
-  // The remedy, because the rows do not come back on their own: a live agent
-  // claimed into the old file and cannot re-claim until its extension reloads.
-  expect(said).toContain("/new");
 });
 
 test("a rebuild with nothing to lose stays quiet", () => {
@@ -1286,108 +683,10 @@ test("a rebuild with nothing to lose stays quiet", () => {
   expect(warnings.join("")).toBe("");
 });
 
-// --- runtime fields: owner-gated, partial writes -------------------------
-
-/**
- * `setRuntime` is `Partial`, and that is the whole shape of the problem.
- *
- * The fields arrive from three different pi events -- a model change, an effort
- * change, a completed turn -- so a call that had to pass all of them would force
- * the producer to invent the ones it did not just learn. Re-asserting a stale
- * model on a context update is exactly the bug the partial shape prevents.
- */
-test("setRuntime writes only the keys it is given", () => {
-  const s = store();
-  const id = claimedId(s);
-
-  expect(s.setRuntime({ agent_id: id, owner_pid: process.pid, model: "claude-opus-5" })).toBe(true);
-  expect(s.setRuntime({ agent_id: id, owner_pid: process.pid, context_pct: 11.7 })).toBe(true);
-
-  // The model survived a context-only update. A partial write must not blank the
-  // fields it was not given.
-  expect(s.localPanes()[0]?.agent).toMatchObject({
-    model: "claude-opus-5",
-    context_pct: 11.7,
-    effort: null,
-  });
-});
-
-test("setRuntime can write an explicit null", () => {
-  // Not the same as omitting the key. pi reports a null context percent right
-  // after a compaction, and the card must lose the stale number rather than keep
-  // showing a percentage from before the context was cleared.
-  const s = store();
-  const id = claimedId(s);
-
-  s.setRuntime({ agent_id: id, owner_pid: process.pid, context_pct: 42 });
-  s.setRuntime({ agent_id: id, owner_pid: process.pid, context_pct: null });
-
-  expect(s.localPanes()[0]?.agent?.context_pct).toBeNull();
-});
-
-test("setRuntime round-trips the usage bundle through its column", () => {
-  // The bundle is stored as one JSON document and re-parsed on read, so this
-  // asserts the column survives a full trip rather than that an object equals
-  // itself.
-  const s = store();
-  const id = claimedId(s);
-
-  const usage = {
-    input: 213_000,
-    output: 55_000,
-    cache_read: 4_100_000,
-    cache_write: 12_000,
-    total_tokens: 4_380_000,
-    cache_write_1h: 500,
-    reasoning: 9_000,
-    cost_input: 1.2,
-    cost_output: 2.4,
-    cost_cache_read: 0.41,
-    cost_cache_write: 0.6,
-    cost_total: 4.61,
-  };
-  expect(s.setRuntime({ agent_id: id, owner_pid: process.pid, usage })).toBe(true);
-  expect(s.localPanes()[0]?.agent?.usage).toEqual(usage);
-
-  // Nullable as a unit: an agent whose usage is cleared reports no usage rather
-  // than a bundle of zeroes, which is a different claim.
-  s.setRuntime({ agent_id: id, owner_pid: process.pid, usage: null });
-  expect(s.localPanes()[0]?.agent?.usage).toBeNull();
-});
-
-test("setRuntime refuses a caller that does not own the agent", () => {
-  // The same gate `setActivity` uses, and for the same reason: a pi launched
-  // inside an agent's pane inherits $TMUX_PANE and would otherwise report AS the
-  // parent agent. Six pids once wrote to one pane that way and the parent read
-  // as idle while it was working.
-  const s = store();
-  const id = claimedId(s);
-
-  expect(s.setRuntime({ agent_id: id, owner_pid: process.pid + 1, model: "x" })).toBe(false);
-  expect(s.localPanes()[0]?.agent?.model).toBeNull();
-});
-
-test("setRuntime on an unknown agent is false, not a throw", () => {
-  // A replaced owner matches nothing. That is not an error and must not be
-  // retried: it means this process is no longer the owner of record.
-  const s = store();
-  expect(s.setRuntime({ agent_id: "nope", owner_pid: process.pid, model: "x" })).toBe(false);
-});
-
-test("setRuntime with no fields at all is a no-op, not malformed SQL", () => {
-  // Reachable from the producer: an older pi offers none of the members, so
-  // `runtimeFromContext` returns {} and the caller passes it straight through.
-  // A SET clause built from zero keys would be a syntax error.
-  const s = store();
-  const id = claimedId(s);
-
-  expect(s.setRuntime({ agent_id: id, owner_pid: process.pid })).toBe(false);
-});
-
 test("openStore({ readonly: true }) reads an existing store and refuses writes", () => {
   const s = store();
   s.addPeer("dev", "dev.example");
-  s.claimAgent({ location: location(), owner_pid: 100, meta: meta() });
+  s.recordCrash(location());
   s.close();
 
   const reader = openStore({ readonly: true });
@@ -1428,36 +727,17 @@ test("a readonly open of an older schema throws instead of migrating", () => {
 
 test("status() reads through a readonly store", () => {
   const s = store();
-  s.claimAgent({ location: location(), owner_pid: 100, meta: meta() });
+  s.recordCrash(location());
   s.close();
 
   const reader = openStore({ readonly: true });
   stores.push(reader);
-  const view = status(reader, { host_id: "HOST", display_name: "host" }, Date.now(), () => false);
+  const view = status(
+    reader,
+    { host_id: "HOST", display_name: "host" },
+    recordedPanes(reader),
+    Date.now(),
+    () => false,
+  );
   expect(view.panes.length).toBe(1);
-});
-
-test("listHarnessStates and harnessState read session_id under a readonly open", () => {
-  const writer = store();
-  claimedId(writer, "%1");
-  claimedId(writer, "%2");
-  const raw = new Database(dbPath());
-  raw
-    .prepare("UPDATE agents SET session_id = 'sess-1', harness = 'claude' WHERE pane = '%1'")
-    .run();
-  raw.close();
-
-  const reader = openStore({ readonly: true });
-  stores.push(reader);
-  const states = reader.listHarnessStates();
-  expect(states.map((s) => s.pane)).toEqual(["%1", "%2"]);
-  expect(states[0]).toMatchObject({
-    server: { kind: "default" },
-    harness: "claude",
-    session_id: "sess-1",
-  });
-  expect(states[1]?.session_id).toBeNull();
-  expect(reader.harnessState({ server: { kind: "default" }, pane: asPaneId("%1") })).toMatchObject({
-    session_id: "sess-1",
-  });
 });

@@ -5,14 +5,14 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { jumpToAgent } from "../src/agents.js";
 import type { InputDelivery } from "../src/dash-input.js";
 import { createIdentity, loadIdentity, type NodeIdentity } from "../src/identity.js";
-import { asPaneId, asSessionId, asWindowId } from "../src/ids.js";
+import { asPaneId } from "../src/ids.js";
 import { runJump } from "../src/jump-select.js";
 import { jumpTarget } from "../src/jump-target.js";
+import type { Mux } from "../src/mux.js";
 import { promptAgent, stopAgent } from "../src/steer.js";
 import { openStore, type Store } from "../src/store.js";
-import type { Location } from "../src/types.js";
 import type { PaneView } from "../src/view.js";
-import { fakeMux } from "./helpers/fake-mux.js";
+import { vtmuxMux, vtmuxRow } from "./helpers/panes.js";
 
 let store: Store;
 
@@ -20,33 +20,26 @@ beforeEach(() => {
   vi.stubEnv("MURMUR_STATE_DIR", mkdtempSync(join(tmpdir(), "murmur-steer-")));
   createIdentity("here");
   store = openStore();
-  const location: Location = {
-    server: { kind: "default" },
-    session: asSessionId("$0"),
-    window: asWindowId("@1"),
-    pane: asPaneId("%1"),
-    session_name: "dev",
-    window_name: "w",
-  };
-  const claim = store.claimAgent({
-    location,
-    owner_pid: process.pid,
-    meta: {
-      agent_name: "a",
-      pi_session: null,
-      workstream: null,
-      role: null,
-      cli: "pi",
-      driver: "human",
-    },
-  });
-  store.setActivity({
-    agent_id: "agent_id" in claim ? claim.agent_id : "",
-    owner_pid: process.pid,
-    activity: "running",
-    location,
-  });
 });
+
+/** pane %1 working, as vtmux lists it: the one local pane every test resolves. */
+function live(over: Partial<Mux> = {}): Mux {
+  return vtmuxMux(
+    [
+      vtmuxRow({
+        pane: "%1",
+        session: "$0",
+        window: "@1",
+        session_name: "dev",
+        window_name: "w",
+        state: "working",
+        app: "pi",
+        pane_title: "a",
+      }),
+    ],
+    over,
+  );
+}
 
 afterEach(() => {
   store.close();
@@ -70,8 +63,9 @@ function target(pane = "%1"): string {
 }
 
 const deps = (log: InputDelivery[]) => ({
-  mux: fakeMux(),
+  mux: live(),
   warm: () => true,
+  rex: false as const,
   run: async (delivery: InputDelivery) => {
     log.push(delivery);
   },
@@ -123,17 +117,18 @@ test("a failed delivery is reported, not thrown", async () => {
   expect(result).toEqual({ ok: false, reason: "delivery_failed", message: "no server running" });
 });
 
-test("jump --client forwards the client to tmux attach, even outside tmux", () => {
+test("jump --client forwards the client to tmux attach, even outside tmux", async () => {
   const attach = vi.fn(() => true);
-  const mux = fakeMux({ attach, livePanes: () => new Set([asPaneId("%1")]) });
+  const mux = live({ attach, livePanes: () => new Set([asPaneId("%1")]) });
   let view: PaneView | undefined;
-  runJump(
+  await runJump(
     store,
     identity(),
     target(),
     {
       fzf: () => "",
       mux,
+      rex: false,
       jump: (s, agent, client) => {
         view = agent;
         return jumpToAgent(s, agent, mux, undefined, {}, client);
@@ -146,13 +141,13 @@ test("jump --client forwards the client to tmux attach, even outside tmux", () =
   expect(process.exitCode ?? 0).toBe(0);
 });
 
-test("jump --json prints a success object", () => {
+test("jump --json prints a success object", async () => {
   const write = vi.spyOn(process.stdout, "write").mockReturnValue(true);
-  runJump(
+  await runJump(
     store,
     identity(),
     target(),
-    { fzf: () => "", mux: fakeMux(), jump: () => ({ ok: true }) },
+    { fzf: () => "", mux: live(), rex: false, jump: () => ({ ok: true }) },
     { json: true, client: "c" },
   );
   expect(JSON.parse(String(write.mock.calls[0]?.[0]))).toEqual({
@@ -161,10 +156,16 @@ test("jump --json prints a success object", () => {
   });
 });
 
-test("jump --json reports failures as JSON on stdout with exit 1", () => {
+test("jump --json reports failures as JSON on stdout with exit 1", async () => {
   const write = vi.spyOn(process.stdout, "write").mockReturnValue(true);
   const err = vi.spyOn(process.stderr, "write").mockReturnValue(true);
-  runJump(store, identity(), "bad", { fzf: () => "", mux: fakeMux() }, { json: true });
+  await runJump(
+    store,
+    identity(),
+    "bad",
+    { fzf: () => "", mux: live(), rex: false },
+    { json: true },
+  );
   expect(JSON.parse(String(write.mock.calls[0]?.[0]))).toMatchObject({
     ok: false,
     reason: "invalid_target",
@@ -173,16 +174,16 @@ test("jump --json reports failures as JSON on stdout with exit 1", () => {
   expect(err).not.toHaveBeenCalled();
 });
 
-test("jump --json outside tmux and Rex without a terminal is a clear no_tty error", () => {
+test("jump --json outside tmux and Rex without a terminal is a clear no_tty error", async () => {
   vi.stubEnv("TMUX", "");
   vi.stubEnv("TERM_PROGRAM", "");
   const write = vi.spyOn(process.stdout, "write").mockReturnValue(true);
   const jump = vi.fn(() => ({ ok: true as const }));
-  runJump(
+  await runJump(
     store,
     identity(),
     target(),
-    { fzf: () => "", mux: fakeMux(), jump, interactive: () => false },
+    { fzf: () => "", mux: live(), rex: false, jump, interactive: () => false },
     { json: true },
   );
   expect(JSON.parse(String(write.mock.calls[0]?.[0]))).toMatchObject({

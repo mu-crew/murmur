@@ -5,6 +5,44 @@ so it says what changed for a user rather than listing every commit.
 
 ## Unreleased
 
+## 3.0.0-alpha.1
+
+**Needs vtmux or Rex.** murmur now reads every local pane from its multiplexer
+in one `list-panes -a` per tmux server: programs report their own state over
+OSC 7501 and how to relaunch over OSC 7577, and vtmux (with
+`vtmux-program-status on` / `vtmux-program-resume on`) or Rex keeps the
+records. Stock tmux drops both, so it shows no local panes; stay on 2.x
+(`release/2.x`) there. `murmur doctor` checks every local server.
+
+**Nothing to install into harnesses.** The pi extension, `murmur hook`,
+`murmur notify`, `murmur report`, `murmur pane`, `murmur pi migrate`, the inbox
+and the process-chain walk are gone, and `murmur init` no longer edits harness
+settings. Remove the 2.x hook entries, the pi package and the three focus
+hooks: vtmux clears `done` and `error` on focus. See
+[docs/setup.md](docs/setup.md#coming-from-murmur-2x).
+
+**Crew from pane options.** mu's `@mu_agent`, `@mu_workstream`, `@mu_role` and
+`@mu_host` name a crew agent; a `working` record under `mu/delegates` reads as
+`waiting`.
+
+**Crashes without hooks.** A retained pane that died non-zero is `crashed`, and
+a pane that vanishes between two collects while working, waiting or blocked
+gets murmur's own `crashed` row until dismissed (`murmur clear`, the dash).
+`on-attention` still fires once per transition, and not for the pane you are
+looking at.
+
+**Rex panes.** Rex blocks with a program status are listed beside tmux panes.
+
+**Wire and state.** Snapshot version 8 (peers must upgrade together); agent
+rows carry the program's `title`, `message`, `progress`, `blocked_kind`,
+`resume_command`, `resume_cwd` and `cwd`, and drop `agent_id`, `pi_session`,
+model, effort, context and usage. State moves to `~/.local/state/murmur3`;
+the first run copies identity and peers from `murmur2`. Only `@murmur_count_*`
+is still published to tmux; read `#{pane_program_state}`,
+`#{window_program_state}` and `#{session_program_state}` for the rest. The SDK
+drops `listHarnessStates`/`harnessState`: resolve sessions from
+`resume_command`.
+
 ## 2.6.0
 
 **Node floor raised to 22.14.** Matches the lockfile (`better-sqlite3`, Ink,

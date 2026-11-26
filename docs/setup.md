@@ -5,104 +5,91 @@ overview: [README](../README.md). Hard ssh cases: [SSH.md](../SSH.md).
 
 ## Per-node init
 
+murmur 3 reads every local pane from its multiplexer: each program reports its
+own state over [OSC 7501](https://www.superlogical.com/rex/docs/build/program-status)
+(Program Status) and how to relaunch it over
+[OSC 7577](https://www.superlogical.com/rex/docs/build/program-resume)
+(Program Resume), and the multiplexer keeps both records per pane. That needs
+**vtmux** (or Rex): stock tmux drops both sequences, so murmur 3 sees none of
+its panes. On stock tmux, stay on murmur 2.x (`npm i -g @mu-crew/murmur@2`,
+branch `release/2.x`).
+
 On every node that runs agents:
 
 ```bash
-murmur init                      # this node's identity, and hook entries
-pi install npm:@mu-crew/murmur   # the agent-side extension, as a pi package
+murmur init                      # this node's identity; nothing else to install
 ```
 
-`murmur init` also writes the `murmur hook` entries for each hook harness set
-up on the node (see [below](#claude-code-codex-cursor-cli-and-muse-code-murmur-hook)).
-Run it again after an upgrade; a second run changes nothing.
-
-pi loads the extension from the package's `pi` manifest. The CLI and the
-extension are two installs of the same package, so upgrade them together:
-
-```bash
-npm i -g @mu-crew/murmur@latest
-pi update npm:@mu-crew/murmur    # then /reload running agents
-```
-
-Both share one store, in `~/.local/state/murmur2` (`$XDG_STATE_HOME/murmur2`
-when that is set; `MURMUR_STATE_DIR` moves it). When the schema changes, the
-newer side rebuilds the store and the older side refuses it rather than
-rebuilding it back: a CLI verb prints `written by a newer murmur` and exits 4
-(`notify` and `clear`, which run from hooks, stay silent), the dash shows the
-message, and an older extension records nothing until it is upgraded. An
-extension that already had the store open when a newer CLI rebuilt it goes
-stale (its agent drops out of the view) until it reloads. 1.x builds keep their
-own directory (below).
-
-### Coming from murmur 1.x
-
-2.x keeps its state in `~/.local/state/murmur2`, not 1.x's
-`~/.local/state/murmur`: 1.x refuses the store the hook harnesses need, so the
-two cannot share one. The first 2.x command copies the node's `identity.json`
-(the same `host_id`, so peers still know it) and the old store's peers. It
-never writes to the old directory, so a 1.x murmur keeps working there, but
-the two do not see each other's agents: upgrade the CLI and the pi package
-together, then `/reload` running pi agents. Nothing is migrated under
-`MURMUR_STATE_DIR`. Once nothing runs 1.x, remove `~/.local/state/murmur`.
-
-### Coming from `murmur link pi`
-
-The old `link pi` wrote a shim at `~/.pi/agent/extensions/murmur.ts`. Left in
-place next to the package, pi loads the extension twice and every event is
-reported twice. In this order:
-
-```bash
-pi install npm:@mu-crew/murmur   # once: registers the package
-murmur pi migrate                # report only
-murmur pi migrate --apply        # move the shim aside; nothing is deleted
-```
-
-Only a file byte for byte equal to a shim `link pi` generated (its two generated
-paths aside) is moved, into `~/.pi/agent/disabled/`, which pi does not read. A
-`link pi --copy` install, the inlined copy v0.1 `link pi` wrote, or an edited
-file is reported and left for you: move it aside yourself.
-`MURMUR_PI_HOME` changes the home directory it starts from.
-
-Running agents keep the old extension code until they restart. Order matters:
-without `murmur init` the extension loads and records nothing. Agents must run
-**inside tmux**. A pane is the address; without one there is nothing to jump to.
-
-## tmux focus hooks
-
-Looking at a finished agent clears its badge. On every node, in `.tmux.conf`:
+and in `.tmux.conf` (vtmux):
 
 ```tmux
-# Run murmur only when the pane, its window or its session shows a badge.
-%hidden MURMUR_ATTN="#{||:#{m/r:^(done|blocked|error|crashed)$,#{@murmur_pane_state}},#{||:#{m/r:^(done|blocked|error|crashed)$,#{@murmur_window_state}},#{m/r:^(done|blocked|error|crashed)$,#{@murmur_session_state}}}}"
-%hidden MURMUR_CLEAR="run-shell -b 'murmur clear --pane #{pane_id}'"
-set-hook -g after-select-pane      "if -F '$MURMUR_ATTN' \"$MURMUR_CLEAR\""
-set-hook -g after-select-window    "if -F '$MURMUR_ATTN' \"$MURMUR_CLEAR\""
-set-hook -g client-session-changed "if -F '$MURMUR_ATTN' \"$MURMUR_CLEAR\""
+set -s vtmux-program-status on   # keep OSC 7501 records: murmur's only state source
+set -s vtmux-program-resume on   # keep OSC 7577 records: resume_command in status --json
 ```
 
-The gate skips a Node start on switches with nothing to acknowledge. Window and
-session states count too, so orphan badges (from a pane that is gone) still
-clear.
+`murmur doctor` checks both on every local tmux server, and says when a server
+is stock tmux. No harness hook, pi extension or focus hook is installed:
+harnesses report themselves.
 
-These are per node and not optional. `murmur clear` is what acknowledges an
-attention request. A node's own snapshot is what every peer reads — without
-these hooks, finished agents stay `done` in every peer's list.
+The store lives in `~/.local/state/murmur3` (`$XDG_STATE_HOME/murmur3` when that
+is set; `MURMUR_STATE_DIR` moves it). It holds no agent state, only what the
+multiplexer cannot remember: since when each pane has held its state, crashes
+of panes that vanished mid-work, which alerts have fired, and peers. When the
+schema changes, the newer side rebuilds the store and the older side refuses it
+rather than rebuilding it back: a CLI verb prints `written by a newer murmur`
+and exits 4.
 
-Verify with `tmux show-hooks -g`. `set-hook` accepts a name your tmux does not
-have and exits 0, so a wrong name fails silently.
+### Coming from murmur 2.x
 
-Pass the pane id explicitly: hooks run in the tmux server, where `$TMUX_PANE` is
-unset. Without it, a window holding an agent and a shell clears when you focus
-the shell.
+3.x keeps its state in `~/.local/state/murmur3`, not 2.x's
+`~/.local/state/murmur2`. The first 3.x command copies the node's
+`identity.json` (the same `host_id`, so peers still know it) and the old store's
+peers, and never writes to the old directory. Nothing is migrated under
+`MURMUR_STATE_DIR`. Then remove what 2.x installed:
 
-Focus can only cancel attention. It cannot stop a running agent or alter what
-the agent reported about itself.
+- `pi remove npm:@mu-crew/murmur` (the pi extension), and `/reload` running agents
+- the `murmur hook` / `murmur notify` entries in `~/.claude/settings.json`,
+  `~/.codex/config.toml`, `~/.cursor/hooks.json` and Muse's settings
+- the three `murmur clear` focus hooks in `.tmux.conf` (vtmux clears `done` and
+  `error` itself when a pane gains focus)
+- any status format reading `@murmur_pane_state`, `@murmur_window_state`,
+  `@murmur_session_state` or `@murmur_window_has_agent`: read
+  `#{pane_program_state}`, `#{window_program_state}` and
+  `#{session_program_state}` instead. `@murmur_count_*` stays.
 
-A focus hook needs no socket: it runs inside the server whose pane it names.
-From outside that server, name it as `murmur pane` does, with
-`murmur clear --pane %N -L <name>` or `-S <path>`; mu does this to acknowledge
-a failed turn on its own tmux server before retrying it. A hook harness's
-next prompt clears that pane's `error` and `done` by itself.
+Once nothing runs 2.x, remove `~/.local/state/murmur2`.
+
+## Which panes murmur lists
+
+One `list-panes -a` per local tmux server, every collect. A pane is listed when
+its program keeps an OSC 7501 record, or when mu placed it (`@mu_agent` set),
+so a crew pane whose program died is never missed. murmur's seven words, from
+the record and the pane's lifecycle:
+
+| Pane | murmur |
+| --- | --- |
+| retained (`remain-on-exit on`) and dead with a non-zero `pane_dead_status` | `crashed` |
+| vanished between two collects while `working`, `waiting` or `blocked` | `crashed` (murmur's own row) |
+| `blocked` (kind `permission`, `question` or `auth`) | `blocked` |
+| `error` | `error` |
+| `done` | `done` |
+| `working` under the `mu/delegates` record | `waiting` |
+| `working` | `running` |
+| `idle`, or a word the protocol does not define | `idle` |
+
+Who the agent is comes from the pane options mu sets when it places a worker:
+`@mu_agent` (its name, and what makes the pane crew), `@mu_workstream`,
+`@mu_role`, and `@mu_host` for a remote worker's local pane. A pane without
+`@mu_agent` is yours.
+
+Harnesses that speak OSC 7501 natively need nothing: pi (>= 1.1.0), Claude Code
+(>= 2.1.295) and Codex (>= 0.164.0). Cursor CLI and Muse Code need a small
+hook bridge that writes the sequence to the pane's tty.
+
+A `crashed` row murmur recorded stays until you dismiss it, in the dash or with
+`murmur clear --pane %N` (`-L <name>` / `-S <path>` for another tmux server,
+`--rex` for a Rex block). Everything else on a pane is its program's, and goes
+when the program says so.
 
 ## Side panel
 
@@ -123,260 +110,6 @@ spans the full viewport even when the existing layout is nested, and takes focus
 Press `?` for the live key legend. The side panel and dashboard share compact
 mode, sort and visibility settings.
 
-## Harnesses other than pi
-
-pi reports in-process through the extension. Claude Code, Codex, the Cursor
-CLI (`cursor-agent`) and Muse Code report through `murmur hook`, which gives
-them ownership of their pane, `running` and `idle`, `blocked`, and the last
-turn's text. The rest — opencode, and Codex or the Cursor CLI set up the older
-way — use `murmur notify`.
-
-### Claude Code, Codex, Cursor CLI and Muse Code: `murmur hook`
-
-`murmur init` writes these entries for you:
-
-```bash
-murmur init                          # every harness whose config directory exists
-murmur init --hooks cursor-agent     # also one not set up yet (or: all)
-murmur init --no-hooks               # identity only
-```
-
-It writes `~/.claude/settings.json`, `~/.codex/hooks.json`,
-`~/.cursor/hooks.json` and the `hooks` key of `~/.config/muse/settings.json`,
-for each harness whose directory (`~/.claude`, `~/.codex`, `~/.cursor`,
-`~/.config/muse`) exists. Those files are shared with mu, museum, muzzle and
-your own hooks, so murmur touches only handlers whose command starts with
-`murmur`: it adds the missing ones, sets Muse's `Interrupt` to `async`, and
-removes its own stale ones (a duplicate, a `murmur` handler under a filtering
-matcher or on an event it does not hook, the Cursor CLI's older
-`murmur notify` entry). Everything else stays where it was. A file already
-right is not rewritten, a symlinked file keeps its link, and a file that is
-not valid JSON is reported and left alone. A command that runs murmur by
-absolute path is yours, not murmur's: replace it with `murmur` on `PATH`, or
-`init` adds a second one. `CLAUDE_CONFIG_DIR` and `CODEX_HOME`, when set, move
-Claude Code's and codex's files (`$CLAUDE_CONFIG_DIR/settings.json`,
-`$CODEX_HOME/hooks.json` and `config.toml`) for `init` and `doctor` as they do
-for the harnesses, muzzle and museum. Muse's and the Cursor CLI's stay under
-the home directory.
-
-`murmur doctor` checks the same entries: drift (a missing event, a stray or
-non-async handler, an unreadable file) is a problem, and a harness set up with
-no murmur entries is an observation. Both name `murmur init` as the fix.
-
-Once codex has these hooks, an older `notify` line in `~/.codex/config.toml`
-that runs murmur reports every finished turn a second time. murmur does not
-edit that file: `init` warns and `doctor` reports a problem until you remove
-the line.
-
-By hand, run `murmur hook claude` (or `murmur hook codex`) for each hooked
-event. The payload arrives on stdin and names its own event, so one command
-serves them all. Claude Code, in `~/.claude/settings.json`:
-
-```json
-{
-  "hooks": {
-    "SessionStart": [{ "hooks": [{ "type": "command", "command": "murmur hook claude" }] }],
-    "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "murmur hook claude" }] }],
-    "PermissionRequest": [{ "hooks": [{ "type": "command", "command": "murmur hook claude" }] }],
-    "Notification": [{ "hooks": [{ "type": "command", "command": "murmur hook claude" }] }],
-    "Stop": [{ "hooks": [{ "type": "command", "command": "murmur hook claude" }] }],
-    "StopFailure": [{ "hooks": [{ "type": "command", "command": "murmur hook claude" }] }],
-    "SessionEnd": [{ "hooks": [{ "type": "command", "command": "murmur hook claude" }] }]
-  }
-}
-```
-
-Codex takes the same shape in `~/.codex/hooks.json`, with `murmur hook codex`,
-for `SessionStart`, `UserPromptSubmit`, `PermissionRequest`, `Stop`,
-`Interrupt` and `SessionEnd`. Codex asks you to trust new or changed hooks
-once, including the ones `murmur init` writes. Drop the `notify` line from `~/.codex/config.toml` when you add these,
-or a finished turn is reported twice.
-
-The Cursor CLI, in `~/.cursor/hooks.json` (or a project's `.cursor/hooks.json`),
-with `murmur hook cursor-agent`:
-
-```json
-{
-  "version": 1,
-  "hooks": {
-    "sessionStart": [{ "command": "murmur hook cursor-agent" }],
-    "beforeSubmitPrompt": [{ "command": "murmur hook cursor-agent" }],
-    "afterAgentResponse": [{ "command": "murmur hook cursor-agent" }],
-    "stop": [{ "command": "murmur hook cursor-agent" }],
-    "sessionEnd": [{ "command": "murmur hook cursor-agent" }]
-  }
-}
-```
-
-`afterAgentResponse` carries the turn's text and may land after `stop`; murmur
-pairs the two by the turn's `generation_id`. An Escape reads `idle`, and the
-`error` stop cursor-agent sends after it is dropped. The Cursor CLI has no
-permission hook, so its pane never reads `blocked`. `murmur hook cursor-agent`
-replies `{}` on stdout: the CLI treats empty stdout as a failed hook
-(`empty_stdout`) and tracking never sticks. Replace the
-`murmur notify --source cursor` entry below when you add these.
-
-Muse Code, under the `hooks` key of `~/.config/muse/settings.json` (or a
-project's `.muse/hooks.json`), in Claude Code's shape with
-`murmur hook muse`, for `SessionStart`, `UserPromptSubmit`,
-`PermissionRequest`, `Stop`, `StopFailure`, `Interrupt` and `SessionEnd`.
-`Interrupt` must be declared asynchronous, and only this settings route
-delivers it; a Claude-format plugin cannot subscribe to it:
-
-```json
-{
-  "hooks": {
-    "Interrupt": [
-      { "hooks": [{ "type": "command", "command": "murmur hook muse", "async": true }] }
-    ]
-  }
-}
-```
-
-Muse runs its hooks with a cleared environment (no `$TMUX`, none of mu's
-variables), which murmur does not need: it places the event by walking the
-hook's process chain to the tmux server, and names a mu worker from mu's
-anchor file.
-
-Do not hook `PreToolUse` or `PostToolUse`: they fire on every tool call and
-carry no state murmur uses. Harness hooks exit 0 so a murmur problem never
-blocks a turn. The agent must run in a tmux pane; a hook
-whose process chain does not reach a tmux server writes nothing. Events wait in
-a per-pane inbox under `~/.local/state/murmur2/inbox` (the home path whatever
-`XDG_STATE_HOME` says, since Muse's hooks never see it) until a reader
-(`murmur status`, the dash, `murmur pane`) applies them. An agent counts as
-crew when mu started it (its anchor file), or when the hook sees
-`MU_MANAGED_AGENT=1` or `MU_AGENT_NAME`.
-
-A worker mu starts on a remote host for a pane on this one carries a remote
-key (in its anchor, or `MU_REMOTE_KEY`). Its hooks write to that host's remote
-area instead of its inbox, so it never appears in the host's own `murmur
-status`; mu reads it with `murmur pane --remote <key> --json` on that host.
-
-### pi on mu's `hooks` channel
-
-With `MU_PI_CHANNEL=hooks` in its environment, murmur's pi extension stops
-using the store: it writes inbox events like the hooks above and never claims
-the pane or loads a native module. Set it only for a pi build that cannot load
-murmur's store; mu then drives that pi like the harnesses above.
-
-### `murmur report`
-
-A script, or a harness with no hook row, can say what it runs with:
-
-```sh
-murmur report --model claude-opus-4 --provider anthropic --effort high \
-  --context-pct 42 --context-tokens 84000 --context-window 200000
-```
-
-Each flag sets only its own key and leaves the others as they are. It is placed
-like `murmur hook` (the process chain from the pane's harness); `--pane %N`
-(with `-L`/`-S`) targets a pane from outside it. It is best effort: an invalid
-value, a flag missing its argument or an unknown option is warned about on
-stderr and skipped (the valid fields still go through), no flags writes nothing, and the
-exit status is always 0. It changes no activity or attention, never claims a
-pane (the pane needs a live harness row already), and ignores pi, which reports
-in-process, and remote workers. Nothing runs it by default. A murmur that
-predates it drops the event silently.
-
-### `murmur notify`
-
-Harnesses with no hook murmur maps run a command when something happens, and
-`murmur notify` records an attention request for the pane it runs in.
-
-This path is attention only: no ownership, no `running`/`idle`, no crash
-detection. Unrecognised events become `blocked`, so a new harness still puts a
-row in front of you.
-
-A request counts as crew, not yours, when the hook's environment has
-`MU_MANAGED_AGENT=1` or `MU_AGENT_NAME`, which mu sets on the agents it places.
-The hook inherits them from the harness, so a wrapper that clears the
-environment (`env -i`) makes a mu worker count as yours.
-
-### Codex
-
-```toml
-# ~/.codex/config.toml
-notify = ["murmur", "notify", "--source", "codex"]
-```
-
-Do not wrap with `sh -lc` alone. Codex appends the event JSON as one more
-argument, and `sh -lc '<script>' <arg>` puts that argument in `$0` rather than
-`$1` — the wrapper swallows the payload. Exec murmur directly, or forward
-explicitly:
-
-```toml
-notify = ["/bin/sh", "-lc", "exec murmur notify --source codex \"$@\"", "codex-notify"]
-```
-
-Codex fires `agent-turn-complete` (turn ended, waiting for you) — murmur records
-`done`. Drop `--title Codex` if you have it; the message falls back to the
-payload's `last-assistant-message`.
-
-The same fields may arrive as JSON on stdin (opencode's plugin form). argv wins
-when both are present; flags still beat the payload, so `--event-type` can pin
-an event murmur does not know.
-
-### opencode
-
-OpenCode 2 has no notify hook, so a plugin pipes JSON to `murmur notify`. The
-[mu-crew dotfiles](https://github.com/mu-crew/dotfiles) ship one at
-`opencode/plugins/murmur/tui.ts`. Install it as
-`~/.config/opencode/plugins/murmur/tui.ts`. opencode loads only a directory
-with a `tui` entry, and skips a bare file in `plugins/`.
-
-It must be a TUI plugin. A server plugin runs in opencode's shared background
-service, which keeps the environment of the pane that first started it. Every
-notification from every opencode window would then land on that one pane. A
-TUI plugin runs in the terminal, so `murmur notify` gets the right
-`$TMUX_PANE`. Every TUI sees every session's events, so the plugin only
-reports sessions it has shown, either as the open session or as a tab.
-
-A finished turn arrives as `session.execution.succeeded`. The plugin sends it
-as `session.idle`, which murmur records as `done`. `permission.asked` is not in
-murmur's table, so it becomes `blocked`.
-
-### Cursor CLI
-
-The attention-only form; `murmur hook cursor-agent` above supersedes it.
-
-```json
-{
-  "version": 1,
-  "hooks": {
-    "stop": [
-      {
-        "command": "murmur notify --source cursor"
-      }
-    ]
-  }
-}
-```
-
-`~/.cursor/hooks.json` (user) or `.cursor/hooks.json` (project). `status:
-completed` → `done`; `error` → `error`; `aborted` → `blocked`. The agent must run inside
-tmux. Interactive `agent` sessions are the target; non-interactive `agent -p`
-has been observed to omit `stop`.
-
-### PATH in hooks
-
-A notify hook inherits the PATH of whatever launched the harness. `/bin/sh -l`
-does not fix a missing npm prefix. Verify from inside the harness:
-
-```bash
-murmur notify --source probe --message reachable && murmur status
-murmur clear --pane "$TMUX_PANE"
-```
-
-If `murmur` is missing there, use the absolute path from `command -v murmur`.
-
-The probe is a real attention request: no event name → `blocked`, so the window
-badges. `murmur clear` (or focus, with the hooks above) takes it back.
-
-`notify` outside tmux, or against a store from a newer murmur, records nothing
-and exits 0, so it cannot break the caller's exit code. A pane reached only via notify is still a full jumpable
-row.
-
 ## Notifications
 
 murmur runs `~/.config/murmur/on-attention` (or `$MURMUR_CONFIG_DIR/on-attention`)
@@ -391,7 +124,7 @@ discarded, and these variables set:
 | `MURMUR_HOST` | the peer name, or this node's display name |
 | `MURMUR_LOCAL` | `1` for this node, `0` for a peer |
 | `MURMUR_PANE` | the pane id on its node |
-| `MURMUR_MESSAGE` | the request text; for `error`, pi's error message |
+| `MURMUR_MESSAGE` | the program's own message (OSC 7501 `msg`), else its title |
 | `MURMUR_HOST_COLOR` | the host's accent hex, as the dash colors it |
 | `MURMUR_GLYPH` | the kind's Nerd Font glyph, as every murmur surface shows it |
 | `MURMUR_KIND_COLOR` | the kind's hex color, as every murmur surface shows it |
@@ -426,8 +159,11 @@ status-bar tick, as do the dash and side panel. So an event arrives within one
 tick, and only on a node that runs one of those. Run the hook on the machine
 you sit at; peers need no hook. Each event fires once even when several
 surfaces collect at the same time. Events older than 15 minutes do not fire, so
-installing the hook does not replay the backlog. A crew agent's `done` fires
-too; filter on `MURMUR_EVENT`'s `driver` if you do not want it.
+installing the hook does not replay the backlog. An event on the pane you are
+looking at (the active pane of the active window of an attached session) is
+claimed but not announced, so looking away later does not announce it either.
+A crew agent's `done` fires too; filter on `MURMUR_EVENT`'s `driver` if you do
+not want it.
 
 ## Peers and doctor
 
@@ -442,7 +178,9 @@ murmur doctor --topology # also probe who can reach whom
 ```
 
 `peer list` is local. `doctor` dials out, and also checks this node's own
-hook entries ([above](#claude-code-codex-cursor-cli-and-muse-code-murmur-hook)). Membership is per node: peering a
+multiplexers: every local tmux server must be vtmux with
+`vtmux-program-status on` (and should have `vtmux-program-resume on`), or Rex
+must be running ([above](#per-node-init)). Membership is per node: peering a
 machine does not mean it peers you — if it does not peer back, its list cannot
 see your agents. `doctor` writes nothing and repairs nothing; it prints the
 commands. Exit 0 for observations, 1 only for a real problem. Suggestions name
@@ -523,12 +261,16 @@ switches to the remote host's own dash instead of coming home.
 
 ## Rex
 
-[Rex](https://www.superlogical.com/rex/) shows terminal program status
-([OSC 7501](https://www.superlogical.com/rex/docs/build/program-status)) on
-its tabs and in its session picker, and pi already reports its own pane that
-way. `murmur rex-feed` adds the rest of the fleet: run it in a tab of its own,
-and that tab carries one record per agent the status pill counts, with the
-most urgent state on its root record.
+[Rex](https://www.superlogical.com/rex/) keeps OSC 7501 records per block
+itself, so murmur lists Rex panes beside tmux ones: each collect asks the local
+Rex server (`rex api call`, `program_status` and `process` per block, never
+starting a server) and reads the answer into the same shape. A Rex pane's
+address is its block id; `murmur clear --rex --pane block:<id>` dismisses its
+crash. No Rex, or a Rex that does not answer, is simply no Rex panes.
+
+`murmur rex-feed` goes the other way: run it in a tab of its own and that tab
+carries one record per agent the status pill counts (local and remote), with
+the most urgent state on its root record.
 
 ```sh
 rex window new crew -- murmur rex-feed
@@ -541,11 +283,8 @@ rex window new crew -- murmur rex-feed
   `waiting` are `working`. Idle agents get no record.
 - Each record's title is the agent's label, prefixed with its host for a
   remote agent; its message is the dash card's one-liner.
-- It re-reads the store every 2 s and fetches peers on the collect floor,
-  as `murmur status` does. Ctrl-C clears every record it set.
-
-The records belong to the feed's pane, so Rex lists them there; selecting one
-does not jump to the agent. Use the dash, or `murmur jump`, for that.
+- It re-reads every 2 s and fetches peers on the collect floor, as
+  `murmur status` does. Ctrl-C clears every record it set.
 
 ### dash and jump in a Rex pane
 
@@ -556,11 +295,10 @@ command for a remote one. The dash, or whatever called `murmur jump`, stays
 where it was. Closing the
 tab, or detaching, ends the attach.
 
-That tab shows no program status of its own: the agent runs inside tmux, and
-tmux drops OSC 7501 rather than pass it to the outer terminal (pi does not
-wrap it in DCS passthrough). Keep `rex-feed` running for the fleet's state.
-An agent started directly in a Rex pane, not in tmux, reports its own (pi
-does), but murmur cannot see it.
+That tab shows no program status of its own: the agent runs inside tmux, which
+keeps the record rather than pass it to the outer terminal. Keep `rex-feed`
+running for the fleet's state. An agent started directly in a Rex pane, not in
+tmux, reports its own, and murmur lists it as a Rex pane.
 
 The dash's glance and prompt input (`i`) work as in tmux: both address the
 agent's pane, not a client. Still tmux-only: `murmur sidepanel` (it lays out

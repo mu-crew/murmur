@@ -3,17 +3,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test, vi } from "vitest";
 import { DASH_PANE_OPTION } from "../src/goto.js";
-import { asPaneId, asSessionId, asWindowId } from "../src/ids.js";
+import { asPaneId } from "../src/ids.js";
+import { chosenWindowName } from "../src/local.js";
 import {
   chainArg,
   chainedTmuxCalls,
-  chosenWindowName,
   conventionalTmuxDirectory,
   deriveTmuxServer,
   pidAlive,
   procArgv,
   tmux,
-  tmuxAgentState,
   tmuxArgs,
   tmuxServerAbsent,
 } from "../src/mux.js";
@@ -64,86 +63,6 @@ test("tmux argv selects default, label, and path servers without a shell", () =>
   ]);
 });
 
-test("currentWindow records the socket-derived server", () => {
-  const socket = `${conventionalTmuxDirectory()}/mule`;
-  tmuxReplies.push(`$1|@2|work|reviewer|0|${socket}`);
-  process.env.TMUX_PANE = "%34";
-  try {
-    expect(tmux.currentWindow()).toMatchObject({
-      pane: "%34",
-      server: { kind: "label", value: "mule" },
-    });
-  } finally {
-    delete process.env.TMUX_PANE;
-  }
-});
-
-test("currentView answers location, targets and focus from one list-panes", () => {
-  const socket = `${conventionalTmuxDirectory()}/mule`;
-  tmuxCalls.length = 0;
-  tmuxReplies.length = 0;
-  const row = (pane: string, window: string, active: string) =>
-    [pane, "$1", window, "work", "reviewer", "0", socket, active].join("|");
-  tmuxReplies.push([row("%3", "@2", "0"), row("%34", "@2", "1"), row("%9", "@5", "0")].join("\n"));
-  process.env.TMUX_PANE = "%34";
-  try {
-    expect(tmux.currentView()).toEqual({
-      location: {
-        server: { kind: "label", value: "mule" },
-        session: "$1",
-        window: "@2",
-        pane: "%34",
-        session_name: "work",
-        window_name: "reviewer",
-      },
-      targets: { session: "$1", windowPanes: ["%3", "%34"], sessionPanes: ["%3", "%34", "%9"] },
-      focused: true,
-    });
-    expect(tmuxCalls).toHaveLength(1);
-    expect(tmuxCalls[0]?.slice(0, 5)).toEqual(["list-panes", "-s", "-t", "%34", "-F"]);
-  } finally {
-    delete process.env.TMUX_PANE;
-  }
-});
-
-test("currentView prefers the active link of a window linked twice in one session", () => {
-  const socket = `${conventionalTmuxDirectory()}/mule`;
-  tmuxCalls.length = 0;
-  tmuxReplies.length = 0;
-  const row = (pane: string, window: string, active: string) =>
-    [pane, "$1", window, "work", "reviewer", "0", socket, active].join("|");
-  // The same pane listed once per link; the second link is the active one.
-  tmuxReplies.push([row("%0", "@1", "0"), row("%0", "@1", "1")].join("\n"));
-  process.env.TMUX_PANE = "%0";
-  try {
-    const view = tmux.currentView();
-    expect(view?.focused).toBe(true);
-    expect(view?.targets.sessionPanes).toEqual(["%0"]);
-    // Rows that put the pane in different windows are ambiguous: no answer.
-    tmuxReplies.push([row("%0", "@1", "0"), row("%0", "@2", "1")].join("\n"));
-    expect(tmux.currentView()).toBeNull();
-  } finally {
-    delete process.env.TMUX_PANE;
-  }
-});
-
-test("currentView is null outside a pane, when tmux fails, and when our pane is not listed", () => {
-  tmuxCalls.length = 0;
-  tmuxReplies.length = 0;
-  expect(tmux.currentView()).toBeNull();
-  expect(tmuxCalls).toEqual([]);
-
-  process.env.TMUX_PANE = "%34";
-  try {
-    tmuxReplies.push("THROW:can't find pane: %34");
-    expect(tmux.currentView()).toBeNull();
-    tmuxReplies.push(`%9|$1|@5|work|w|0|${conventionalTmuxDirectory()}/mule|0`);
-    expect(tmux.currentView()).toBeNull();
-  } finally {
-    delete process.env.TMUX_PANE;
-  }
-});
-
 test("a missing tmux server means no panes, other failures mean unknown", () => {
   expect(tmuxServerAbsent("no server running on /tmp/tmux-1000/default\n")).toBe(true);
   expect(
@@ -167,191 +86,93 @@ test("pidAlive is true for self and false for an unused pid", () => {
   expect(pidAlive(2 ** 22)).toBe(false);
 });
 
-test("tmux agent states preserve the established working token", () => {
-  expect(tmuxAgentState("running")).toBe("working");
-  expect(tmuxAgentState("blocked")).toBe("blocked");
-});
-
-test("an idle-only agent window keeps its agent marker", () => {
-  tmuxCalls.length = 0;
-
-  tmux.setWindowState(asWindowId("@7"), null, undefined, true);
-
-  expect(tmuxCalls).toEqual([
-    ["set-window-option", "-qu", "-t", "@7", "@murmur_window_state"],
-    ["set-window-option", "-q", "-t", "@7", "@murmur_window_has_agent", "1"],
-    ["refresh-client", "-S"],
-  ]);
-});
-
-test("a window without agents clears both murmur window options", () => {
-  tmuxCalls.length = 0;
-
-  tmux.setWindowState(asWindowId("@7"), null);
-
-  expect(tmuxCalls).toEqual([
-    ["set-window-option", "-qu", "-t", "@7", "@murmur_window_state"],
-    ["set-window-option", "-qu", "-t", "@7", "@murmur_window_has_agent"],
-    ["refresh-client", "-S"],
-  ]);
-});
-
-test("pane state and label use distinct pane-scoped options", () => {
-  const dateNow = vi.spyOn(Date, "now").mockReturnValue(1790000000000);
-  tmuxCalls.length = 0;
-
-  tmux.setPaneState(asPaneId("%7"), "running");
-  tmux.setPaneState(asPaneId("%8"), null);
-  tmux.setPaneLabel(asPaneId("%7"), "worker-1");
-  tmux.setPaneLabel(asPaneId("%8"), null);
-
-  expect(tmuxCalls).toEqual([
-    [
-      "if-shell",
-      "-F",
-      "-t",
-      "%7",
-      "#{!=:#{@murmur_pane_state},working}",
-      "set-option -pq -t %7 @murmur_pane_since 1790000000000",
-      "",
-    ],
-    ["set-option", "-pq", "-t", "%7", "@murmur_pane_state", "working"],
-    ["set-option", "-pqu", "-t", "%8", "@murmur_pane_state"],
-    ["set-option", "-pqu", "-t", "%8", "@murmur_pane_since"],
-    ["set-option", "-pq", "-t", "%7", "@murmur_pane_label", "worker-1"],
-    ["set-option", "-pqu", "-t", "%8", "@murmur_pane_label"],
-  ]);
-  dateNow.mockRestore();
-});
-
-test("state reads and writes select the location's private server", () => {
-  tmuxCalls.length = 0;
-  tmuxReplies.length = 0;
-  tmuxReplies.push("%34");
-
-  expect(tmux.panesInWindow(asWindowId("@7"), { kind: "label", value: "mule" })).toEqual(["%34"]);
-  tmux.setWindowState(asWindowId("@7"), "done", { kind: "label", value: "mule" });
-
-  expect(tmuxCalls).toEqual([
-    ["-L", "mule", "list-panes", "-t", "@7", "-F", "#{pane_id}"],
-    ["-L", "mule", "set-window-option", "-q", "-t", "@7", "@murmur_window_state", "done"],
-    ["-L", "mule", "set-window-option", "-q", "-t", "@7", "@murmur_window_has_agent", "1"],
-    ["-L", "mule", "refresh-client", "-S"],
-  ]);
-});
-
-const COUNTS = {
-  totals: { crashed: 0, error: 1, blocked: 2, done: 0, running: 1, waiting: 0, idle: 3 },
-  crew: 4,
-};
-
-test("publishTargets reads the window's panes and its whole session in one call", () => {
-  tmuxCalls.length = 0;
-  tmuxReplies.length = 0;
-  tmuxReplies.push("$2|@7|%1\n$2|@8|%5\n$2|@7|%6\n");
-
-  expect(tmux.publishTargets(asWindowId("@7"), { kind: "label", value: "mule" })).toEqual({
-    session: "$2",
-    windowPanes: ["%1", "%6"],
-    sessionPanes: ["%1", "%5", "%6"],
-  });
-  expect(tmuxCalls).toEqual([
-    [
-      ...["-L", "mule", "list-panes", "-s", "-t", "@7"],
-      ...["-F", "#{session_id}|#{window_id}|#{pane_id}"],
-    ],
-  ]);
-});
-
-test("publishTargets is unknown, not empty, when tmux cannot list the window", () => {
-  tmuxReplies.length = 0;
-  tmuxReplies.push("THROW:can't find window: @7");
-
-  expect(tmux.publishTargets(asWindowId("@7"))).toBeNull();
-});
-
-test("a whole publish is one chained tmux write ending in one repaint", () => {
-  const dateNow = vi.spyOn(Date, "now").mockReturnValue(1790000000000);
-  tmuxCalls.length = 0;
-
-  tmux.publish(
-    asWindowId("@7"),
-    {
-      panes: [
-        { pane: asPaneId("%7"), state: "running", label: "worker-1" },
-        { pane: asPaneId("%8"), state: null, label: null },
-      ],
-      window: { state: "blocked", hasAgent: true },
-      session: { session: asSessionId("$3"), state: "running" },
-      counts: COUNTS,
-    },
-    { kind: "label", value: "mule" },
-  );
-
-  expect(tmuxCalls).toEqual([
-    [
-      ...["-L", "mule"],
-      ...["if-shell", "-F", "-t", "%7", "#{!=:#{@murmur_pane_state},working}"],
-      ...["set-option -pq -t %7 @murmur_pane_since 1790000000000", "", ";"],
-      ...["set-option", "-pq", "-t", "%7", "@murmur_pane_state", "working", ";"],
-      ...["set-option", "-pq", "-t", "%7", "@murmur_pane_label", "worker-1", ";"],
-      ...["set-option", "-pqu", "-t", "%8", "@murmur_pane_state", ";"],
-      ...["set-option", "-pqu", "-t", "%8", "@murmur_pane_since", ";"],
-      ...["set-option", "-pqu", "-t", "%8", "@murmur_pane_label", ";"],
-      ...["set-window-option", "-q", "-t", "@7", "@murmur_window_state", "blocked", ";"],
-      ...["set-window-option", "-q", "-t", "@7", "@murmur_window_has_agent", "1", ";"],
-      ...["set-option", "-q", "-t", "$3", "@murmur_session_state", "working", ";"],
-      ...["set-option", "-gqu", "@murmur_count_crashed", ";"],
-      ...["set-option", "-gq", "@murmur_count_error", "1", ";"],
-      ...["set-option", "-gq", "@murmur_count_blocked", "2", ";"],
-      ...["set-option", "-gqu", "@murmur_count_done", ";"],
-      ...["set-option", "-gq", "@murmur_count_working", "1", ";"],
-      ...["set-option", "-gqu", "@murmur_count_waiting", ";"],
-      ...["set-option", "-gq", "@murmur_count_idle", "3", ";"],
-      ...["set-option", "-gq", "@murmur_count_crew", "4", ";"],
-      ...["refresh-client", "-S"],
-    ],
-  ]);
-  dateNow.mockRestore();
-});
-
-test("a publish without a session leaves the session option alone", () => {
-  tmuxCalls.length = 0;
-
-  tmux.publish(asWindowId("@7"), {
-    panes: [],
-    window: { state: null, hasAgent: false },
-    session: null,
-    counts: COUNTS,
-  });
-
-  expect(tmuxCalls).toHaveLength(1);
-  expect(tmuxCalls[0]?.join(" ")).not.toContain("@murmur_session_state");
-  expect(tmuxCalls[0]?.slice(0, 12)).toEqual([
-    ...["set-window-option", "-qu", "-t", "@7", "@murmur_window_state", ";"],
-    ...["set-window-option", "-qu", "-t", "@7", "@murmur_window_has_agent", ";"],
-  ]);
-});
-
-// tmux reads an argv element ending in `;` as a separator: a label of `;`
-// aborted the rest of the chain, and `worker;` lost its `;`.
 test.each([
   [";", "\\;"],
   ["worker;", "worker\\;"],
   ["a ; b", "a ; b"],
-])("a pane label %j cannot split the chain", (label, sent) => {
+])("a value %j cannot split the chain", (value, sent) => {
   tmuxCalls.length = 0;
 
-  tmux.publish(asWindowId("@7"), {
-    panes: [{ pane: asPaneId("%7"), state: null, label }],
-    window: { state: null, hasAgent: true },
-    session: null,
-    counts: COUNTS,
-  });
+  tmux.run(
+    [
+      ["set-option", "-gq", "@murmur_count_working", value],
+      ["set-option", "-gqu", "@murmur_count_idle"],
+    ],
+    { kind: "label", value: "mule" },
+  );
 
   const [call] = tmuxCalls;
+  expect(call?.slice(0, 2)).toEqual(["-L", "mule"]);
   expect(call).toContain(sent);
-  expect(call?.filter((arg) => arg === ";")).toHaveLength(13);
+  // Two commands and the repaint: two separators.
+  expect(call?.filter((arg) => arg === ";")).toHaveLength(2);
+  expect(call?.slice(-2)).toEqual(["refresh-client", "-S"]);
+});
+
+test("listPanes is ONE list-panes -a on the named server, one row per pane", () => {
+  tmuxCalls.length = 0;
+  tmuxReplies.length = 0;
+  tmuxReplies.push("%1|working|a~1b\n%2||\n");
+  expect(
+    tmux.listPanes(["#{pane_id}", "#{pane_program_state}", "#{@mu_agent}"], {
+      kind: "path",
+      value: "/tmp/x.sock",
+    }),
+  ).toEqual([
+    ["%1", "working", "a|b"],
+    ["%2", "", ""],
+  ]);
+  expect(tmuxCalls).toEqual([
+    [
+      "-S",
+      "/tmp/x.sock",
+      "list-panes",
+      "-a",
+      "-F",
+      "#{pane_id}|#{pane_program_state}|#{@mu_agent}",
+    ],
+  ]);
+});
+
+test("listPanes: no server running is no panes, any other failure is unknown", () => {
+  // `[]` retires the panes a previous collect saw on that server; null keeps
+  // them, because a timeout says nothing about whether they exist.
+  tmuxReplies.length = 0;
+  tmuxReplies.push("THROW:no server running on /tmp/tmux-1000/mule");
+  expect(tmux.listPanes(["#{pane_id}"], { kind: "label", value: "mule" })).toEqual([]);
+  tmuxReplies.push("THROW:error connecting to /tmp/tmux-1000/x (Permission denied)");
+  expect(tmux.listPanes(["#{pane_id}"], { kind: "label", value: "x" })).toBeNull();
+});
+
+test("serverInfo reads vtmux's version and both OSC options, and only on vtmux", () => {
+  tmuxCalls.length = 0;
+  tmuxReplies.length = 0;
+  tmuxReplies.push("3.8-rc3|3.8", "on", "off");
+  expect(tmux.serverInfo({ kind: "default" })).toEqual({
+    vtmux: "3.8-rc3",
+    version: "3.8",
+    programStatus: "on",
+    programResume: "off",
+  });
+  expect(tmuxCalls).toEqual([
+    ["-L", "default", "display-message", "-p", "#{vtmux_version}|#{version}"],
+    ["-L", "default", "show-options", "-sqv", "vtmux-program-status"],
+    ["-L", "default", "show-options", "-sqv", "vtmux-program-resume"],
+  ]);
+
+  // Stock tmux has neither option, and is not asked for them.
+  tmuxCalls.length = 0;
+  tmuxReplies.push("|3.8");
+  expect(tmux.serverInfo({ kind: "default" })).toEqual({
+    vtmux: null,
+    version: "3.8",
+    programStatus: null,
+    programResume: null,
+  });
+  expect(tmuxCalls).toHaveLength(1);
+
+  tmuxReplies.push("THROW:no server running");
+  expect(tmux.serverInfo({ kind: "default" })).toBeNull();
 });
 
 test("chainArg escapes only a trailing semicolon", () => {
@@ -466,51 +287,6 @@ test("a capture asks tmux for escape sequences", () => {
   expect(tmuxCalls).toEqual([["capture-pane", "-p", "-e", "-t", "%7", "-S", "-40"]]);
 });
 
-test("publishAgentStates is one tmux read and one tmux write", async () => {
-  const { mkdtempSync } = await import("node:fs");
-  const { tmpdir } = await import("node:os");
-  const { join } = await import("node:path");
-  const { publishAgentStates } = await import("../src/agent-state.js");
-  const { openStore } = await import("../src/store.js");
-  process.env.MURMUR_STATE_DIR = mkdtempSync(join(tmpdir(), "murmur-mux-publish-"));
-  const store = openStore();
-  const location = {
-    server: { kind: "default" as const },
-    session: asSessionId("$1"),
-    window: asWindowId("@1"),
-    pane: asPaneId("%1"),
-    session_name: null,
-    window_name: null,
-  };
-  store.claimAgent({
-    location,
-    owner_pid: process.pid,
-    meta: {
-      agent_name: "worker-1",
-      pi_session: null,
-      workstream: null,
-      role: null,
-      cli: "pi",
-      driver: "orchestrated",
-    },
-  });
-  tmuxCalls.length = 0;
-  tmuxReplies.length = 0;
-  tmuxReplies.push("$1|@1|%1\n$1|@1|%2\n$1|@2|%3\n");
-
-  try {
-    expect(publishAgentStates(asWindowId("@1"), tmux, store)).toBe(true);
-  } finally {
-    store.close();
-  }
-
-  expect(tmuxCalls).toHaveLength(2);
-  expect(tmuxCalls[0]?.slice(0, 3)).toEqual(["-L", "default", "list-panes"]);
-  expect(tmuxCalls[1]?.slice(-2)).toEqual(["refresh-client", "-S"]);
-  expect(tmuxCalls[1]?.join(" ")).toContain("-t %2 @murmur_pane_label");
-  expect(tmuxCalls[1]?.join(" ")).not.toContain("%3");
-});
-
 function fakeProc(entries: Record<string, string>): string {
   const root = mkdtempSync(join(tmpdir(), "murmur-proc-"));
   for (const [pid, cmdline] of Object.entries(entries)) {
@@ -599,41 +375,30 @@ test("localPaneProcesses batches one ps for many candidates, and unfiltered keep
   expect(tmuxCalls[1]).toEqual(["ww", "-o", "pid=,command=", "10", "20", "30", "40", "50"]);
 });
 
-test("paneOptionValues reads one option for every pane in one call, on the named server", () => {
-  tmuxCalls.length = 0;
-  tmuxReplies.length = 0;
-  // tmux expands an unset option to the empty string: that pane has none.
-  tmuxReplies.push("%1|linuxpc\n%2|\n%3|dev0\n");
-  expect(tmux.paneOptionValues("@mu_host", { kind: "label", value: "mule" })).toEqual(
-    new Map([
-      [asPaneId("%1"), "linuxpc"],
-      [asPaneId("%3"), "dev0"],
-    ]),
-  );
-  expect(tmuxCalls).toEqual([
-    ["-L", "mule", "list-panes", "-a", "-F", "#{pane_id}|#{s/~/~0/;s/[|]/~1/:@mu_host}"],
-  ]);
-});
-
-test("paneOptionValues is empty when tmux cannot answer", () => {
-  tmuxReplies.length = 0;
-  tmuxReplies.push("THROW:no server running");
-  expect(tmux.paneOptionValues("@mu_host").size).toBe(0);
-});
-
-test("currentWindow is null outside tmux, even when a server is running", () => {
-  // The extension no-ops on a null location, so this is what keeps a pi started
-  // outside tmux out of the log. Asking tmux directly does not work: on a
-  // machine with a running server, `display-message` answers from any process
-  // and names whichever pane the server thinks is active — so a bare ssh login
-  // or a cron job would have recorded itself in an unrelated agent's pane and
-  // overwritten that agent's state.
-  const saved = process.env.TMUX_PANE;
+test("servers lists every socket in tmux's directory, and the one $TMUX names", async () => {
+  // A stale socket is listed too: asking it is how a dead server reads as an
+  // empty one. A plain file is not a server.
+  const { createServer } = await import("node:net");
+  const root = mkdtempSync("/tmp/mmx-");
+  vi.stubEnv("TMUX_TMPDIR", root);
+  const directory = conventionalTmuxDirectory();
+  mkdirSync(directory, { recursive: true });
+  const listeners = ["default", "mule", join(root, "elsewhere.sock")].map((name) => {
+    const server = createServer();
+    server.listen(name.startsWith("/") ? name : join(directory, name));
+    return server;
+  });
   try {
-    delete process.env.TMUX_PANE;
-    expect(tmux.currentWindow()).toBeNull();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    writeFileSync(join(directory, "notes"), "");
+    vi.stubEnv("TMUX", `${join(root, "elsewhere.sock")},123,0`);
+    expect(tmux.servers()).toEqual([
+      { kind: "default" },
+      { kind: "label", value: "mule" },
+      { kind: "path", value: join(root, "elsewhere.sock") },
+    ]);
   } finally {
-    if (saved === undefined) delete process.env.TMUX_PANE;
-    else process.env.TMUX_PANE = saved;
+    for (const listener of listeners) listener.close();
+    vi.unstubAllEnvs();
   }
 });

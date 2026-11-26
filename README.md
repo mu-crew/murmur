@@ -3,8 +3,8 @@
 **A tmux HUD for every coding agent you have running, on every machine.**
 
 murmur is two layers. Underneath is a small state protocol: each machine
-records what its own agents are doing, and peers pull each other's complete
-snapshots over ssh. On top are tmux HUDs that read the merged list: a status
+reads what its own agents report to its multiplexer (OSC 7501, kept by vtmux or
+Rex), and peers pull each other's complete snapshots over ssh. On top are tmux HUDs that read the merged list: a status
 bar segment, a dashboard, and a side panel. The fzf picker lives in
 tsesh's agents view (`PREFIX a`), which
 reads `murmur status --json` and jumps with `murmur jump`.
@@ -33,7 +33,7 @@ separate `crew` record, including those urgent agents.
 
 For scripts and other pickers, `murmur status --json` prints every pane in
 urgency order with derived `render_state`, `label`, `visible` and `jump_target`
-fields, and `--cached` reads the store without ever reaching a peer (pair it
+fields, plus each program's OSC 7577 `resume_command` and `resume_cwd`, and `--cached` reads the store without ever reaching a peer (pair it
 with a detached `murmur collect --quiet --floored`). Hand a pane's
 `jump_target` to `murmur jump`. The stable fields are listed in
 [ARCHITECTURE.md](ARCHITECTURE.md#contract).
@@ -46,7 +46,7 @@ once per new `done`, `blocked`, `error` or `crashed`, on any node. See
 Mocha terminal. Press `?` for its shortcut panel. `/` filters cards by agent,
 workstream, session, host, or state; `c` toggles compact one-line rows. Press
 `i` to compose a prompt for the selected local or remote agent; opening it
-clears the agent's done/blocked mark, as focusing its pane would. In input mode,
+dismisses a crash murmur recorded for the pane. In input mode,
 enter sends, `ctrl-e` stops the agent, and escape returns to the dashboard.
 `s` **node** sort is local cards first, then remotes A–Z.
 
@@ -75,29 +75,38 @@ from and what each tool owns.
 | Places work | No | Agents drive panes through its CLI and socket API | Delegates tasks to worktree agents | Yes; typed task DAG with claims |
 | Agent HUD | Status segment, dashboard, side panel (picker via tsesh) | Built-in agent sidebar | Dashboard, sidebar, window-name status | Crew and task dashboard |
 
-They combine. murmur sees any pi agent running in a tmux pane, including the
-panes workmux creates and the agents mu spawns; mu marks its agents as crew.
-murmur needs tmux, so agents inside herdr's own panes are not visible to it.
+They combine. murmur sees any agent that reports OSC 7501 in a vtmux pane or a
+Rex block (pi, Claude Code, Codex natively), including the panes workmux
+creates and the agents mu spawns; mu marks its agents as crew with `@mu_agent`.
+Agents inside herdr's own panes are not visible to it.
 
 ## Install
 
-Needs tmux, [pi](https://github.com/earendil-works/pi), `fzf`, and
-Node 22.14+. Multi-machine: ssh access, murmur on each node.
+Needs [vtmux](https://github.com/martintrojer/vtmux) (or Rex), `fzf`, and
+Node 22.14+. Multi-machine: ssh access, murmur on each node. On stock tmux,
+which drops OSC 7501, use murmur 2.x (`npm i -g @mu-crew/murmur@2`).
 
 On every node that runs agents:
 
 ```bash
 npm install -g @mu-crew/murmur
-murmur init                      # this node's identity, and hook entries
-pi install npm:@mu-crew/murmur   # the agent-side extension, as a pi package
+murmur init                      # this node's identity
 ```
 
-Upgrading from a `murmur link pi` install? Run `murmur pi migrate --apply` once,
-or pi loads the extension twice. See [docs/setup.md](docs/setup.md#coming-from-murmur-link-pi).
+and in `.tmux.conf`:
 
-Agents must run **inside tmux**. A tmux server plus pane id is the address;
-without one there is nothing to jump to. Remote agents need tmux on the remote
-too — the jump uses
+```tmux
+set -s vtmux-program-status on
+set -s vtmux-program-resume on
+```
+
+Nothing is installed into the harnesses: pi, Claude Code and Codex report
+their own state over OSC 7501, and vtmux clears `done` and `error` when you
+focus the pane. Upgrading from 2.x? See
+[docs/setup.md](docs/setup.md#coming-from-murmur-2x).
+
+A tmux server plus pane id is the address; without one there is nothing to
+jump to. Remote agents need vtmux on the remote too — the jump uses
 `ssh -t <host> env LC_CTYPE=C.UTF-8 tmux attach` unless you override it.
 
 Jumps to agents on a named tmux server (`tmux -L` / `-S`) on a peer are addressed
@@ -114,10 +123,6 @@ line. Jumps on the default server behave as before. Known limits:
 To avoid these, start peer connections through murmur (`PREFIX a`, which opens
 tsesh's agents view, or `murmur jump`) rather than by hand, and keep the default jump template.
 
-Add focus hooks so looking at a finished agent clears its badge — see
-[docs/setup.md](docs/setup.md#tmux-focus-hooks). Wire Codex / Cursor /
-opencode notifications in the same file.
-
 `PREFIX G` toggles the dash from anywhere. It switches to the running dash, or
 opens one in a `murmur-dash` session. Pressed in the dash, it takes you back to
 where you were. In a murmur-controlled remote session it leaves, so the local
@@ -128,7 +133,7 @@ client comes back on its own. See
 
 ```bash
 murmur peer add devbox
-murmur doctor            # is peering mutual? are the hooks right?
+murmur doctor            # is peering mutual? is vtmux keeping OSC 7501?
 # PREFIX a is tsesh's agents view (tsesh >= 1.0.0); murmur no longer binds a picker
 bind -N "toggle murmur dash" G run-shell -b "murmur dash --goto"
 bind -N "agent side panel" C-m run-shell "murmur sidepanel"
@@ -152,7 +157,7 @@ factor / `BatchMode`, `MaxSessions 1`, Eternal Terminal): [SSH.md](SSH.md).
 
 | Doc | For |
 | --- | --- |
-| [docs/setup.md](docs/setup.md) | Hooks, side panel, harness notify, notifications, peers, doctor, jump |
+| [docs/setup.md](docs/setup.md) | vtmux options, crew tags, side panel, notifications, peers, doctor, Rex, jump |
 | [SSH.md](SSH.md) | Auth, session caps, control masters |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Model, design choices, gaps |
 | [docs/VOCABULARY.md](docs/VOCABULARY.md) | Protocol and identity terms |

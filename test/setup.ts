@@ -1,43 +1,16 @@
 /**
  * Strip murmur's own environment before any test module loads.
  *
- * The suite must not be able to tell whether the developer running it has
- * linked a real extension, joined a workstream, or pointed murmur at a state
- * dir. It could: six tests in extension-decide passed on the maintainer's
- * machine and failed everywhere else, on byte-identical files, because his
- * shell exported
+ * The suite must not be able to tell what the developer running it exports:
+ * which tmux pane `npm test` runs in, which state dir murmur points at, which
+ * tmux servers and Rex are live on the machine. Every name below is read by
+ * production code, and an inherited value aims a test at the developer's real
+ * panes, real store or real multiplexer.
  *
- *   MURMUR_STORE_MODULE=/Users/…/hacking/murmur/dist/extension/store.js
- *
- * which is what the old README told you to do -- the old `murmur link pi` wrote a
- * shim that set it. `extension/murmur-pi.ts` then preferred that variable over
- * the bare "@mu-crew/murmur/extension-store" specifier, and vitest mocks
- * by RESOLVED path, so `vi.doMock(<bare specifier>)` never applied: the real
- * store loaded, the mock counters stayed at 0, and the failure read as "the
- * extension is broken".
- *
- * The dangerous half is the other direction. In the maintainer's checkout the
- * pinned path coincidentally resolved to the same file as the bare specifier,
- * so the mock still matched and the tests went green -- while importing the
- * module from a DIFFERENT CHECKOUT than the one under test. A stale or broken
- * dist there would have been invisible. A suite that silently tests someone
- * else's build is worse than one that fails.
- *
- * Cleared suite-wide rather than stubbed per test, for three reasons:
- *
- *   - No test in this repo legitimately wants the ambient value. A per-test
- *     `vi.stubEnv` would have to be repeated in every test that ever mocks the
- *     store, and the one that forgets is the one that breaks -- which is the
- *     bug we just had, in a new shape.
- *   - It has to happen before the module under test is imported. A setup file
- *     runs before the test module in each worker, so there is no ordering to
- *     get wrong.
- *   - It fixes the whole class, not the one variable. Every name below is read
- *     by production code, two of them at MODULE SCOPE (`storeModule` and
- *     `muManaged` in murmur-pi.ts) where a test cannot intercept them at all.
- *
- * Tests that want a value set it themselves with `vi.stubEnv`, which is
- * unaffected: this only removes what the shell leaked in.
+ * Cleared suite-wide rather than stubbed per test: no test legitimately wants
+ * the ambient value, a per-test stub is the one someone forgets, and a setup
+ * file runs before the module under test is imported, so there is no ordering
+ * to get wrong. Tests that want a value set it themselves with `vi.stubEnv`.
  *
  * Removal is not always the safe move, though -- see REDIRECTED below, where
  * clearing a variable hands the suite the developer's live state instead of
@@ -52,47 +25,17 @@ import { afterAll } from "vitest";
 /**
  * Deleted outright: every variable whose absence is the safe answer.
  *
- * The store path the extension imports, the four MU_* vars that decide whether
- * an agent reports as orchestrated or human, and the two that make the suite
- * believe it is an agent in a pane.
- *
- * TMUX and TMUX_PANE are the second half of the incident.
- * `tmux.currentWindow()` reads $TMUX_PANE and nothing else, by design (asking
- * tmux answers for whichever pane the server thinks is active, which is the
- * bug that made it the only signal). Inherited, it names the pane running
- * `npm test`, so `runNotify` with no --pane resolved a REAL agent's pane: the
- * notify-stdin tests wrote `blocked` rows and set tmux window badges for panes
- * %250/%251/%252 while the pi processes owning them were alive and working.
- *
- * Tests that need a pane pass one explicitly -- `vi.stubEnv`, `fakeMux`, or a
- * child env -- and pane-ownership.test.ts stands up its own private tmux
- * server. None of them wants the ambient value.
+ * TMUX and TMUX_PANE name the pane running `npm test`: inherited, a test that
+ * resolves "this pane" resolves a REAL agent's pane. Tests that need a pane
+ * pass one explicitly -- `vi.stubEnv`, a fake mux, or a child env -- and the
+ * tmux tests stand up their own private servers.
  */
 const CLEARED = [
-  "MURMUR_STORE_MODULE",
-  "MU_MANAGED_AGENT",
+  // A mu worker's identity: inherited when a crew agent runs the suite.
   "MU_AGENT_NAME",
   "MU_WORKSTREAM",
-  "MU_ROLE",
-  // Who a hook harness's event names, when no anchor does (src/hook.ts).
-  "MU_AGENT_CLI",
-  // A remote worker's key, when no anchor names one: routes its hooks' events
-  // to the remote area instead of the inbox (src/hook.ts).
-  "MU_REMOTE_KEY",
-  // pi on mu's `hooks` channel: the extension's store-free mode
-  // (extension/inbox-mode.ts). Leaked in, it would silence every store test.
-  "MU_PI_CHANNEL",
-  // Set in every Claude Code shell, so a suite run from one would inherit it.
-  "CLAUDE_PID",
-  // Move Claude Code's and codex's config directories, and with them the hook
-  // files `init` writes and `doctor` reads (src/hook-install.ts). Left in, a
-  // suite run from such a shell would read or rewrite the real files instead
-  // of the MURMUR_HOOK_HOME sandbox.
-  "CLAUDE_CONFIG_DIR",
-  "CODEX_HOME",
   "TMUX",
   "TMUX_PANE",
-  "TMUX_TMPDIR",
   // A suite run from a Rex pane would otherwise take the Rex jump path and
   // open real tabs (`outsideTmux`).
   "TERM_PROGRAM",
@@ -103,28 +46,21 @@ const CLEARED = [
 /**
  * Redirected, not deleted: every variable that has a DANGEROUS default.
  *
- * This is the part a plain delete gets wrong, and it is why the first isolation
- * pass did not stop the damage. `stateDir()` falls back to
- * `$XDG_STATE_HOME/murmur2`, else `~/.local/state/murmur2` -- the developer's
- * real database -- and `homeStateDir()` (the inbox and the remote area) falls
- * back to `~/.local/state/murmur2` whatever XDG says. Unsetting
- * MURMUR_STATE_DIR therefore aims the suite at PRODUCTION, and the two states
- * are indistinguishable from inside a test.
+ * This is the part a plain delete gets wrong. `stateDir()` falls back to
+ * `$XDG_STATE_HOME/murmur3`, else `~/.local/state/murmur3` -- the developer's
+ * real database -- so unsetting MURMUR_STATE_DIR aims the suite at
+ * PRODUCTION, and the two states are indistinguishable from inside a test.
  *
- * So the fallbacks are moved instead: XDG_STATE_HOME and XDG_CONFIG_HOME so
- * the last resort is a temp dir, MURMUR_PI_HOME so `pi migrate` cannot move files in
- * the real `~/.pi/agent`, MURMUR_HOOK_HOME so `init` and `doctor` cannot read
- * or rewrite the real `~/.claude`, `~/.codex`, `~/.cursor` or Muse settings,
- * and MURMUR_STATE_DIR/MURMUR_CONFIG_DIR so a test that sets neither still gets
- * a sandbox. MURMUR_STATE_DIR is the only guard on the home-based inbox and
- * remote area, which ignore XDG_STATE_HOME: a test that deletes it must point
- * HOME at a temp dir too (test/legacy-state.test.ts does). Any test that wants
- * its own directory overrides these exactly as before.
+ * TMUX_TMPDIR is the same hazard for the multiplexer. The local collector
+ * enumerates every socket in tmux's conventional directory and WRITES the
+ * pill options to each server it reaches, so a collect left on the default
+ * directory would read and write the developer's live tmux servers. Pointed at
+ * an empty sandbox, the directory names only the private servers a test
+ * starts; short, under /tmp, for the unix socket path limit.
  *
  * One directory per test FILE (a setup file runs once per file), created here
  * rather than per test, because a child spawned by a test inherits the
- * environment and must land in the same sandbox: the process boundary is where
- * the incident actually happened.
+ * environment and must land in the same sandbox.
  */
 // Recorded in the environment so a RE-IMPORT reuses it. The isolation tests
 // re-import this module mid-test (`vi.resetModules()`) to assert what it does
@@ -142,13 +78,17 @@ process.env[SANDBOX_ENV] = sandbox;
 // litters is a suite whose temp dirs nobody notices growing.
 if (!existing) afterAll(() => rmSync(sandbox, { recursive: true, force: true }));
 
+const TMUX_SANDBOX_ENV = "MURMUR_SUITE_TMUX";
+const tmuxSandbox = process.env[TMUX_SANDBOX_ENV] ?? mkdtempSync("/tmp/mmt-");
+process.env[TMUX_SANDBOX_ENV] = tmuxSandbox;
+if (!existing) afterAll(() => rmSync(tmuxSandbox, { recursive: true, force: true }));
+
 const REDIRECTED = {
   MURMUR_STATE_DIR: join(sandbox, "state"),
   MURMUR_CONFIG_DIR: join(sandbox, "config"),
-  MURMUR_PI_HOME: join(sandbox, "home"),
-  MURMUR_HOOK_HOME: join(sandbox, "hook-home"),
   XDG_STATE_HOME: join(sandbox, "xdg-state"),
   XDG_CONFIG_HOME: join(sandbox, "xdg-config"),
+  TMUX_TMPDIR: tmuxSandbox,
 } as const;
 
 for (const name of CLEARED) delete process.env[name];
@@ -184,6 +124,17 @@ writeFileSync(
     "exit 255",
     "",
   ].join("\n"),
+  { mode: 0o755 },
+);
+/**
+ * Rex, fenced the same way: the local collector asks the `rex` CLI for every
+ * Rex pane, so a test that forgets `rex: false` would read the developer's
+ * live Rex. The rig's `rex` answers nothing, which murmur reads as "no Rex
+ * here". A test that wants Rex injects a reader.
+ */
+writeFileSync(
+  join(fence, "rex"),
+  ["#!/bin/sh", 'echo "murmur test rig: no Rex in the suite" >&2', "exit 1", ""].join("\n"),
   { mode: 0o755 },
 );
 process.env.PATH = [fence, ...searchPath].join(delimiter);

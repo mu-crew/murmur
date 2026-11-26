@@ -8,7 +8,6 @@ import { asPaneId, asSessionId, asWindowId } from "../src/ids.js";
 import { openStore, type Store } from "../src/store.js";
 import type { TmuxServer } from "../src/types.js";
 import type { PaneView } from "../src/view.js";
-import { fakeMux } from "./helpers/fake-mux.js";
 
 // The dashboard's selection and acknowledge helpers, with two panes that share
 // a host and a pane id and differ only in tmux server. That App calls them, with
@@ -39,27 +38,26 @@ function row(server: TmuxServer): PaneView {
     activity: "running",
     attention: [{ kind: "done", requested_at: 1, message: "" }],
     freshness: "fresh",
-    agent_id: `agent-${server.kind}`,
     agent_name: null,
-    pi_session: null,
     workstream: null,
     role: null,
     cli: "pi",
     harness: null,
     driver: "human",
-    model: null,
-    provider: null,
-    effort: null,
-    provider_effort: null,
-    context_pct: null,
-    context_tokens: null,
-    context_window: null,
-    usage: null,
     pending: null,
     updated_at: 1,
     snapshot_at: null,
     fetched_at: null,
     attached_pane: null,
+    pane_title: null,
+    title: null,
+    message: null,
+    progress: null,
+    blocked_kind: null,
+    resume_command: null,
+    resume_cwd: null,
+    cwd: null,
+    focused: false,
     runs_on: null,
   };
 }
@@ -83,33 +81,20 @@ test("the dash selects the second of two equal pane ids on one host as itself", 
 });
 
 test("opening the composer on one %0 acknowledges only that server's %0", async () => {
-  for (const server of [DEFAULT, PRIVATE]) {
-    store.requestAttention({
-      kind: "done",
-      location: at(server, "%0"),
-      message: "",
-      source: "pi",
-      driver: "human",
-    });
-  }
-  const asked: TmuxServer[] = [];
-  const mux = fakeMux({
-    // The dash runs on the default server: a clear that dropped the server
-    // resolves there and clears the wrong %0.
-    currentView: () => null,
-    currentWindow: () => at(DEFAULT, "%7"),
-    windowForPane: (_pane, server) => {
-      asked.push(server ?? DEFAULT);
-      return asWindowId("@0");
-    },
-    panesInWindow: () => [asPaneId("%0")],
-  });
+  for (const server of [DEFAULT, PRIVATE]) store.recordCrash(at(server, "%0"));
 
-  await expect(acknowledgeDashPane(store, row(PRIVATE), mux)).resolves.toEqual({ ok: true });
+  await expect(acknowledgeDashPane(store, row(PRIVATE))).resolves.toEqual({ ok: true });
 
-  expect(asked).toEqual([PRIVATE]);
   const left = store
     .localPanes()
     .map((pane) => [pane.server.kind, pane.attention.map((entry) => entry.kind)]);
-  expect(left).toEqual([["default", ["done"]]]);
+  expect(left).toEqual([["default", ["crashed"]]]);
+});
+
+test("acknowledging a pane with no attention touches nothing", async () => {
+  store.recordCrash(at(DEFAULT, "%0"));
+  await expect(acknowledgeDashPane(store, { ...row(DEFAULT), attention: [] })).resolves.toEqual({
+    ok: true,
+  });
+  expect(store.localPanes()).toHaveLength(1);
 });

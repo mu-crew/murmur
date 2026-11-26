@@ -68,25 +68,22 @@ function pane(id: string, over: Partial<SnapshotPane> = {}): SnapshotPane {
     session_name: "remote-work",
     window_name: "worker-9",
     agent: {
-      agent_id: `agent-${id}`,
       activity: "running",
       agent_name: "worker-9",
-      pi_session: null,
       workstream: "murmur",
       role: null,
       cli: "pi",
       harness: null,
       driver: "human",
-      model: null,
-      provider: null,
-      context_tokens: null,
-      context_window: null,
-      provider_effort: null,
-      usage: null,
       pending: null,
-      effort: null,
-      context_pct: null,
-      claimed_at: 1,
+      pane_title: null,
+      title: null,
+      message: null,
+      progress: null,
+      blocked_kind: null,
+      resume_command: null,
+      resume_cwd: null,
+      cwd: null,
       updated_at: 500,
     },
     attention: [],
@@ -96,7 +93,7 @@ function pane(id: string, over: Partial<SnapshotPane> = {}): SnapshotPane {
 
 function document(panes: SnapshotPane[], over: Partial<Snapshot> = {}): Snapshot {
   return {
-    murmur_snapshot: 7,
+    murmur_snapshot: 8,
     host_id: "REMOTE",
     display_name: "dev",
     murmur_version: "0.2.0",
@@ -136,6 +133,7 @@ test("the collect deadline leaves a dialled peer's cache and fetched_at alone", 
   const results = await collect(s, hang, 9_000, {
     deadline: new Promise<void>((resolve) => setTimeout(resolve, 20)),
     mux: LOCAL,
+    rex: false,
   });
 
   const cut = results.find((result) => result.peer === last);
@@ -166,13 +164,13 @@ test("a peer that has never answered holds no snapshot and renders stale", async
       },
     },
     5_000,
-    { mux: LOCAL },
+    { mux: LOCAL, rex: false },
   );
 
   expect(results[0]).toMatchObject({ ok: false, unreachable: true });
   expect(s.peers()[0]).toMatchObject({ snapshot: null, fetched_at: null, snapshot_at: null });
   // No document, no panes: a peer contributes rows only from what it served.
-  expect(paneViews(s, identity, 5_000)).toEqual([]);
+  expect(paneViews(s, identity, [], 5_000)).toEqual([]);
 });
 
 test("a stale node keeps its last-known panes verbatim, with no liveness inferred", async () => {
@@ -183,9 +181,9 @@ test("a stale node keeps its last-known panes verbatim, with no liveness inferre
   const identity = createIdentity("this-node");
   const s = store();
   s.addPeer("dev", "dev");
-  await collect(s, serve(document([pane("%7")])), 1_000, { mux: LOCAL });
+  await collect(s, serve(document([pane("%7")])), 1_000, { mux: LOCAL, rex: false });
 
-  const fresh = paneViews(s, identity, 1_000);
+  const fresh = paneViews(s, identity, [], 1_000);
   expect(fresh).toHaveLength(1);
   expect(fresh[0]).toMatchObject({ pane: "%7", activity: "running", freshness: "fresh" });
 
@@ -197,17 +195,16 @@ test("a stale node keeps its last-known panes verbatim, with no liveness inferre
       },
     },
     2_000,
-    { mux: LOCAL },
+    { mux: LOCAL, rex: false },
   );
 
-  const stale = paneViews(s, identity, 1_000 + STALENESS_MS + 1);
+  const stale = paneViews(s, identity, [], 1_000 + STALENESS_MS + 1);
   expect(stale).toHaveLength(1);
   expect(stale[0]).toMatchObject({
     pane: "%7",
     // Byte-identical owner-reported facts: nothing about the pane was rewritten
     // to signal the host's silence.
     activity: "running",
-    agent_id: "agent-%7",
     agent_name: "worker-9",
     workstream: "murmur",
     updated_at: 500,
@@ -233,10 +230,13 @@ test("freshness is our clock and updated_at is theirs, and fetching does not mer
     agent: served.agent === null ? null : { ...served.agent, updated_at: theirNews },
   };
 
-  await collect(s, serve(document([aged], { generated_at: theirNews })), now, { mux: LOCAL });
+  await collect(s, serve(document([aged], { generated_at: theirNews })), now, {
+    mux: LOCAL,
+    rex: false,
+  });
 
   expect(s.peers()[0]).toMatchObject({ snapshot_at: theirNews, fetched_at: now });
-  const view = paneViews(s, identity, now)[0];
+  const view = paneViews(s, identity, [], now)[0];
   // The node is fresh -- we just reached it -- and its news is old. Both are
   // visible, and neither was computed from the other.
   expect(view).toMatchObject({
@@ -253,7 +253,7 @@ test("a cached peer document carries no owner_pid, so remote liveness is unrepre
   // process in another machine's table.
   const s = store();
   s.addPeer("dev", "dev");
-  await collect(s, serve(document([pane("%1"), pane("%2")])), 1_000, { mux: LOCAL });
+  await collect(s, serve(document([pane("%1"), pane("%2")])), 1_000, { mux: LOCAL, rex: false });
 
   const raw = new Database(dbPath(), { readonly: true });
   try {
@@ -331,14 +331,14 @@ test("removePeer takes the cached document with the row", async () => {
   const identity = createIdentity("this-node");
   const s = store();
   s.addPeer("dev", "dev");
-  await collect(s, serve(document([pane("%1")])), 1_000, { mux: LOCAL });
-  expect(paneViews(s, identity, 1_000)).toHaveLength(1);
+  await collect(s, serve(document([pane("%1")])), 1_000, { mux: LOCAL, rex: false });
+  expect(paneViews(s, identity, [], 1_000)).toHaveLength(1);
 
   expect(s.removePeer("dev")).toBe(true);
   s.addPeer("dev", "dev");
 
   expect(s.peers()[0]).toMatchObject({ snapshot: null, fetched_at: null, last_error: null });
-  expect(paneViews(s, identity, 1_000)).toEqual([]);
+  expect(paneViews(s, identity, [], 1_000)).toEqual([]);
 });
 
 test("replacePeerSnapshot cannot create a peer, so no reader authors a remote host", () => {
@@ -364,45 +364,26 @@ test("the store exposes no reader-side mutation of remote state", () => {
   // reader holds one snapshot per peer and evicts nothing, so there is no
   // per-agent eviction, no rewind and no ingest for a reader to be wrong with.
   //
-  // `recordCrash` is a LOCAL writer, not a reader-side one: it says "the owner
-  // of this local pane died", which is reconciliation's conclusion about this
-  // node's own panes. It exists separately from `requestAttention` precisely so
-  // that `crashed` cannot be requested by an external caller.
-  //
-  // `setRuntime` is local and owner-gated for the same reason `setActivity` is:
-  // it is keyed on `agent_id` AND `owner_pid`, so it can only ever restate what
-  // THIS node's own agent reports about itself. There is deliberately no
-  // counterpart for a remote agent's runtime -- those arrive inside a peer's
-  // snapshot, which `replacePeerSnapshot` takes whole.
+  // `syncLocal` and `recordCrash` are LOCAL writers, not reader-side ones:
+  // they record what this node's own collect saw of its own panes, and a crash
+  // only that collect can conclude. `knownServers` and `localPanes` are their
+  // reads. None of them touches a peer's snapshot.
   //
   // `claimAlerts` writes only its own dedup table: which events the
   // on-attention hook has run for. It says nothing about any pane.
-  //
-  // `ingestInbox` is the one ingest, and it is LOCAL: hook events about this
-  // node's own panes, which the hook placed by walking its own process chain to
-  // one of this node's tmux servers. `harnessState` is its local read for
-  // `murmur pane`; neither touches a peer's snapshot.
   expect(Object.keys(store()).sort()).toEqual([
     "acknowledgePane",
     "addPeer",
-    "buildLocalSnapshot",
-    "claimAgent",
     "claimAlerts",
     "close",
-    "harnessState",
-    "ingestInbox",
-    "listHarnessStates",
+    "knownServers",
     "localPanes",
     "peers",
-    "reconcileLocal",
     "recordCrash",
-    "releaseAgent",
     "removePeer",
     "replacePeerSnapshot",
-    "requestAttention",
-    "setActivity",
     "setPeerJumpCommand",
-    "setRuntime",
+    "syncLocal",
   ]);
 });
 
@@ -437,6 +418,7 @@ test("a peer the deadline never dialled records no attempt and no error", async 
   await collect(s, hang, 9_000, {
     deadline: new Promise<void>((resolve) => setTimeout(resolve, 20)),
     mux: LOCAL,
+    rex: false,
   });
 
   const peer = s.peers().find((entry) => entry.name === unclaimed);
@@ -480,6 +462,7 @@ test("an ambient collect skips a peer that needs a human, recording nothing", as
     floorMs: COLLECT_FLOOR_MS,
     warm: () => false,
     mux: LOCAL,
+    rex: false,
   });
 
   expect(dialled).toEqual([]);
@@ -507,7 +490,7 @@ test("a deliberate collect still tries a peer that needs a human", async () => {
     },
   };
 
-  await collect(s, channel, 999_000, { warm: () => false, mux: LOCAL });
+  await collect(s, channel, 999_000, { warm: () => false, mux: LOCAL, rex: false });
 
   expect(dialled).toEqual(["dev"]);
 });
@@ -530,6 +513,7 @@ test("a warm socket makes a gated peer collectable again", async () => {
     floorMs: COLLECT_FLOOR_MS,
     warm: () => true,
     mux: LOCAL,
+    rex: false,
   });
 
   expect(dialled).toEqual(["dev"]);
@@ -551,6 +535,7 @@ test("the warm-socket probe is not paid for peers that are not gated", async () 
       return false;
     },
     mux: LOCAL,
+    rex: false,
   });
 
   expect(probed).toEqual(["dev"]);

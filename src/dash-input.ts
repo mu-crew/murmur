@@ -258,8 +258,8 @@ export function buildClearDelivery(pane: PaneView, target: string): InputDeliver
 }
 
 /**
- * Acknowledge the pane's attention, as tmux focus would. Local panes go through
- * `clearLocal` (the same `clearPane` the focus hook runs); remote ones over ssh.
+ * Acknowledge the pane's attention. Local panes go through `clearLocal` (the
+ * same `clearPane` that `murmur clear` runs); remote ones over ssh.
  * A pane with nothing to acknowledge costs nothing, so no ssh round trip.
  */
 export function acknowledgeAttention(

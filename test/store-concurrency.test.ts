@@ -9,10 +9,10 @@ import { openStore } from "../src/store.js";
 import { builtArtifact } from "./helpers/built.js";
 
 /**
- * The claim transaction under REAL contention, from separate processes.
+ * The local-sync transaction under REAL contention, from separate processes.
  *
- * `claimAgent` is declared `.immediate` and `store.ts` says why: it reads the
- * incumbent row and then writes, so a deferred transaction starts as a READER
+ * `syncLocal` is declared `.immediate` and `store.ts` says why: it reads the
+ * previous sighting and then writes, so a deferred transaction starts as a READER
  * and must upgrade, and two upgrading at once fail the loser with
  * SQLITE_BUSY_SNAPSHOT -- which no `busy_timeout` can fix, because waiting
  * cannot make a stale snapshot fresh. The incident it records was "5 of 8
@@ -30,7 +30,7 @@ import { builtArtifact } from "./helpers/built.js";
 
 let stateDir: string;
 
-const STORE = builtArtifact("extension", "store.js");
+const STORE = builtArtifact("index.js");
 
 beforeEach(() => {
   stateDir = mkdtempSync(join(tmpdir(), "murmur-concurrency-"));
@@ -54,37 +54,29 @@ afterEach(() => {
 });
 
 /**
- * One child that opens the store and claims `pane`, printing its outcome.
- *
- * `isAlive: () => false` is the load-bearing argument: it forces every child
- * down the read-then-DELETE-then-INSERT path -- the longest write in the
- * transaction and the one that must upgrade from a read. With the default
- * probe, the first live claimant makes everyone else return `refused` early,
- * which is a much weaker test of the lock.
+ * One child that opens the store and records one collect: pane `%1` working.
+ * Every child in a burst does, so each transaction reads the previous
+ * sighting and writes its own, which is the read-then-write that must upgrade.
  *
  * Args are read from `argv[1]` and `argv[2]`, NOT 2 and 3. Under `node -e` there
- * is no script path in argv, so the usual offset is off by one and the pid
- * arrives `undefined` -- which surfaced as a NOT NULL failure on
- * `agents.owner_pid`, looking exactly like a store bug and being a harness one.
+ * is no script path in argv, so the usual offset is off by one.
  */
 const CHILD = `
   const { openStore } = await import(${JSON.stringify(STORE)});
   const store = openStore();
   try {
-    const result = store.claimAgent({
-      location: {
+    store.syncLocal([{
+      server: { kind: "default" },
+      panes: [{
         server: { kind: "default" },
         session: "$0", window: "@0", pane: process.argv[1],
         session_name: null, window_name: null,
-      },
-      owner_pid: Number(process.argv[2]),
-      meta: {
-        agent_name: null, pi_session: null, workstream: null,
-        role: null, cli: "pi", driver: "human",
-      },
-      isAlive: () => false,
-    });
-    process.stdout.write("OK " + result.outcome + "\\n");
+        state: "running", state_time: null,
+        agent_name: null, workstream: null, role: null, driver: "human",
+        harness: "pi", cli: "pi", pane_title: null,
+      }],
+    }], Number(process.argv[2]));
+    process.stdout.write("OK synced\\n");
   } catch (error) {
     // The code AND the message: a bare code made a harness mistake read as a
     // store failure once already.
@@ -96,7 +88,7 @@ const CHILD = `
   }
 `;
 
-/** Run the 8-child claim burst against `stateDir`, returning each child's line. */
+/** Run the 8-child sync burst against `stateDir`, returning each child's line. */
 async function burst(): Promise<string[]> {
   const run = promisify(execFile);
   const settled = await Promise.all(
@@ -144,10 +136,9 @@ function peerNames(): string {
 test("eight processes opening a STALE database all create the schema exactly once", async () => {
   // The upgrade burst, which is the deterministic form of the race and the one
   // the design guarantees: a schema bump ships in an npm upgrade, and then the
-  // status-bar tick, every tmux focus hook and every pi extension on the machine
-  // reopen at once. All of them saw a stale `user_version`, all of them ran
-  // `CREATE TABLE`, and the losers threw `table agents already exists` out of a
-  // read path.
+  // status-bar tick, the dash and every side panel on the machine reopen at
+  // once. All of them saw a stale `user_version`, all of them ran `CREATE
+  // TABLE`, and the losers threw `table ... already exists` out of a read path.
   //
   // Seeding a stale version makes every child take the create path, so this
   // fires on the first run rather than needing a fresh-directory race to land.
@@ -205,36 +196,31 @@ test("repeated upgrade bursts never lose the salvaged peer", async () => {
   }
 }, 120_000);
 
-test("eight processes claiming one pane all settle, none dies on a locked database", async () => {
+test("eight processes syncing one pane all settle, none dies on a locked database", async () => {
   // Eight, matching the measured incident.
   //
-  // CONCURRENTLY, and that is the entire test. The first version of this used
-  // `execFileSync` in a loop, which blocks per child: eight processes ran
-  // strictly one after another, never contended, and passed with `.immediate`
-  // REMOVED -- a test that proved nothing while looking thorough. They must all
-  // be in flight at once, so the transactions actually overlap.
+  // CONCURRENTLY, and that is the entire test. A version that ran the children
+  // one after another never contended, and passed with `.immediate` REMOVED --
+  // a test that proved nothing while looking thorough.
   const children = await burst();
 
-  // Every one settled with an OUTCOME. Which outcome is not the claim -- the
-  // interleaving decides that, and one `claimed` plus seven `replaced` is as
-  // valid as any other split. The claim is that none of them died.
   expect(realFailures(children)).toEqual([]);
   expect(children).toHaveLength(8);
 
-  // And exactly one agent row survives: the pane is UNIQUE in the schema, so a
-  // lost race must leave the table consistent rather than doubled. This holds
-  // whatever the outcomes above were, which is why it is asserted separately.
-  const rows = execFileSync(
+  // And the table is consistent: one sighting of %1, so a collect that then
+  // finds the pane gone records exactly one crash, not one per writer.
+  const crashes = execFileSync(
     process.execPath,
     [
       "--input-type=module",
       "-e",
       `const { openStore } = await import(${JSON.stringify(STORE)});
        const store = openStore();
-       process.stdout.write(String(store.localPanes().length));
+       const { crashed } = store.syncLocal([{ server: { kind: "default" }, panes: [] }], 99999);
+       process.stdout.write(crashed.length + " " + store.localPanes().length);
        store.close();`,
     ],
     { encoding: "utf8", env: { ...process.env, MURMUR_STATE_DIR: stateDir }, timeout: 30_000 },
   );
-  expect(rows).toBe("1");
+  expect(crashes).toBe("1 1");
 }, 60_000);

@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { join } from "node:path";
 import { render } from "ink";
 import { createElement } from "react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
@@ -12,6 +13,7 @@ import { createIdentity } from "../src/identity.js";
 import { asPaneId, asSessionId, asWindowId } from "../src/ids.js";
 import { status } from "../src/status.js";
 import type { TmuxServer } from "../src/types.js";
+import { recordedPanes } from "./helpers/panes.js";
 
 // The dashboard App itself, driven by keys, against two real private tmux
 // servers that each have a %0. Helper-level tests cannot see App stop calling
@@ -49,7 +51,10 @@ class FrameStdout extends EventEmitter {
 }
 
 let root: string;
-const servers: string[][] = [[], ["-L", "private"]];
+// The "default" server is named by its explicit socket path under the private
+// TMUX_TMPDIR: the same socket murmur's `-L default` resolves there, and never
+// the developer's own default server.
+let servers: string[][] = [];
 const tmuxOn = (server: string[], ...args: string[]) =>
   execFileSync("tmux", [...server, "-f", "/dev/null", ...args], {
     encoding: "utf8",
@@ -62,6 +67,12 @@ beforeEach(() => {
   // Short, for the unix socket length limit; both servers live under it.
   root = mkdtempSync("/tmp/murmur-dash-app-");
   vi.stubEnv("TMUX_TMPDIR", root);
+  const directory = join(root, `tmux-${process.getuid?.() ?? 0}`);
+  mkdirSync(directory, { recursive: true, mode: 0o700 });
+  servers = [
+    ["-S", join(directory, "default")],
+    ["-S", join(directory, "private")],
+  ];
   for (const server of servers) tmuxOn(server, "new-session", "-d", "-s", "work", "sleep 300");
 });
 
@@ -85,13 +96,18 @@ test("opening the composer on the second of two %0s acknowledges that server's %
   const { store } = dashStore;
   const DEFAULT: TmuxServer = { kind: "default" };
   const PRIVATE: TmuxServer = { kind: "label", value: "private" };
-  // The private %0 is requested first and so sorts second, which is the row
-  // a selection by host and pane id alone, or a clear without its server (the
-  // dash's own server is the default), would both get wrong.
-  for (const server of [PRIVATE, DEFAULT]) {
-    store.requestAttention({
-      kind: "done",
-      location: {
+  // The private %0 crashed later and so sorts second (crashes are oldest
+  // first), which is the row a selection by host and pane id alone, or a
+  // clear without its server (the dash's own server is the default), would
+  // both get wrong. Explicit times: two crashes in one millisecond would tie
+  // and fall back to address order.
+  const now = Date.now();
+  for (const [server, at] of [
+    [PRIVATE, now - 1_000],
+    [DEFAULT, now - 2_000],
+  ] as const) {
+    store.recordCrash(
+      {
         server,
         session: asSessionId("$0"),
         window: asWindowId("@0"),
@@ -99,12 +115,10 @@ test("opening the composer on the second of two %0s acknowledges that server's %
         session_name: null,
         window_name: null,
       },
-      message: "",
-      source: "pi",
-      driver: "human",
-    });
+      at,
+    );
   }
-  const initial = status(store, identity, Date.now());
+  const initial = status(store, identity, recordedPanes(store), Date.now());
   const rows = dashRows(initial.panes, loadDashPrefs(), Date.now());
   expect(rows.map((row) => [row.server.kind, row.pane])).toEqual([
     ["default", "%0"],
@@ -145,5 +159,5 @@ test("opening the composer on the second of two %0s acknowledges that server's %
   }
   // Acknowledged: the private row has no attention left (and, with no agent,
   // no row); the default %0 keeps its own.
-  expect({ ...left, label: left.label ?? [] }).toEqual({ default: ["done"], label: [] });
+  expect({ ...left, label: left.label ?? [] }).toEqual({ default: ["crashed"], label: [] });
 }, 20_000);

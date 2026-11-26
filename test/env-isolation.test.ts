@@ -6,12 +6,10 @@ import { CLEARED, OWNED, REDIRECTED } from "./setup.js";
 /**
  * The suite must not be able to tell what the developer's shell exports.
  *
- * Six tests in extension-decide.test.ts passed on the maintainer's machine and
- * failed in every other checkout, on byte-identical files, because his shell
- * had MURMUR_STORE_MODULE set -- which is what `murmur link pi` told you to
- * do. The tests mock the bare "@mu-crew/murmur/extension-store"
- * specifier; vitest mocks by resolved path; the variable made the extension
- * import a different path, so the mock never applied.
+ * Tests once passed on the maintainer's machine and failed in every other
+ * checkout, on byte-identical files, because his shell exported a murmur
+ * variable the code under test read. A value inherited from `npm test`'s pane
+ * aims a test at the developer's real panes, store or multiplexer.
  *
  * These tests guard the rig itself, in the three ways it can rot.
  */
@@ -55,13 +53,11 @@ test("the setup file rewrites the variables rather than merely reading them", ()
   });
 });
 
-test("every environment variable src/ and extension/ read is one the rig controls", () => {
+test("every environment variable src/ reads is one the rig controls", () => {
   // The drift guard, and the reason this is a list rather than a single delete.
-  // MURMUR_STORE_MODULE was not special: `storeModule` and `muManaged` in
-  // extension/murmur-pi.ts were read at MODULE SCOPE, where a test cannot
-  // intercept them at all -- the value is baked in at import. Any future
-  // MURMUR_*/MU_* read is the same hazard, and this fails the moment one is
-  // added without being listed.
+  // Any MURMUR_*/MU_*/TMUX* read is a hazard -- one read at module scope cannot
+  // be intercepted by a test at all -- and this fails the moment one is added
+  // without being listed.
   //
   // Deliberately does NOT assert the reverse (that every OWNED name is still
   // read by src/): clearing a variable nothing reads is harmless, and pinning
@@ -87,7 +83,6 @@ test("every environment variable src/ and extension/ read is one the rig control
     }
   };
   walk("src");
-  walk("extension");
 
   // Sanity: the scan found something, so an empty result cannot pass this.
   expect(read.size).toBeGreaterThan(0);

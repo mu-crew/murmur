@@ -1,5 +1,13 @@
 import { execFileSync } from "node:child_process";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
@@ -59,27 +67,26 @@ function view(over: Partial<PaneView> = {}): PaneView {
     activity: "running",
     attention: [],
     freshness: "fresh",
-    agent_id: "agent-9",
     agent_name: null,
-    pi_session: null,
     workstream: "api",
     role: null,
     cli: "pi",
     harness: null,
     driver: "human",
-    model: null,
-    provider: null,
-    effort: null,
-    provider_effort: null,
-    context_pct: null,
-    context_tokens: null,
-    context_window: null,
-    usage: null,
     pending: null,
     updated_at: 1,
     snapshot_at: null,
     fetched_at: null,
     attached_pane: null,
+    pane_title: null,
+    title: null,
+    message: null,
+    progress: null,
+    blocked_kind: null,
+    resume_command: null,
+    resume_cwd: null,
+    cwd: null,
+    focused: false,
     runs_on: null,
     ...over,
   };
@@ -140,7 +147,7 @@ function peer(name: string, hostId: string, panes: string[] = [], jumpCommand?: 
     ok: true,
     at: 1_000,
     snapshot: {
-      murmur_snapshot: 7,
+      murmur_snapshot: 8,
       host_id: hostId,
       display_name: name,
       murmur_version: "0.2.0",
@@ -188,12 +195,13 @@ test("agentLabel prefers a human name over any tmux id", () => {
     session_name: "murmur",
     window_name: "nvim",
     agent_name: "reviewer-1",
-    pi_session: "review the picker",
   });
 
   expect(agentLabel(agent)).toBe("reviewer-1");
-  expect(agentLabel({ ...agent, agent_name: null })).toBe("review the picker");
-  expect(agentLabel({ ...agent, agent_name: null, pi_session: null })).toBe("nvim");
+  expect(agentLabel({ ...agent, agent_name: null, pane_title: "review the picker" })).toBe(
+    "review the picker",
+  );
+  expect(agentLabel({ ...agent, agent_name: null, pane_title: null })).toBe("nvim");
   expect(agentLocation(agent)).toBe("murmur:nvim");
 });
 
@@ -205,7 +213,6 @@ test("agentLabel falls back to the window id only when no name exists", () => {
         session_name: null,
         window_name: null,
         agent_name: null,
-        pi_session: null,
       }),
     ),
   ).toBe("@79");
@@ -778,24 +785,13 @@ test("a local pane that MOVED window is still jumped to, and nothing is written"
   // from list-windows entirely. Judging the pane by its recorded WINDOW
   // therefore condemned a healthy pane on one keypress, and the delete was
   // permanent for a local pane.
-  store.claimAgent({
-    location: {
-      server: { kind: "default" },
-      session: asSessionId("$0"),
-      window: asWindowId("@9"),
-      pane: asPaneId("%9"),
-      session_name: null,
-      window_name: null,
-    },
-    owner_pid: process.pid,
-    meta: {
-      agent_name: null,
-      pi_session: null,
-      workstream: "api",
-      role: null,
-      cli: "pi",
-      driver: "human",
-    },
+  store.recordCrash({
+    server: { kind: "default" },
+    session: asSessionId("$0"),
+    window: asWindowId("@9"),
+    pane: asPaneId("%9"),
+    session_name: null,
+    window_name: null,
   });
   const before = snapshotOfEverything();
   const attempted: string[] = [];
@@ -826,22 +822,16 @@ test("a local pane that MOVED window is still jumped to, and nothing is written"
 
 test("a local pane that is really gone is pane_gone, and still writes nothing", () => {
   vi.stubEnv("TMUX", "/tmp/tmux-501/default,1,0");
-  // Reported, not cleared. Reconciliation removes the row -- it is the one path
-  // that consults tmux and the pid table together, inside one transaction -- and
-  // a jump has no business doing half of that job from a keypress.
-  store.requestAttention({
-    kind: "done",
-    location: {
-      server: { kind: "default" },
-      session: asSessionId("$0"),
-      window: asWindowId("@9"),
-      pane: asPaneId("%9"),
-      session_name: null,
-      window_name: null,
-    },
-    message: "",
-    source: "pi",
-    driver: "human",
+  // Reported, not cleared. A collect retires state -- it is the one path that
+  // reads every pane in one pass -- and a jump has no business doing half of
+  // that job from a keypress.
+  store.recordCrash({
+    server: { kind: "default" },
+    session: asSessionId("$0"),
+    window: asWindowId("@9"),
+    pane: asPaneId("%9"),
+    session_name: null,
+    window_name: null,
   });
   const before = snapshotOfEverything();
 
@@ -888,12 +878,12 @@ test("agentLabel prefers every more specific name over the session", () => {
   // mu's name, then pi's session, then a window name a human chose.
   const session = { session_name: "hacking/murmur" };
   expect(agentLabel(view({ ...session, window_name: "nvim" }))).toBe("nvim");
-  expect(agentLabel(view({ ...session, window_name: "nvim", pi_session: "Fix pick" }))).toBe(
+  expect(agentLabel(view({ ...session, window_name: "nvim", pane_title: "Fix pick" }))).toBe(
     "Fix pick",
   );
   expect(
     agentLabel(
-      view({ ...session, window_name: "nvim", pi_session: "Fix pick", agent_name: "w-1" }),
+      view({ ...session, window_name: "nvim", pane_title: "Fix pick", agent_name: "w-1" }),
     ),
   ).toBe("w-1");
 });
@@ -1245,8 +1235,15 @@ test("against a real local tmux a wrapper for one server is never reused or kill
         stdio: ["ignore", "pipe", "pipe"],
         env,
       }).trim();
-  const local = on();
-  const remotes = { Aa: on("-L", "Aa"), BB: on("-L", "BB") };
+  // Every server by explicit socket under the private TMUX_TMPDIR: the "local"
+  // one is the socket murmur's `-L default` resolves there.
+  const directory = join(root, `tmux-${process.getuid?.() ?? 0}`);
+  mkdirSync(directory, { recursive: true, mode: 0o700 });
+  const local = on("-S", join(directory, "default"));
+  const remotes = {
+    Aa: on("-S", join(directory, "Aa")),
+    BB: on("-S", join(directory, "BB")),
+  };
   try {
     vi.stubEnv("TMUX_TMPDIR", root);
     local("new-session", "-d", "-s", "home", "sleep 300");

@@ -77,15 +77,12 @@ test("fzf resolves against the child environment, not the process PATH", () => {
 });
 
 // Runs `body` in a child whose working directory has been deleted, against the
-// bundled helper-path and inbox modules.
+// bundled helper-path module.
 function inDeletedCwd(body: string, path: string): { status: number | null; out: string } {
   const bundle = join(dir, "bundle.mjs");
   const entry = join(dir, "entry.ts");
   const root = join(__dirname, "..", "src");
-  writeFileSync(
-    entry,
-    `export * from ${JSON.stringify(join(root, "helper-path.ts"))};\nexport { probeSockets } from ${JSON.stringify(join(root, "inbox.ts"))};\n`,
-  );
+  writeFileSync(entry, `export * from ${JSON.stringify(join(root, "helper-path.ts"))};\n`);
   const built = spawnSync(
     join(__dirname, "..", "node_modules", ".bin", "esbuild"),
     [
@@ -121,8 +118,7 @@ test("a deleted working directory does not break resolution through absolute PAT
   const r = inDeletedCwd(
     `console.log(m.helperPath("tmux"));
 console.log(m.findHelper("tmux"));
-try { m.helperPath("nope-missing"); } catch (e) { console.log(e.code); }
-console.log(JSON.stringify([...m.probeSockets(["/nonexistent-sock"], 200)]));`,
+try { m.helperPath("nope-missing"); } catch (e) { console.log(e.code); }`,
     `relative-entry:${bin}`,
   );
   expect(r.out).toContain(`${bin}/tmux\n${bin}/tmux\nENOENT\n`);

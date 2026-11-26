@@ -11,12 +11,23 @@ import { tmux } from "../src/mux.js";
 import { previewText, previewTextAsync } from "../src/paint.js";
 import { status } from "../src/status.js";
 import { openStore, type Store } from "../src/store.js";
-import type { Location, Snapshot, SnapshotPane, TmuxServer } from "../src/types.js";
+import type { LocalPane, Location, Snapshot, SnapshotPane, TmuxServer } from "../src/types.js";
 import type { PaneView } from "../src/view.js";
+import { localPane } from "./helpers/panes.js";
 
 let store: Store;
+/** This node's live panes, as the local read would answer them. */
+let local: LocalPane[] = [];
+
+/** A local pane at `location(pane)` with a working agent. */
+function localAgent(pane: string, agentName: string): void {
+  local.push(
+    localPane({ ...location(pane), agent: { agent_name: agentName, workstream: "murmur" } }),
+  );
+}
 
 beforeEach(() => {
+  local = [];
   vi.stubEnv("MURMUR_STATE_DIR", mkdtempSync(join(tmpdir(), "murmur-preview-")));
   createIdentity("here");
   store = openStore();
@@ -42,7 +53,7 @@ function location(pane: string): Location {
 
 function remoteSnapshot(panes: SnapshotPane[]): Snapshot {
   return {
-    murmur_snapshot: 7,
+    murmur_snapshot: 8,
     host_id: "REMOTE",
     display_name: "container-id",
     murmur_version: "0.2.0",
@@ -60,25 +71,22 @@ function remotePane(pane: string, server: TmuxServer = { kind: "default" }): Sna
     session_name: "far",
     window_name: "remote-window",
     agent: {
-      agent_id: `agent-${pane}`,
       activity: "running",
       agent_name: "remote-worker",
-      pi_session: null,
       workstream: null,
       role: null,
       cli: "pi",
       harness: null,
       driver: "human",
-      model: null,
-      provider: null,
-      context_tokens: null,
-      context_window: null,
-      provider_effort: null,
-      usage: null,
       pending: null,
-      effort: null,
-      context_pct: null,
-      claimed_at: 1,
+      pane_title: null,
+      title: null,
+      message: null,
+      progress: null,
+      blocked_kind: null,
+      resume_command: null,
+      resume_cwd: null,
+      cwd: null,
       updated_at: 1,
     },
     attention: [],
@@ -115,7 +123,7 @@ function preview(
   const argv: string[][] = [];
   const identity = loadIdentity();
   if (!identity) throw new Error("no identity");
-  const view = status(store, identity, Date.now(), warm);
+  const view = status(store, identity, local, Date.now(), warm);
   const agent = view.panes.find(
     (candidate) => candidate.pane === pane && (host === undefined || candidate.host_id === host),
   );
@@ -135,18 +143,7 @@ test("the preview resolves the host as well as the pane", () => {
   // the preview command is built with `{1}` and `{2}` -- and resolving on the
   // pane alone previewed whichever row the sort happened to put first. A local
   // pane's preview then ran a local capture-pane for a remote agent.
-  store.claimAgent({
-    location: location("%1"),
-    owner_pid: process.pid,
-    meta: {
-      agent_name: "local-worker",
-      pi_session: null,
-      workstream: "murmur",
-      role: null,
-      cli: "pi",
-      driver: "human",
-    },
-  });
+  localAgent("%1", "local-worker");
   store.addPeer("bubba", "bubba.example");
   store.replacePeerSnapshot("bubba", {
     ok: true,
@@ -289,7 +286,9 @@ test("the async glance runs the same quoted ssh and matches the sync preview", a
   });
   const identity = loadIdentity();
   if (!identity) throw new Error("no identity");
-  const agent = status(store, identity).panes.find((candidate) => candidate.pane === hostile);
+  const agent = status(store, identity, local).panes.find(
+    (candidate) => candidate.pane === hostile,
+  );
   if (!agent) throw new Error("no remote pane");
 
   const calls: string[][] = [];
@@ -324,7 +323,7 @@ test("the real async ssh runner ignores stderr like the sync one", async () => {
     });
     const identity = loadIdentity();
     if (!identity) throw new Error("no identity");
-    const agent = status(store, identity).panes.find((candidate) => candidate.pane === "%1");
+    const agent = status(store, identity, local).panes.find((candidate) => candidate.pane === "%1");
     if (!agent) throw new Error("no remote pane");
     expect(glance(store, agent, 40)).toContain("CAPTURE_OK");
     expect(await glanceAsync(store, agent, 40)).toContain("CAPTURE_OK");
@@ -348,7 +347,7 @@ test("the real async ssh runner still fails a capture whose stdout exceeds 1 MiB
     });
     const identity = loadIdentity();
     if (!identity) throw new Error("no identity");
-    const agent = status(store, identity).panes.find((candidate) => candidate.pane === "%1");
+    const agent = status(store, identity, local).panes.find((candidate) => candidate.pane === "%1");
     if (!agent) throw new Error("no remote pane");
     expect(glance(store, agent, 40)).toBeNull();
     expect(await glanceAsync(store, agent, 40)).toBeNull();
@@ -374,7 +373,7 @@ test("the real async ssh runner fails a timed-out capture even if ssh exits 0 on
     });
     const identity = loadIdentity();
     if (!identity) throw new Error("no identity");
-    const agent = status(store, identity).panes.find((candidate) => candidate.pane === "%1");
+    const agent = status(store, identity, local).panes.find((candidate) => candidate.pane === "%1");
     if (!agent) throw new Error("no remote pane");
     expect(glance(store, agent, 40)).toBeNull();
     expect(await glanceAsync(store, agent, 40)).toBeNull();
@@ -392,7 +391,7 @@ test("an async glance failure or skipped peer yields no preview", async () => {
   });
   const identity = loadIdentity();
   if (!identity) throw new Error("no identity");
-  const agent = status(store, identity).panes.find((candidate) => candidate.pane === "%1");
+  const agent = status(store, identity, local).panes.find((candidate) => candidate.pane === "%1");
   if (!agent) throw new Error("no remote pane");
 
   await expect(
@@ -422,7 +421,7 @@ test("a glance failure returns no preview without deleting cached state", () => 
   });
   const identity = loadIdentity();
   if (!identity) throw new Error("no identity");
-  const agent = status(store, identity).panes.find((candidate) => candidate.pane === "%8");
+  const agent = status(store, identity, local).panes.find((candidate) => candidate.pane === "%8");
   if (!agent) throw new Error("no remote pane");
 
   expect(
@@ -430,7 +429,9 @@ test("a glance failure returns no preview without deleting cached state", () => 
       throw new Error("capture failed");
     }),
   ).toBeNull();
-  expect(status(store, identity).panes.some((candidate) => candidate.pane === "%8")).toBe(true);
+  expect(status(store, identity, local).panes.some((candidate) => candidate.pane === "%8")).toBe(
+    true,
+  );
 });
 
 test("a remote glance captures a real private tmux pane", () => {
@@ -475,7 +476,7 @@ test("a remote glance captures a real private tmux pane", () => {
     });
     const identity = loadIdentity();
     if (!identity) throw new Error("no identity");
-    const agent = status(store, identity).panes.find((candidate) => candidate.pane === pane);
+    const agent = status(store, identity, local).panes.find((candidate) => candidate.pane === pane);
     if (!agent) throw new Error("no private pane");
 
     expect(glance(store, { ...agent, local: true })).toContain("PRIVATE_GLANCE_VISIBLE");
@@ -640,21 +641,10 @@ test("a LOCAL capture is sanitised on the same terms as a remote one", () => {
   // `tmux.capture` is stubbed rather than the child process, because that
   // object IS the seam on the local branch, and a real pane cannot be made to
   // emit a clipboard write and a mid-attribute line on demand.
-  store.claimAgent({
-    location: location("%20"),
-    owner_pid: process.pid,
-    meta: {
-      agent_name: "local-worker",
-      pi_session: null,
-      workstream: "murmur",
-      role: null,
-      cli: "pi",
-      driver: "human",
-    },
-  });
+  localAgent("%20", "local-worker");
   const identity = loadIdentity();
   if (!identity) throw new Error("no identity");
-  const agent = status(store, identity).panes.find((candidate) => candidate.pane === "%20");
+  const agent = status(store, identity, local).panes.find((candidate) => candidate.pane === "%20");
   if (!agent) throw new Error("no local pane");
   vi.spyOn(tmux, "capture").mockReturnValue(
     "\u001b[2J\u001b[1;1H\u001b[31mred\u001b]52;c;cGF5bG9hZA==\u0007\thot\n\u001b[41mbled",
@@ -687,27 +677,26 @@ test("the preview names the harness and keeps the cli line", () => {
     activity: "running",
     attention: [],
     freshness: "fresh",
-    agent_id: "a",
     agent_name: "w",
-    pi_session: null,
     workstream: null,
     role: null,
     cli: "pi",
     harness: null,
     driver: "human",
-    model: null,
-    provider: null,
-    effort: null,
-    provider_effort: null,
-    context_pct: null,
-    context_tokens: null,
-    context_window: null,
-    usage: null,
     pending: null,
     updated_at: 1,
     snapshot_at: null,
     fetched_at: null,
     attached_pane: null,
+    pane_title: null,
+    title: null,
+    message: null,
+    progress: null,
+    blocked_kind: null,
+    resume_command: null,
+    resume_cwd: null,
+    cwd: null,
+    focused: false,
     runs_on: null,
   } as const satisfies PaneView;
   const text = (over: Partial<PaneView>) =>

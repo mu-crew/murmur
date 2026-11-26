@@ -8,8 +8,9 @@ import { runJump } from "../src/jump-select.js";
 import { jumpTarget } from "../src/jump-target.js";
 import type { Mux } from "../src/mux.js";
 import { openStore, type Store } from "../src/store.js";
-import type { AgentMeta, Driver, Location } from "../src/types.js";
+import type { Driver } from "../src/types.js";
 import { isVisible, type PaneView } from "../src/view.js";
+import { vtmuxMux, vtmuxRow } from "./helpers/panes.js";
 
 let store: Store;
 
@@ -17,6 +18,7 @@ beforeEach(() => {
   vi.stubEnv("MURMUR_STATE_DIR", mkdtempSync(join(tmpdir(), "murmur-jump-select-")));
   createIdentity("here");
   store = openStore();
+  rows = [];
 });
 
 afterEach(() => {
@@ -41,41 +43,30 @@ function identity(): NodeIdentity {
   return loaded;
 }
 
-function location(pane: string): Location {
-  return {
-    server: { kind: "default" },
-    session: asSessionId("$0"),
-    window: asWindowId("@1"),
-    pane: asPaneId(pane),
-    session_name: "dev",
-    window_name: pane,
-  };
-}
+/** This node's live panes, as the next local read's `list-panes` answers. */
+let rows: string[][] = [];
 
-function meta(driver: Driver, agentName: string | null = null): AgentMeta {
-  return {
-    agent_name: agentName,
-    pi_session: null,
-    workstream: "murmur",
-    role: null,
-    cli: "pi",
-    driver,
-  };
-}
-
-/** A local pane with a running agent. */
+/** A local pane with a working agent; orchestrated when mu named it. */
 function agent(pane: string, driver: Driver = "human", agentName: string | null = null): void {
-  const claim = store.claimAgent({
-    location: location(pane),
-    owner_pid: process.pid,
-    meta: meta(driver, agentName),
-  });
-  store.setActivity({
-    agent_id: "agent_id" in claim ? claim.agent_id : "",
-    owner_pid: process.pid,
-    activity: "running",
-    location: location(pane),
-  });
+  rows.push(
+    vtmuxRow({
+      pane,
+      session: "$0",
+      window: "@1",
+      session_name: "dev",
+      window_name: pane,
+      state: "working",
+      app: "pi",
+      mu_agent: driver === "orchestrated" ? (agentName ?? `crew${pane}`) : "",
+      mu_workstream: driver === "orchestrated" ? "murmur" : "",
+      pane_title: driver === "human" ? (agentName ?? "") : "",
+    }),
+  );
+}
+
+/** The mux a jump reads local panes through. */
+function localMux(over: Partial<Mux> = {}): Mux {
+  return vtmuxMux(rows, over);
 }
 
 function remotePane(pane: string) {
@@ -87,25 +78,22 @@ function remotePane(pane: string) {
     session_name: "far",
     window_name: "remote",
     agent: {
-      agent_id: "remote-agent",
       activity: "running" as const,
       agent_name: "remote-worker",
-      pi_session: null,
       workstream: null,
       role: null,
       cli: "pi",
       harness: null,
       driver: "human" as const,
-      model: null,
-      provider: null,
-      context_tokens: null,
-      context_window: null,
-      provider_effort: null,
-      usage: null,
       pending: null,
-      effort: null,
-      context_pct: null,
-      claimed_at: 1,
+      pane_title: null,
+      title: null,
+      message: null,
+      progress: null,
+      blocked_kind: null,
+      resume_command: null,
+      resume_cwd: null,
+      cwd: null,
       updated_at: 1,
     },
     attention: [],
@@ -119,7 +107,7 @@ test("enter focuses an attached local pane instead of opening another remote ses
     ok: true,
     at: Date.now(),
     snapshot: {
-      murmur_snapshot: 7,
+      murmur_snapshot: 8,
       host_id: "REMOTE",
       display_name: "dev",
       murmur_version: "0.2.0",
@@ -133,25 +121,22 @@ test("enter focuses an attached local pane instead of opening another remote ses
           session_name: "far",
           window_name: "remote",
           agent: {
-            agent_id: "remote-agent",
             activity: "running",
             agent_name: "worker-1",
-            pi_session: null,
             workstream: "murmur",
             role: null,
             cli: "pi",
             harness: null,
             driver: "human",
-            model: null,
-            provider: null,
-            context_tokens: null,
-            context_window: null,
-            provider_effort: null,
-            usage: null,
             pending: null,
-            effort: null,
-            context_pct: null,
-            claimed_at: 1,
+            pane_title: null,
+            title: null,
+            message: null,
+            progress: null,
+            blocked_kind: null,
+            resume_command: null,
+            resume_cwd: null,
+            cwd: null,
             updated_at: 1,
           },
           attention: [],
@@ -161,7 +146,7 @@ test("enter focuses an attached local pane instead of opening another remote ses
   });
 
   const attached = asPaneId("%12");
-  const mux = {
+  const mux = localMux({
     localPaneProcesses: () => [
       {
         pane: attached,
@@ -171,16 +156,17 @@ test("enter focuses an attached local pane instead of opening another remote ses
       },
     ],
     attach: vi.fn(() => true),
-  } as unknown as Mux;
+  });
   let jumped = false;
 
-  runJump(store, identity(), key("REMOTE", "%9"), {
+  await runJump(store, identity(), key("REMOTE", "%9"), {
     fzf: () => "",
     jump: () => {
       jumped = true;
       return { ok: true };
     },
     mux,
+    rex: false,
   });
 
   expect(mux.attach).toHaveBeenCalledWith(attached);
@@ -197,7 +183,7 @@ test("a cold remote jump warns and still proceeds when confirmed", async () => {
     ok: true,
     at: Date.now(),
     snapshot: {
-      murmur_snapshot: 7,
+      murmur_snapshot: 8,
       host_id: "REMOTE",
       display_name: "dev",
       murmur_version: "0.2.0",
@@ -213,7 +199,7 @@ test("a cold remote jump warns and still proceeds when confirmed", async () => {
   const warnings: string[] = [];
   let jumped = false;
 
-  runJump(store, identity(), key("REMOTE", "%9"), {
+  await runJump(store, identity(), key("REMOTE", "%9"), {
     fzf: (args, _input) => {
       if (args.some((arg) => arg.includes("hardware token"))) {
         warnings.push(args.join("\n"));
@@ -226,6 +212,8 @@ test("a cold remote jump warns and still proceeds when confirmed", async () => {
       return { ok: true };
     },
     warm: () => false,
+    mux: localMux(),
+    rex: false,
   });
 
   expect(warnings).toHaveLength(1);
@@ -239,7 +227,7 @@ test("a cold remote jump can be cancelled after the warning", async () => {
     ok: true,
     at: Date.now(),
     snapshot: {
-      murmur_snapshot: 7,
+      murmur_snapshot: 8,
       host_id: "REMOTE",
       display_name: "dev",
       murmur_version: "0.2.0",
@@ -255,7 +243,7 @@ test("a cold remote jump can be cancelled after the warning", async () => {
   let jumped = false;
   let warned = false;
 
-  runJump(store, identity(), key("REMOTE", "%9"), {
+  await runJump(store, identity(), key("REMOTE", "%9"), {
     fzf: (args) => {
       if (args.some((arg) => arg.includes("hardware token"))) {
         warned = true;
@@ -268,6 +256,8 @@ test("a cold remote jump can be cancelled after the warning", async () => {
       return { ok: true };
     },
     warm: () => false,
+    mux: localMux(),
+    rex: false,
   });
 
   expect(warned).toBe(true);
@@ -290,16 +280,17 @@ test("a crew pane hidden from the default view can still be jumped to", async ()
   expect(process.exitCode).not.toBe(1);
 });
 
-test("an attention-only pane is jumpable, which keying on an agent id would break", async () => {
-  // A codex pane has no agent row and therefore no agent id. Keying a jump on
-  // one would make exactly the rows that need a human unreachable -- and those
-  // rows are the reason the notify verb exists.
-  store.requestAttention({
-    kind: "blocked",
-    location: location("%7"),
-    message: "needs input",
-    source: "codex",
-    driver: "human",
+test("a crash murmur recorded is jumpable, though no program reports the pane", async () => {
+  // A crashed pane has no program left to report it; its row is murmur's own.
+  // Keying a jump on a live program would make exactly the row that needs a
+  // human unreachable.
+  store.recordCrash({
+    server: { kind: "default" },
+    session: asSessionId("$0"),
+    window: asWindowId("@1"),
+    pane: asPaneId("%7"),
+    session_name: "dev",
+    window_name: null,
   });
 
   expect(await jumpWith(key(here(), "%7"))).toEqual(["%7"]);
@@ -316,7 +307,7 @@ test("a selection is resolved on host AND pane, not on the pane alone", async ()
     ok: true,
     at: Date.now(),
     snapshot: {
-      murmur_snapshot: 7,
+      murmur_snapshot: 8,
       host_id: "REMOTE",
       display_name: "container-id",
       murmur_version: "0.2.0",
@@ -330,25 +321,22 @@ test("a selection is resolved on host AND pane, not on the pane alone", async ()
           session_name: "far",
           window_name: "remote",
           agent: {
-            agent_id: "remote-agent",
             activity: "running",
             agent_name: "remote-worker",
-            pi_session: null,
             workstream: null,
             role: null,
             cli: "pi",
             harness: null,
             driver: "human",
-            model: null,
-            provider: null,
-            context_tokens: null,
-            context_window: null,
-            provider_effort: null,
-            usage: null,
             pending: null,
-            effort: null,
-            context_pct: null,
-            claimed_at: 1,
+            pane_title: null,
+            title: null,
+            message: null,
+            progress: null,
+            blocked_kind: null,
+            resume_command: null,
+            resume_cwd: null,
+            cwd: null,
             updated_at: 1,
           },
           attention: [],
@@ -358,13 +346,15 @@ test("a selection is resolved on host AND pane, not on the pane alone", async ()
   });
 
   const jumped: PaneView[] = [];
-  runJump(store, identity(), key("REMOTE", "%1"), {
+  await runJump(store, identity(), key("REMOTE", "%1"), {
     fzf: () => "",
     jump: (_store, pane: PaneView) => {
       jumped.push(pane);
       return { ok: true };
     },
     warm: () => true,
+    mux: localMux(),
+    rex: false,
   });
 
   expect(jumped.map((pane) => pane.host_id)).toEqual(["REMOTE"]);
@@ -377,8 +367,10 @@ async function jumpWith(token: string, deps: Partial<Parameters<typeof runJump>[
   const identity = loadIdentity();
   if (!identity) throw new Error("no identity");
   const jumped: string[] = [];
-  runJump(store, identity, token, {
+  await runJump(store, identity, token, {
     fzf: () => "",
+    mux: localMux(),
+    rex: false,
     jump: (_store, pane: PaneView) => {
       jumped.push(pane.pane);
       return { ok: true };
@@ -434,14 +426,14 @@ test("jump matches the tmux server, not only host and pane", async () => {
   write.mockRestore();
 });
 
-function stderrLines(run: () => unknown): string[] {
+async function stderrLines(run: () => Promise<unknown>): Promise<string[]> {
   const writes: string[] = [];
   const spy = vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
     writes.push(String(chunk));
     return true;
   });
   try {
-    run();
+    await run();
   } finally {
     spy.mockRestore();
   }
@@ -451,7 +443,7 @@ function stderrLines(run: () => unknown): string[] {
 test("a multi-line jump failure reaches stderr as exactly one line", async () => {
   agent("%7");
   const token = jumpTarget({ host_id: here(), server: { kind: "default" }, pane: asPaneId("%7") });
-  const lines = stderrLines(() =>
+  const lines = await stderrLines(() =>
     jumpWith(token, {
       jump: () => ({
         ok: false,
@@ -473,7 +465,7 @@ test("a stale target whose pane holds a newline still prints one line", async ()
     server: { kind: "default" },
     pane: asPaneId("%123\nsecond line"),
   });
-  const lines = stderrLines(() => jumpWith(token));
+  const lines = await stderrLines(() => jumpWith(token));
   expect(lines).toHaveLength(1);
   expect(process.exitCode).toBe(1);
 });
@@ -481,7 +473,7 @@ test("a stale target whose pane holds a newline still prints one line", async ()
 test("Unicode line separators in a message do not make a second line", async () => {
   agent("%7");
   const token = jumpTarget({ host_id: here(), server: { kind: "default" }, pane: asPaneId("%7") });
-  const lines = stderrLines(() =>
+  const lines = await stderrLines(() =>
     jumpWith(token, {
       jump: () => ({ ok: false, reason: "attach_failed", message: "a\u2028b\u2029c\u0085d\re" }),
     }),

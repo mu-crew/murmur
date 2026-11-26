@@ -3,9 +3,8 @@ import { isAbsolute, join } from "node:path";
 
 /**
  * The state directory's name. `murmur3` since the OSC 7501 collector: 3.0's
- * store holds no agent rows, and a 2.x murmur (its CLI, or its pi extension
- * still loaded in a pi) refuses it, so the two keep separate directories and
- * run side by side. A change that breaks on-disk compatibility with the
+ * store holds no agent rows, and a 2.x murmur refuses it, so the two keep
+ * separate directories and run side by side. A change that breaks on-disk compatibility with the
  * released version takes the next name; an additive one stays here.
  */
 export const STATE_DIR_NAME = "murmur3";

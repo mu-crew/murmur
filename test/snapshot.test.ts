@@ -4,13 +4,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, test } from "vitest";
 import { createIdentity } from "../src/identity.js";
-import { asPaneId, asSessionId, asWindowId, type PaneId } from "../src/ids.js";
-import { drainInbox, type InboxHost, writeInboxEvent } from "../src/inbox.js";
+import { buildSnapshot, readLocal } from "../src/local.js";
 import { parseSnapshot, SnapshotInvalidError } from "../src/snapshot.js";
 import { openStore, type Store } from "../src/store.js";
-import type { AgentMeta, Location, Snapshot, TmuxServer } from "../src/types.js";
+import type { Snapshot, TmuxServer } from "../src/types.js";
 import { builtArtifact } from "./helpers/built.js";
-import { fakeMux } from "./helpers/fake-mux.js";
+import { vtmuxMux, vtmuxRow } from "./helpers/panes.js";
 
 /**
  * The snapshot document, as the ONE thing a node publishes.
@@ -21,9 +20,8 @@ import { fakeMux } from "./helpers/fake-mux.js";
  * state of its own to interpret a snapshot, so there is no state for it to hold
  * wrongly.
  *
- * `store.test.ts` owns the store's write semantics; this file owns the round
- * trip: build -> serialise -> validate, plus the shipped `murmur export` that
- * performs it.
+ * `local.test.ts` owns how a pane is read; this file owns the round trip:
+ * read -> build -> serialise -> validate, plus the shipped `murmur export`.
  */
 
 const stores: Store[] = [];
@@ -48,279 +46,143 @@ function store(): Store {
   return opened;
 }
 
-function location(pane: string, window = "@1"): Location {
-  return {
-    server: { kind: "default" },
-    session: asSessionId("$0"),
-    window: asWindowId(window),
-    pane: asPaneId(pane),
-    session_name: "work",
-    window_name: "worker-1",
-  };
-}
-
-const META: AgentMeta = {
-  agent_name: "worker-1",
-  pi_session: "01JQ",
-  workstream: "murmur",
-  role: "implementer",
-  cli: "pi",
-  driver: "orchestrated",
-};
-
-const alive =
-  (pids: number[]) =>
-  (pid: number): boolean =>
-    pids.includes(pid);
-
 const IDENTITY = { host_id: "H", display_name: "here" };
 
-function live(...panes: string[]): Set<PaneId> {
-  return new Set(panes.map(asPaneId));
+/** This node's snapshot, built from one local read of these vtmux rows. */
+async function built(s: Store, rows: string[][], now = 42): Promise<Snapshot> {
+  const local = await readLocal(s, vtmuxMux(rows), now, { rex: false });
+  return buildSnapshot(IDENTITY, local.panes, now);
 }
 
 // --- the document round trip ---------------------------------------------
 
-test("a built snapshot validates as one, and survives serialisation unchanged", () => {
+test("a built snapshot validates as one, and survives serialisation unchanged", async () => {
   // The property that makes the two-node case work at all: what this node
   // publishes is exactly what a peer's validator accepts. A build path and a
   // validate path that disagreed would be undetectable locally and would show
   // up as "that host is broken" on every OTHER machine.
   const s = store();
-  s.claimAgent({ location: location("%1"), owner_pid: process.pid, meta: META, now: 5 });
-  s.setActivity({
-    agent_id: s.localPanes()[0]?.agent?.agent_id as string,
-    owner_pid: process.pid,
-    activity: "running",
-    location: location("%1"),
-    now: 6,
-  });
-  s.requestAttention({
-    kind: "blocked",
-    location: location("%2", "@2"),
-    message: "needs input",
-    source: "codex",
-    driver: "human",
-    now: 7,
-  });
-
-  const built = s.buildLocalSnapshot(IDENTITY, {
-    server: { kind: "default" },
-    panes: live("%1", "%2"),
-    isAlive: alive([process.pid]),
-    now: 42,
-  });
-  const parsed = parseSnapshot(JSON.stringify(built));
-
-  expect(parsed).toEqual(built);
-  expect(parsed.panes.map((pane) => pane.pane)).toEqual(["%1", "%2"]);
-  expect(parsed.panes.map((pane) => pane.server)).toEqual([
-    { kind: "default" },
-    { kind: "default" },
+  const document = await built(s, [
+    vtmuxRow({
+      pane: "%1",
+      window: "@1",
+      window_name: "worker-1",
+      state: "working",
+      app: "pi",
+      progress: "40",
+      title: "editing",
+      mu_agent: "worker-1",
+      mu_workstream: "murmur",
+      mu_role: "implementer",
+      resume_command: "pi --session /s/1.jsonl",
+      resume_cwd: "/work",
+      state_time: "5",
+    }),
+    vtmuxRow({
+      pane: "%2",
+      window: "@2",
+      state: "blocked",
+      kind: "question",
+      app: "codex",
+      message: "needs input",
+      state_time: "7",
+    }),
   ]);
-  // An attention-only pane is a first-class row: no agent, still addressed,
-  // still carrying its own location so a reader can jump to it.
+  const parsed = parseSnapshot(JSON.stringify(document));
+
+  expect(parsed).toEqual(document);
+  expect(parsed.panes.map((pane) => pane.pane)).toEqual(["%1", "%2"]);
+  expect(parsed.panes[0]?.agent).toMatchObject({
+    activity: "running",
+    agent_name: "worker-1",
+    workstream: "murmur",
+    role: "implementer",
+    driver: "orchestrated",
+    harness: "pi",
+    progress: 40,
+    title: "editing",
+    resume_command: "pi --session /s/1.jsonl",
+    resume_cwd: "/work",
+    updated_at: 5_000,
+  });
+  // A blocked program's request is an attention row carrying its own words.
   expect(parsed.panes[1]).toMatchObject({
-    agent: null,
-    session: "$0",
     window: "@2",
+    agent: { activity: "stopped", blocked_kind: "question", driver: "human" },
     attention: [
       {
         kind: "blocked",
         message: "needs input",
         source: "codex",
         driver: "human",
-        requested_at: 7,
+        requested_at: 7_000,
       },
     ],
   });
 });
 
-test("the document carries exactly the keys it declares, and no others", () => {
-  // A closed key set, asserted as a shape rather than as prose: an unknown key
-  // that survived a hop would let a reader act on something no writer here ever
-  // agreed to.
-  const s = store();
-  s.claimAgent({ location: location("%1"), owner_pid: process.pid, meta: META, now: 1 });
-
-  const built = s.buildLocalSnapshot(IDENTITY, {
-    server: { kind: "default" },
-    panes: live("%1"),
-    isAlive: alive([process.pid]),
-    now: 2,
-  });
-
-  expect(Object.keys(built).sort()).toEqual([
-    "display_name",
-    "generated_at",
-    "host_id",
-    "murmur_snapshot",
-    "murmur_version",
-    "panes",
+test("the document carries no local-only fact: focus and runs_on stay home", async () => {
+  // A remote node's focus says nothing about this operator, and `@mu_host`
+  // names a host from THIS node's point of view. The reader rejects unknown
+  // keys, so either leaking would also break every peer at once.
+  const document = await built(store(), [
+    vtmuxRow({ pane: "%1", state: "working", focused: "1", mu_agent: "w", mu_host: "linuxpc" }),
   ]);
-  expect(Object.keys(built.panes[0] ?? {}).sort()).toEqual([
-    "agent",
-    "attention",
-    "pane",
-    "server",
-    "session",
-    "session_name",
-    "window",
-    "window_name",
-  ]);
+  const text = JSON.stringify(document);
+  expect(text).not.toContain("focused");
+  expect(text).not.toContain("runs_on");
+  expect(text).not.toContain("linuxpc");
+  expect(parseSnapshot(text).panes).toHaveLength(1);
 });
 
-test("panes are emitted sorted by pane id, and order carries no meaning", () => {
-  // Sorted for DIFFABLE output only. The contract says order is presentation,
-  // so the assertion is that the reader gets the same set whatever order it
-  // arrives in -- a reader that depended on order would be reading a fact the
-  // writer never promised.
-  const s = store();
-  for (const pane of ["%30", "%4", "%100"]) {
-    s.requestAttention({
-      kind: "done",
-      location: location(pane),
-      message: "",
-      source: "pi",
-      driver: "human",
-    });
-  }
-
-  const built = s.buildLocalSnapshot(IDENTITY, {
-    server: { kind: "default" },
-    panes: live("%30", "%4", "%100"),
-    isAlive: alive([]),
-    now: 1,
-  });
-
-  expect(built.panes.map((pane) => pane.pane)).toEqual(["%100", "%30", "%4"]);
-  const shuffled = { ...built, panes: [...built.panes].reverse() };
-  expect(new Set(parseSnapshot(JSON.stringify(shuffled)).panes.map((p) => p.pane))).toEqual(
-    new Set(["%100", "%30", "%4"]),
-  );
+test("panes are emitted sorted by address, and order carries no meaning", async () => {
+  const document = await built(store(), [
+    vtmuxRow({ pane: "%3", state: "working" }),
+    vtmuxRow({ pane: "%1", state: "idle" }),
+    vtmuxRow({ pane: "%2", state: "done" }),
+  ]);
+  expect(document.panes.map((pane) => pane.pane)).toEqual(["%1", "%2", "%3"]);
 });
 
-test("a snapshot reconciles and publishes every known tmux server", () => {
+test("absence from a snapshot is absence: a pane that left is not published", async () => {
+  // A pane that finished and closed is simply gone; one that vanished
+  // mid-work is published as murmur's own `crashed` row, with the identity it
+  // was last seen with, so a peer can still say WHICH agent died.
   const s = store();
-  const privateLocation: Location = {
-    ...location("%2", "@2"),
-    server: { kind: "label", value: "mule" },
-  };
-  // %1's owner is dead: a vanished pane with a live owner keeps its row.
-  s.claimAgent({ location: location("%1"), owner_pid: 424_242, meta: META, now: 1 });
-  s.claimAgent({ location: privateLocation, owner_pid: process.pid, meta: META, now: 1 });
-
-  const built = s.buildLocalSnapshot(IDENTITY, [
-    { server: { kind: "default" }, panes: live(), isAlive: alive([process.pid]), now: 2 },
+  await built(s, [
+    vtmuxRow({ pane: "%1", state: "done" }),
+    vtmuxRow({ pane: "%2", state: "working", mu_agent: "worker-2" }),
+  ]);
+  const after = await built(s, [], 50);
+  expect(after.panes).toMatchObject([
     {
-      server: { kind: "label", value: "mule" },
-      panes: live("%2"),
-      isAlive: alive([process.pid]),
-      now: 2,
+      pane: "%2",
+      agent: { agent_name: "worker-2", driver: "orchestrated", activity: "stopped" },
+      attention: [{ kind: "crashed", source: "murmur", requested_at: 50 }],
     },
   ]);
-
-  expect(built.panes).toMatchObject([{ server: { kind: "label", value: "mule" }, pane: "%2" }]);
-  expect(s.localPanes()).toHaveLength(1);
+  expect(parseSnapshot(JSON.stringify(after)).panes).toHaveLength(1);
 });
 
-test("absence from a snapshot is absence: a build reconciles before it publishes", () => {
-  // The whole reason `buildLocalSnapshot` reconciles rather than trusting the
-  // caller to: a document built from unreconciled rows publishes agents whose
-  // panes are gone, and a reader that treats absence as absence has no way to
-  // tell it was lied to.
-  const s = store();
-  s.claimAgent({ location: location("%live"), owner_pid: process.pid, meta: META, now: 1 });
-  s.claimAgent({ location: location("%gone"), owner_pid: 424_242, meta: META, now: 1 });
-  s.requestAttention({
-    kind: "blocked",
-    location: location("%gone"),
-    message: "stale",
-    source: "codex",
-    driver: "human",
-  });
-
-  const built = s.buildLocalSnapshot(IDENTITY, {
-    server: { kind: "default" },
-    panes: live("%live"),
-    isAlive: alive([process.pid]),
-    now: 9,
-  });
-
-  expect(built.panes.map((pane) => pane.pane)).toEqual(["%live"]);
-  // And the local tables agree, so a second reader of the same node sees the
-  // same thing the document said.
-  expect(s.localPanes().map((pane) => pane.pane)).toEqual(["%live"]);
+test("a pane with nothing to say is a pane nobody mentions, locally or on the wire", async () => {
+  // A shell with no OSC 7501 record and no crew tag is not an agent: it is not
+  // listed, so the validator's rule 3 can never fire against our own output.
+  const document = await built(store(), [
+    vtmuxRow({ pane: "%1" }),
+    vtmuxRow({ pane: "%2", state: "idle" }),
+  ]);
+  expect(document.panes.map((pane) => pane.pane)).toEqual(["%2"]);
+  expect(parseSnapshot(JSON.stringify(document)).panes).toHaveLength(1);
 });
 
-test("a snapshot never carries owner_pid, so remote liveness is unrepresentable", () => {
-  // Structural, over the whole object graph: reading the TYPE proves nothing
-  // about what JSON.stringify put on the wire, and it is the wire a peer reads.
-  const s = store();
-  s.claimAgent({ location: location("%1"), owner_pid: process.pid, meta: META, now: 1 });
+test("a snapshot states its own version and speaks snapshot 8", async () => {
+  const document = await built(store(), [], 1);
 
-  const text = JSON.stringify(
-    s.buildLocalSnapshot(IDENTITY, {
-      server: { kind: "default" },
-      panes: live("%1"),
-      isAlive: alive([process.pid]),
-      now: 2,
-    }),
-  );
-
-  expect(text).not.toContain("owner_pid");
-  expect(text).not.toContain(String(process.pid));
-});
-
-test("a pane with nothing to say is a pane nobody mentions, locally or on the wire", () => {
-  // Rule 3 -- "a pane with no agent and no attention must not be emitted" -- is
-  // upheld by CONSTRUCTION, not by a filter that could be forgotten: every pane
-  // entry exists because a row exists, so there is no way to build an empty
-  // one. Asserted at both layers, because the validator rejects such an entry
-  // (see the rejection table above) and a node that could build one would
-  // therefore be reported as broken by every peer it has.
-  const s = store();
-  s.claimAgent({ location: location("%1"), owner_pid: process.pid, meta: META, now: 1 });
-  const agentId = s.localPanes()[0]?.agent?.agent_id as string;
-  s.requestAttention({
-    kind: "done",
-    location: location("%2"),
-    message: "",
-    source: "pi",
-    driver: "human",
-  });
-
-  // %1 loses its agent and never had attention; %2 keeps a `done` its agent
-  // never owned. Releasing deliberately does not clear attention, so this is
-  // the state a settled-then-exited agent actually leaves behind.
-  s.releaseAgent({ agent_id: agentId, owner_pid: process.pid, location: location("%1") });
-
-  expect(s.localPanes().map((pane) => pane.pane)).toEqual(["%2"]);
-  for (const pane of s.localPanes()) {
-    expect(pane.agent !== null || pane.attention.length > 0).toBe(true);
-  }
-  const built = s.buildLocalSnapshot(IDENTITY, {
-    server: { kind: "default" },
-    panes: live("%1", "%2"),
-    isAlive: alive([process.pid]),
-    now: 3,
-  });
-  expect(built.panes.map((pane) => pane.pane)).toEqual(["%2"]);
-  expect(parseSnapshot(JSON.stringify(built)).panes).toHaveLength(1);
-});
-
-test("a snapshot states its own version and speaks snapshot 7", () => {
-  const built = store().buildLocalSnapshot(IDENTITY, {
-    server: { kind: "default" },
-    panes: live(),
-    now: 1,
-  });
-
-  expect(built.murmur_snapshot).toBe(7);
-  expect(built.murmur_version).toMatch(/^\d+\.\d+\.\d+/);
+  expect(document.murmur_snapshot).toBe(8);
+  expect(document.murmur_version).toMatch(/^\d+\.\d+\.\d+/);
   // An empty node is a valid, complete document: it says "nothing here", which
   // is a fact, not an absence of one.
-  expect(parseSnapshot(JSON.stringify(built)).panes).toEqual([]);
+  expect(parseSnapshot(JSON.stringify(document)).panes).toEqual([]);
 });
 
 // --- validation ----------------------------------------------------------
@@ -337,7 +199,7 @@ test.each<[TmuxServer, TmuxServer]>([
   ],
 ])("server tag %j round-trips exactly", (server, expected) => {
   const document = {
-    murmur_snapshot: 7,
+    murmur_snapshot: 8,
     host_id: "H",
     display_name: "d",
     murmur_version: "0.5.0",
@@ -389,7 +251,7 @@ test.each([
   ],
 ])("rejects %s with its exact server field path", (_why, server, path, detail) => {
   const document = {
-    murmur_snapshot: 7,
+    murmur_snapshot: 8,
     host_id: "H",
     display_name: "d",
     murmur_version: "0.5.0",
@@ -414,7 +276,7 @@ test.each([
 
 test("a pane missing its server tag is rejected at the pane path", () => {
   const document = {
-    murmur_snapshot: 7,
+    murmur_snapshot: 8,
     host_id: "H",
     display_name: "d",
     murmur_version: "0.5.0",
@@ -447,7 +309,7 @@ test("the same pane id is valid on different tmux servers", () => {
     attention: [{ kind: "done", message: "", source: "pi", driver: "human", requested_at: 1 }],
   };
   const document = {
-    murmur_snapshot: 7,
+    murmur_snapshot: 8,
     host_id: "H",
     display_name: "d",
     murmur_version: "0.5.0",
@@ -473,7 +335,7 @@ test("snapshot v2 is deliberately incompatible and names both versions", () => {
         panes: [],
       }),
     ),
-  ).toThrow("murmur_snapshot: expected 7, got 2");
+  ).toThrow("murmur_snapshot: expected 8, got 2");
 });
 
 test("parseSnapshot names the first failing path so an operator can act", () => {
@@ -481,7 +343,7 @@ test("parseSnapshot names the first failing path so an operator can act", () => 
   // shows `last_error` and nothing else. "invalid snapshot" would send them to
   // read code on another machine.
   const bad = JSON.stringify({
-    murmur_snapshot: 7,
+    murmur_snapshot: 8,
     host_id: "H",
     display_name: "d",
     murmur_version: "0.1.0",
@@ -508,7 +370,7 @@ test("parseSnapshot names the first failing path so an operator can act", () => 
 
 test("nothing is coerced, defaulted or carried through", () => {
   const base = {
-    murmur_snapshot: 7,
+    murmur_snapshot: 8,
     host_id: "H",
     display_name: "d",
     murmur_version: "0.1.0",
@@ -527,24 +389,21 @@ test("nothing is coerced, defaulted or carried through", () => {
   };
   // One process instance, as two panes would report it if a document claimed it.
   const owner = {
-    agent_id: "one-process",
     activity: "running",
     agent_name: null,
-    pi_session: null,
     workstream: null,
     role: null,
     cli: "pi",
     driver: "human",
-    model: null,
-    provider: null,
-    context_tokens: null,
-    context_window: null,
-    provider_effort: null,
-    usage: null,
     pending: null,
-    effort: null,
-    context_pct: null,
-    claimed_at: 1,
+    pane_title: null,
+    title: null,
+    message: null,
+    progress: null,
+    blocked_kind: null,
+    resume_command: null,
+    resume_cwd: null,
+    cwd: null,
     updated_at: 1,
   };
   // Each entry is a document a node could plausibly serve, and each names the
@@ -554,15 +413,15 @@ test("nothing is coerced, defaulted or carried through", () => {
     // Both directions, because compatibility is offered in neither: a reader
     // that accepted the older document would be guessing at the fields that
     // version added, which are exactly the state a human acts on.
-    ["a newer protocol", { ...base, murmur_snapshot: 8 }],
-    ["an older protocol", { ...base, murmur_snapshot: 6 }],
+    ["a newer protocol", { ...base, murmur_snapshot: 9 }],
+    ["an older protocol", { ...base, murmur_snapshot: 7 }],
     ["a stringly-typed clock", { ...base, generated_at: "1" }],
     ["a fractional clock", { ...base, generated_at: 1.5 }],
     ["a negative clock", { ...base, generated_at: -1 }],
     ["an empty host_id", { ...base, host_id: "" }],
     [
       "a missing murmur_version",
-      { murmur_snapshot: 7, host_id: "H", display_name: "d", generated_at: 1, panes: [] },
+      { murmur_snapshot: 8, host_id: "H", display_name: "d", generated_at: 1, panes: [] },
     ],
     ["an unknown top-level key", { ...base, extra: 3 }],
     ["panes as an object", { ...base, panes: {} }],
@@ -590,7 +449,15 @@ test("nothing is coerced, defaulted or carried through", () => {
     ["a numeric session_name", { ...base, panes: [{ ...pane, session_name: 7 }] }],
     ["a numeric window_name", { ...base, panes: [{ ...pane, window_name: 7 }] }],
     ["a numeric agent_name", { ...base, panes: [{ ...pane, agent: { ...owner, agent_name: 7 } }] }],
-    ["a numeric pi_session", { ...base, panes: [{ ...pane, agent: { ...owner, pi_session: 7 } }] }],
+    [
+      "a numeric resume_command",
+      { ...base, panes: [{ ...pane, agent: { ...owner, resume_command: 7 } }] },
+    ],
+    ["a progress over 100", { ...base, panes: [{ ...pane, agent: { ...owner, progress: 101 } }] }],
+    [
+      "an unknown blocked_kind",
+      { ...base, panes: [{ ...pane, agent: { ...owner, blocked_kind: "coffee" } }] },
+    ],
     ["a numeric workstream", { ...base, panes: [{ ...pane, agent: { ...owner, workstream: 7 } }] }],
     ["a numeric role", { ...base, panes: [{ ...pane, agent: { ...owner, role: 7 } }] }],
     ["a negative pending", { ...base, panes: [{ ...pane, agent: { ...owner, pending: -1 } }] }],
@@ -600,19 +467,6 @@ test("nothing is coerced, defaulted or carried through", () => {
       { ...base, panes: [{ ...pane, agent: { ...owner, pending: undefined } }] },
     ],
     ["a duplicate pane", { ...base, panes: [pane, pane] }],
-    [
-      // An agent_id is minted per process instance, so the same id in two panes
-      // claims one process owns two addresses -- which the local store cannot
-      // produce, since `pane` is UNIQUE in `agents`.
-      "the same agent_id in two panes",
-      {
-        ...base,
-        panes: [
-          { ...pane, agent: owner },
-          { ...pane, pane: "%2", agent: owner },
-        ],
-      },
-    ],
     [
       "a duplicate kind in one pane",
       { ...base, panes: [{ ...pane, attention: [...pane.attention, ...pane.attention] }] },
@@ -626,14 +480,20 @@ test("nothing is coerced, defaulted or carried through", () => {
           {
             ...pane,
             agent: {
-              agent_id: "a",
               activity: "running",
               agent_name: null,
-              pi_session: null,
               workstream: null,
               role: null,
               cli: "pi",
-              claimed_at: 1,
+              pane_title: null,
+              title: null,
+              message: null,
+              progress: null,
+              blocked_kind: null,
+              pending: null,
+              resume_command: null,
+              resume_cwd: null,
+              cwd: null,
               updated_at: 1,
             },
           },
@@ -684,7 +544,7 @@ test("murmur export prints exactly one snapshot document and nothing else", () =
   // and parse each piece, which is a reader that can act on half a document.
   expect(stdout.trimEnd().split("\n")).toHaveLength(1);
   const parsed: Snapshot = parseSnapshot(stdout);
-  expect(parsed).toMatchObject({ murmur_snapshot: 7, display_name: "exporter", panes: [] });
+  expect(parsed).toMatchObject({ murmur_snapshot: 8, display_name: "exporter", panes: [] });
 });
 
 test("murmur export takes no options: an unknown flag is rejected, not ignored", () => {
@@ -719,37 +579,15 @@ test("murmur export on an uninitialised node refuses instead of minting a node",
   expect(stdout).toBe("");
 });
 
-// --- runtime fields (snapshot v3) ----------------------------------------
+// --- the program's own fields (snapshot v8) -------------------------------
 
-/**
- * A valid v3 document with one agent pane, for the runtime-field tests.
- *
- * Local to this section rather than shared with the tests above: those build
- * their documents inline to make each rejection readable beside its reason, and
- * a shared builder would hide which field the case is actually about.
- */
-/** A valid usage bundle, for tests that vary one field of it. */
-const VALID_USAGE = {
-  input: 213_000,
-  output: 55_000,
-  cache_read: 4_100_000,
-  cache_write: 12_000,
-  total_tokens: 4_380_000,
-  cache_write_1h: 500,
-  reasoning: 9_000,
-  cost_input: 1.2,
-  cost_output: 2.4,
-  cost_cache_read: 0.41,
-  cost_cache_write: 0.6,
-  cost_total: 4.61,
-};
-
-function agentDocument(runtime: Record<string, unknown>): string {
+/** A valid document with one agent pane, its agent fields overridden. */
+function agentDocument(agent: Record<string, unknown>): string {
   return JSON.stringify({
-    murmur_snapshot: 7,
+    murmur_snapshot: 8,
     host_id: "H",
     display_name: "d",
-    murmur_version: "0.4.0",
+    murmur_version: "3.0.0",
     generated_at: 1,
     panes: [
       {
@@ -760,28 +598,24 @@ function agentDocument(runtime: Record<string, unknown>): string {
         session_name: null,
         window_name: null,
         agent: {
-          agent_id: "a-1",
           activity: "running",
           agent_name: null,
-          pi_session: null,
           workstream: null,
           role: null,
           cli: "pi",
           harness: "pi",
           driver: "human",
-          provider: null,
-          context_tokens: null,
-          context_window: null,
-          provider_effort: null,
-          usage: null,
           pending: null,
-          claimed_at: 1,
+          pane_title: null,
+          title: null,
+          message: null,
+          progress: null,
+          blocked_kind: null,
+          resume_command: null,
+          resume_cwd: null,
+          cwd: null,
           updated_at: 1,
-          // Spread LAST, and `model`, `effort` and `context_pct` are
-          // deliberately NOT defaulted above, so a caller can omit one to check
-          // that absent is rejected rather than quietly defaulted. The other
-          // runtime fields are defaulted here because no test varies them.
-          ...runtime,
+          ...agent,
         },
         attention: [],
       },
@@ -789,270 +623,79 @@ function agentDocument(runtime: Record<string, unknown>): string {
   });
 }
 
-test("a version 2 document is rejected as firmly as a newer one", () => {
-  // Forward compatibility is not offered in EITHER direction. A reader that
-  // accepted the older document would default its missing server identity,
-  // potentially addressing the same pane id on the wrong tmux server.
-  const older = agentDocument({ model: null, effort: null, context_pct: null }).replace(
-    '"murmur_snapshot":7',
-    '"murmur_snapshot":2',
-  );
-  expect(() => parseSnapshot(older)).toThrow(SnapshotInvalidError);
-  expect(() => parseSnapshot(older)).toThrow("murmur_snapshot");
+test("an older document is rejected with the version error, whatever it carries", () => {
+  // Compatibility is offered in neither direction: a 2.x document carries
+  // agent ids and model fields a 3.0 reader would have to guess around.
+  for (const version of [2, 6, 7]) {
+    const older = agentDocument({}).replace('"murmur_snapshot":8', `"murmur_snapshot":${version}`);
+    expect(() => parseSnapshot(older)).toThrow(SnapshotInvalidError);
+    expect(() => parseSnapshot(older)).toThrow(`murmur_snapshot: expected 8, got ${version}`);
+  }
 });
 
-test("the runtime fields round-trip", () => {
+test("the OSC 7501 and 7577 fields round-trip", () => {
   const parsed = parseSnapshot(
-    agentDocument({ model: "claude-opus-5", effort: "medium", context_pct: 11.7 }),
+    agentDocument({
+      activity: "stopped",
+      pane_title: "Fix auth",
+      title: "reviewing",
+      message: "waiting on 2 delegates",
+      progress: 0,
+      blocked_kind: "permission",
+      pending: 2,
+      resume_command: "claude --resume 0b5c",
+      resume_cwd: "/work",
+      cwd: "/work/sub",
+    }),
   );
   expect(parsed.panes[0]?.agent).toMatchObject({
-    model: "claude-opus-5",
-    effort: "medium",
-    context_pct: 11.7,
+    pane_title: "Fix auth",
+    title: "reviewing",
+    message: "waiting on 2 delegates",
+    progress: 0,
+    blocked_kind: "permission",
+    pending: 2,
+    resume_command: "claude --resume 0b5c",
+    resume_cwd: "/work",
+    cwd: "/work/sub",
   });
 });
 
-test("every runtime field is nullable", () => {
-  // A bare shell, codex, or a notify-only harness reports none of them, and an
-  // agent that cannot report one must not be forced to invent it. `context_pct`
-  // is null in one more case: pi returns a null percent right after compaction,
-  // before the next response.
-  const parsed = parseSnapshot(agentDocument({ model: null, effort: null, context_pct: null }));
-  expect(parsed.panes[0]?.agent).toMatchObject({
-    model: null,
-    provider: null,
-    context_tokens: null,
-    context_window: null,
-    provider_effort: null,
-    usage: null,
-    pending: null,
-    effort: null,
-    context_pct: null,
-  });
-});
-
-test("an unknown effort fails the whole document", () => {
-  // `effort` is a closed set, so a display variant is a broken peer rather than
-  // a value to coerce. Strict validation working as designed: the alternative is
-  // a sort or a render path receiving a word nothing in murmur defines.
-  const bad = agentDocument({ model: "m", effort: "Medium", context_pct: 1 });
-  expect(() => parseSnapshot(bad)).toThrow(SnapshotInvalidError);
-  expect(() => parseSnapshot(bad)).toThrow("effort");
-});
-
-test("a context percentage outside 0..100 is rejected", () => {
-  // It is a percentage of a context window, so the range is the whole domain.
-  // Nothing is clamped: a document asserting 140% is describing something that
-  // did not happen, and saying so is more useful than rendering it.
-  for (const percent of [-1, 101, -0.5, 100.5]) {
-    expect(() =>
-      parseSnapshot(agentDocument({ model: "m", effort: "low", context_pct: percent })),
-    ).toThrow(SnapshotInvalidError);
-  }
-  // The boundaries themselves are valid: a fresh context is 0 and a full one is
-  // 100, and both are states an agent is legitimately in.
-  for (const percent of [0, 100]) {
-    expect(
-      parseSnapshot(agentDocument({ model: "m", effort: "low", context_pct: percent })).panes[0]
-        ?.agent?.context_pct,
-    ).toBe(percent);
+test("every program field is nullable, and none may be omitted", () => {
+  // A program that reports nothing is a valid agent; a node that omits a key
+  // is speaking a different document than it claims to.
+  expect(parseSnapshot(agentDocument({})).panes[0]?.agent?.resume_command).toBeNull();
+  for (const key of [
+    "pane_title",
+    "title",
+    "message",
+    "progress",
+    "blocked_kind",
+    "pending",
+    "resume_command",
+    "resume_cwd",
+    "cwd",
+    "harness",
+  ]) {
+    const missing = JSON.parse(agentDocument({}));
+    missing.panes[0].agent[key] = undefined;
+    expect(() => parseSnapshot(JSON.stringify(missing)), key).toThrow(`missing key ${key}`);
   }
 });
 
-test("a non-finite context percentage cannot survive the wire", () => {
-  // NaN and Infinity are not expressible in JSON -- `JSON.stringify` emits
-  // `null` for both -- so a document cannot carry one, and the null it becomes
-  // is a legitimate value. `percentOrNull` still rejects them, because it also
-  // guards the in-process path where a builder could hand one over directly.
-  expect(
-    JSON.parse(agentDocument({ model: "m", effort: "low", context_pct: Number.NaN })).panes[0].agent
-      .context_pct,
-  ).toBeNull();
-});
-
-test("a stringly-typed context percentage is rejected", () => {
-  expect(() =>
-    parseSnapshot(agentDocument({ model: "m", effort: "low", context_pct: "11.7" })),
-  ).toThrow("context_pct");
-});
-
-test("an agent missing a runtime field is rejected, not defaulted", () => {
-  // Same rule every other field follows: absent is not null. A node that means
-  // "no model" says so with an explicit null, and one that omits the key is a
-  // node speaking a different document than it claims to.
-  expect(() => parseSnapshot(agentDocument({ effort: null, context_pct: null }))).toThrow(
-    "missing key model",
-  );
-  expect(() => parseSnapshot(agentDocument({ model: null, context_pct: null }))).toThrow(
-    "missing key effort",
-  );
-  expect(() => parseSnapshot(agentDocument({ model: null, effort: null }))).toThrow(
-    "missing key context_pct",
-  );
-});
-
-test("a negative token count or cost is rejected, per field", () => {
-  // Found by mutation: widening `quantity`'s lower bound from 0 to -1 left the
-  // whole suite green, because the usage tests only ever round-tripped VALID
-  // bundles. A peer could publish impossible negative tokens or dollars and
-  // murmur would accept, store and re-serve them as trusted state.
-  //
-  // Table-driven over every numeric field, because the guard is applied
-  // per-field and a single spot-check would not notice one of the twelve using
-  // the wrong helper.
-  const numeric = [
-    "input",
-    "output",
-    "cache_read",
-    "cache_write",
-    "total_tokens",
-    "cache_write_1h",
-    "reasoning",
-    "cost_input",
-    "cost_output",
-    "cost_cache_read",
-    "cost_cache_write",
-    "cost_total",
-  ] as const;
-
-  for (const field of numeric) {
-    const document = agentDocument({
-      model: "m",
-      effort: "low",
-      context_pct: 1,
-      usage: { ...VALID_USAGE, [field]: -1 },
-    });
-    expect(() => parseSnapshot(document), field).toThrow(SnapshotInvalidError);
-    // Named by path, so an operator reading `peer list` learns which field the
-    // other node got wrong rather than "invalid snapshot".
-    expect(() => parseSnapshot(document), field).toThrow(`usage.${field}`);
+test("a progress outside 0..100, or not a number, is rejected", () => {
+  for (const progress of [-1, 101, "40"]) {
+    expect(() => parseSnapshot(agentDocument({ progress })), String(progress)).toThrow("progress");
   }
-
-  // Zero stays valid everywhere: a turn that read no cache and cost nothing
-  // measurable is an ordinary turn, not a broken report.
-  const zeroed = Object.fromEntries(numeric.map((field) => [field, 0]));
-  expect(
-    parseSnapshot(agentDocument({ model: "m", effort: "low", context_pct: 1, usage: zeroed }))
-      .panes[0]?.agent?.usage,
-  ).toMatchObject({ input: 0, cost_total: 0 });
-});
-
-test("the snapshot is byte-identical to the one before the inbox, and inbox rows add no field", () => {
-  // The inbox release added store columns (source, harness, session_id,
-  // run_count, last_text, confirmed) that must never reach the wire: a peer's
-  // reader rejects unknown keys and any version but its own, so one leaked
-  // field would force every node in the fleet to upgrade at once. `toAgent`
-  // picks its fields explicitly; this pins the document byte for byte against
-  // what the build before the inbox produced for the same rows.
-  const s = store();
-  const claim = s.claimAgent({ location: location("%1"), owner_pid: 4242, meta: META, now: 1000 });
-  if (claim.outcome !== "claimed") throw new Error(claim.outcome);
-  s.setActivity({
-    agent_id: claim.agent_id,
-    owner_pid: 4242,
-    activity: "running",
-    location: location("%1"),
-    now: 2000,
-  });
-  s.setRuntime({
-    agent_id: claim.agent_id,
-    owner_pid: 4242,
-    model: "m",
-    provider: "p",
-    effort: "high",
-    context_pct: 12.5,
-    pending: 0,
-    now: 3000,
-  });
-  s.requestAttention({
-    kind: "done",
-    location: location("%2"),
-    message: "",
-    source: "codex",
-    driver: "human",
-    now: 4000,
-  });
-  const built = s.buildLocalSnapshot(IDENTITY, {
-    server: { kind: "default" },
-    panes: live("%1", "%2"),
-    isAlive: alive([4242]),
-    now: 5000,
-  });
-  // Captured from the build before the inbox (murmur 1.5.2), with the agent id
-  // and version substituted, then moved to v7: `harness` is the one column
-  // published since, and it is the only difference.
-  const before =
-    '{"murmur_snapshot":7,"host_id":"H","display_name":"here","murmur_version":"VERSION","generated_at":5000,"panes":[{"server":{"kind":"default"},"pane":"%1","session":"$0","window":"@1","session_name":"work","window_name":"worker-1","agent":{"agent_id":"AGENT","activity":"running","agent_name":"worker-1","pi_session":"01JQ","workstream":"murmur","role":"implementer","cli":"pi","harness":"pi","driver":"orchestrated","model":"m","provider":"p","effort":"high","context_pct":12.5,"context_tokens":null,"context_window":null,"provider_effort":null,"usage":null,"pending":0,"claimed_at":1000,"updated_at":3000},"attention":[]},{"server":{"kind":"default"},"pane":"%2","session":"$0","window":"@1","session_name":"work","window_name":"worker-1","agent":null,"attention":[{"kind":"done","message":"","source":"codex","driver":"human","requested_at":4000}]}]}';
-  expect(
-    JSON.stringify(built)
-      .replace(claim.agent_id, "AGENT")
-      .replace(`"murmur_version":"${built.murmur_version}"`, '"murmur_version":"VERSION"'),
-  ).toBe(before);
-
-  // An inbox-sourced row, with every new column set, publishes exactly the
-  // fields a pi row does.
-  const hostless: InboxHost = {
-    isAlive: () => true,
-    serverFor: () => ({ kind: "default" }),
-    panes: () => new Map([[77, { location: location("%3"), focused: false }]]),
-    piRunsUnder: () => false,
-  };
-  for (const event of ["prompt_submitted", "turn_stopped"] as const) {
-    writeInboxEvent({
-      v: 1,
-      event,
-      harness: "claude",
-      at: 6000,
-      server_pid: 66,
-      root_pid: 77,
-      owner_pid: 4242,
-      tmux: null,
-      tmux_pane: null,
-      session_id: "s1",
-      source: null,
-      reason: null,
-      message: null,
-      text: "the last text",
-      generation_id: null,
-      by: "harness",
-      agent: { agent_name: null, workstream: null, role: null, cli: null, driver: "human" },
-    });
+  for (const progress of [0, 100]) {
+    expect(parseSnapshot(agentDocument({ progress })).panes[0]?.agent?.progress).toBe(progress);
   }
-  expect(drainInbox(s, { host: hostless, mux: fakeMux() })).toMatchObject({ applied: 2 });
-  const withInbox = s.buildLocalSnapshot(IDENTITY, {
-    server: { kind: "default" },
-    panes: live("%1", "%2", "%3"),
-    isAlive: alive([4242]),
-    now: 7000,
-  });
-  const keys = (pane: string) =>
-    Object.keys(withInbox.panes.find((entry) => entry.pane === pane)?.agent ?? {});
-  expect(keys("%3")).toEqual(keys("%1"));
-  const harnessOf = (pane: string) =>
-    withInbox.panes.find((entry) => entry.pane === pane)?.agent?.harness;
-  expect(harnessOf("%1")).toBe("pi");
-  expect(harnessOf("%3")).toBe("claude");
-  expect(JSON.stringify(withInbox)).not.toContain("the last text");
-  // And the document still validates as the version peers speak.
-  expect(parseSnapshot(JSON.stringify(withInbox)).panes).toHaveLength(3);
 });
 
-test("a v7 document round-trips harness, and an agent without the key is rejected", () => {
-  const doc = agentDocument({ model: null, effort: null, context_pct: null, harness: "claude" });
-  expect(parseSnapshot(doc).panes[0]?.agent?.harness).toBe("claude");
-  const nullable = agentDocument({ model: null, effort: null, context_pct: null, harness: null });
-  expect(parseSnapshot(nullable).panes[0]?.agent?.harness).toBeNull();
-  const missing = JSON.parse(doc);
-  missing.panes[0].agent.harness = undefined;
-  expect(() => parseSnapshot(JSON.stringify(missing))).toThrow("missing key harness");
-  const wrong = agentDocument({ model: null, effort: null, context_pct: null, harness: 3 });
-  expect(() => parseSnapshot(wrong)).toThrow("harness");
-});
-
-test("a v6 document is rejected with the version error", () => {
-  const v6 = agentDocument({ model: null, effort: null, context_pct: null }).replace(
-    '"murmur_snapshot":7',
-    '"murmur_snapshot":6',
-  );
-  expect(() => parseSnapshot(v6)).toThrow("murmur_snapshot: expected 7, got 6");
+test("the 2.x agent fields are unknown keys now, not ignored ones", () => {
+  // An unknown key that survived a hop would let a reader act on something no
+  // writer here agreed to.
+  for (const key of ["agent_id", "pi_session", "model", "context_pct", "usage", "claimed_at"]) {
+    expect(() => parseSnapshot(agentDocument({ [key]: null })), key).toThrow(`unknown key ${key}`);
+  }
 });

@@ -56,11 +56,10 @@ type BunDatabaseConstructor = new (
 /**
  * better-sqlite3 under Node, `bun:sqlite` under Bun.
  *
- * pi can run on Bun (a single-file Bun build of pi loads this file through the
- * extension). Bun cannot load better-sqlite3's native addon: the load is a
- * `NAPI FATAL ERROR` panic that takes pi down before its first prompt, not an
- * exception the extension's lazy import could swallow. So the driver is chosen
- * at runtime with `require`, never a static import, which would load the addon
+ * An SDK consumer can run on Bun, and Bun cannot load better-sqlite3's native
+ * addon: the load is a `NAPI FATAL ERROR` panic that takes the process down,
+ * not an exception a lazy import could swallow. So the driver is chosen at
+ * runtime with `require`, never a static import, which would load the addon
  * the moment this module is evaluated.
  *
  * `bun:sqlite` covers everything used below with the same names, except two
@@ -539,7 +538,7 @@ function storeCondition(path: string): "ok" | "reset" | StoreTooNewError {
  * Open the store (`{ readonly: true }` for a read-only open) and mint no identity.
  *
  * `openStore` deliberately never mints an `identity.json`: identity is created
- * only by `murmur init`, so a read path — a status-bar tick, a focus hook —
+ * only by `murmur init`, so a read path — a status-bar tick, a dash —
  * cannot bring a node into existence as a side effect. The one exception is
  * migration, not minting: when it creates the store for the first time it
  * copies a 2.x node's existing `identity.json` across (`src/legacy-state.ts`).
@@ -578,19 +577,6 @@ function openReadonlyDatabase(path: string): Database {
 function openWritableDatabase(path: string): Database {
   ensureDir(dirname(path));
 
-  // Salvage, decide and delete under ONE lock, because deleting the database
-  // FILE is the operation SQLite cannot serialise for us: there is no handle to
-  // hold a transaction on across removing the file it lives in.
-  //
-  // Unlocked, this lost data a person typed, reproducibly -- peer rows vanished
-  // in 6 of 12 concurrent upgrade runs measured against `dist/`, and still 4 of
-  // 12 once the schema step alone was serialised. Each process salvaged, each
-  // agreed a reset was needed, and then each deleted the file, `-wal` included,
-  // so one `rmSync` destroyed the database another had just rebuilt and took
-  // its salvage with it.
-  //
-  // Peers are the only rows worth this trouble: every other fact is re-observed
-  // within a tick, while a name and target cannot be re-derived from anything.
   // The whole sequence under ONE lock: salvage, delete, rebuild. Deleting the
   // database FILE is the operation SQLite cannot serialise for us, since there
   // is no handle to hold a transaction on across removing the file it lives in.
@@ -656,7 +642,7 @@ function openWritableDatabase(path: string): Database {
     // and failing to take it falls through to doing the work anyway -- so this
     // has to stay correct without it.
     //
-    // `.immediate` for the same reason `claimAgent` uses it, in the same terms:
+    // `.immediate` for the same reason `syncLocal` uses it, in the same terms:
     // this reads `user_version` and then writes, so a deferred transaction
     // starts as a READER and must upgrade, which fails the loser with
     // SQLITE_BUSY_SNAPSHOT rather than making it wait. Taking the write lock up

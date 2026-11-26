@@ -10,7 +10,13 @@ import type {
   SnapshotPane,
   TmuxServer,
 } from "./types.js";
-import { ATTENTION_PRIORITY, BLOCKED_KINDS, paneKey, SNAPSHOT_VERSION } from "./types.js";
+import {
+  ATTENTION_PRIORITY,
+  BLOCKED_KINDS,
+  paneKey,
+  SNAPSHOT_VERSION,
+  serverValue,
+} from "./types.js";
 
 /**
  * A peer answered, and what it said is not a snapshot.
@@ -266,7 +272,10 @@ export function parseSnapshot(input: string): Snapshot {
   const seen = new Set<string>();
   for (const pane of panes) {
     const address = paneKey(pane);
-    if (seen.has(address)) fail("panes", `duplicate pane ${address.replaceAll("\0", ":")}`);
+    if (seen.has(address)) {
+      const value = serverValue(pane.server);
+      fail("panes", `duplicate pane ${pane.server.kind}${value ? `:${value}` : ""}:${pane.pane}`);
+    }
     seen.add(address);
   }
 

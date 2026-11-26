@@ -5,9 +5,9 @@ import { join } from "node:path";
 /**
  * The path to a built artifact, checked to be present and newer than `src/`.
  *
- * Some tests must run the real shipped thing: pi loads the built extension
- * from the package, and the concurrency test needs separate PROCESSES to
- * contend for a SQLite lock at all. Those cannot be driven in-process, so they
+ * Some tests must run the real shipped thing: the CLI as installed, and the
+ * concurrency test needs separate PROCESSES to contend for a SQLite lock at
+ * all. Those cannot be driven in-process, so they
  * execute `dist/`.
  *
  * That makes the suite depend on state outside the checkout, and it cost a
@@ -38,9 +38,7 @@ export function builtArtifact(...parts: string[]): string {
     );
   }
 
-  const src = newestSource("src");
-  const ext = newestSource("extension");
-  const { path: newest, mtime } = ext.mtime > src.mtime ? ext : src;
+  const { path: newest, mtime } = newestSource("src");
   if (mtime > built) {
     throw new Error(
       `${join("dist", ...parts)} is STALE: ${newest} is newer.\n` +

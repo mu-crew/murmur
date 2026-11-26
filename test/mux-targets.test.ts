@@ -6,10 +6,12 @@ import { afterAll, expect, test, vi } from "vitest";
 import { remoteSessionName } from "../src/agents.js";
 import { DASH_PANE_OPTION, JUMP_CLIENT_OPTION } from "../src/goto.js";
 import { asPaneId, asSessionId, asWindowId } from "../src/ids.js";
-import { tmuxInboxHost } from "../src/inbox.js";
 import { shellQuote, tmuxAttachCommand } from "../src/jump-command.js";
-import { exactPaneTarget, exactSession, paneAddress, tmux } from "../src/mux.js";
+import { PANE_FIELDS, PILL_FIELDS, parsePaneRow, readLocal } from "../src/local.js";
+import { exactPaneTarget, exactSession, tmux } from "../src/mux.js";
+import { publishCounts } from "../src/pill.js";
 import { openStore } from "../src/store.js";
+import { serverKey } from "../src/types.js";
 
 // A private tmux server, so nothing here can touch the developer's session.
 // Every call carries -L; a bare `tmux` would hit whatever server is running.
@@ -73,42 +75,54 @@ afterAll(() => {
   rmSync(TMUX_ROOT, { recursive: true, force: true });
 });
 
-// These two spellings are the whole reason this file talks to a real tmux.
-// Every other test fakes the Mux, so a wrong target string passes them all --
-// and both of these were wrong at first, in ways only tmux itself reports.
-test("a claim on a real labeled server survives export liveness", () => {
+// The local collector against a real server: the format string, the option
+// reads and the pill writes are all spellings only tmux itself can check.
+test("a crew pane on a real labeled server is read in one pass, and its crash is seen", async () => {
   rig("new-session", "-d", "-s", "private-live", "sleep 300");
   const pane = asPaneId(rig("list-panes", "-t", "private-live", "-F", "#{pane_id}"));
+  rig("set-option", "-p", "-t", pane, "@mu_agent", "worker-1");
+  rig("set-option", "-p", "-t", pane, "@mu_workstream", "ws");
+  rig("set-option", "-p", "-t", pane, "@mu_role", "implementer");
+  // A plain pane beside it: no program status, no crew tag, so not listed.
+  rig("split-window", "-t", "private-live", "sleep 300");
   const server = { kind: "label", value: SOCKET } as const;
   const previous = process.env.MURMUR_STATE_DIR;
   process.env.MURMUR_STATE_DIR = mkdtempSync(join(tmpdir(), "murmur-private-tmux-"));
   const store = openStore();
   try {
-    store.claimAgent({
-      location: {
-        server,
-        session: asSessionId("$0"),
-        window: asWindowId("@0"),
-        pane,
-        session_name: "private-live",
-        window_name: null,
-      },
-      owner_pid: process.pid,
-      meta: {
-        agent_name: "private",
-        pi_session: null,
-        workstream: null,
-        role: null,
-        cli: "pi",
-        driver: "human",
-      },
+    const first = await readLocal(store, tmux, Date.now(), { rex: false });
+    const mine = first.panes.filter((entry) => serverKey(entry.server) === serverKey(server));
+    expect(mine.map((entry) => entry.pane)).toEqual([pane]);
+    expect(mine[0]?.agent).toMatchObject({
+      agent_name: "worker-1",
+      workstream: "ws",
+      role: "implementer",
+      driver: "orchestrated",
+      activity: "stopped",
+      cli: "sleep",
     });
+    expect(mine[0]?.attention).toEqual([]);
 
-    const snapshot = store.buildLocalSnapshot(
-      { host_id: "HOST", display_name: "host" },
-      { server, panes: tmux.livePanes(server) },
-    );
-    expect(snapshot.panes.map((entry) => entry.pane)).toEqual([pane]);
+    // A retained pane whose program dies non-zero is `crashed`, from
+    // `pane_dead_status`, whatever its last record said.
+    rig("set-option", "-p", "-t", pane, "remain-on-exit", "on");
+    rig("respawn-pane", "-k", "-t", pane, "sh -c 'exit 3'");
+    let crashed = mine[0];
+    for (let i = 0; i < 50; i++) {
+      const read = await readLocal(store, tmux, Date.now(), { rex: false });
+      crashed = read.panes.find((entry) => entry.pane === pane && entry.server.kind === "label");
+      if (crashed?.attention[0]?.kind === "crashed") break;
+      execFileSync("sleep", ["0.1"]);
+    }
+    expect(crashed?.attention).toEqual([
+      expect.objectContaining({ kind: "crashed", message: "exited 3", driver: "orchestrated" }),
+    ]);
+
+    // And the pill the status line reads is written to that server.
+    const read = await readLocal(store, tmux, Date.now(), { rex: false });
+    publishCounts(tmux, read);
+    expect(rig("show-options", "-gqv", "@murmur_count_crashed")).toBe("1");
+    expect(rig("show-options", "-gqv", "@murmur_count_working")).toBe("");
   } finally {
     store.close();
     rmSync(process.env.MURMUR_STATE_DIR, { recursive: true, force: true });
@@ -118,7 +132,7 @@ test("a claim on a real labeled server survives export liveness", () => {
   }
 });
 
-test("multi-field tmux reads preserve names, socket paths and option values containing pipes", () => {
+test("the single-pass read preserves names and option values containing pipes", () => {
   const socket = join(TMUX_ROOT, "format|~1");
   const server = { kind: "path", value: socket } as const;
   const sessionName = "work|~1";
@@ -137,30 +151,23 @@ test("multi-field tmux reads preserve names, socket paths and option values cont
     const pane = asPaneId(run("display-message", "-p", "#{pane_id}"));
     const window = asWindowId(run("display-message", "-p", "#{window_id}"));
     const session = asSessionId(run("display-message", "-p", "#{session_id}"));
-    const serverPid = Number(run("display-message", "-p", "#{pid}"));
-    const rootPid = Number(run("display-message", "-p", "#{pane_pid}"));
-    run("set-option", "-p", "-t", pane, "@test", "a|~0|~1");
-    const location = {
+    run("set-option", "-p", "-t", pane, "@mu_agent", "a|~0|~1");
+    run("set-option", "-p", "-t", pane, "@mu_workstream", "w|s");
+
+    const rows = tmux.listPanes([...PANE_FIELDS, ...PILL_FIELDS], server);
+    expect(rows).toHaveLength(1);
+    const parsed = parsePaneRow(rows?.[0] ?? [], server);
+    expect(parsed).toMatchObject({
       server,
       pane,
       session,
       window,
       session_name: sessionName,
       window_name: windowName,
-    };
-    expect(paneAddress(pane, server)).toEqual({ server_pid: serverPid, root_pid: rootPid, socket });
-    expect(tmuxInboxHost({ cache: null }).panes(server)?.get(rootPid)?.location).toEqual(location);
-    expect(tmux.paneOptionValues("@test", server)).toEqual(new Map([[pane, "a|~0|~1"]]));
-    expect(tmux.publishTargets(window, server)).toEqual({
-      session,
-      windowPanes: [pane],
-      sessionPanes: [pane],
+      agent_name: "a|~0|~1",
+      workstream: "w|s",
+      state: "idle",
     });
-
-    vi.stubEnv("TMUX", `${socket},${serverPid},0`);
-    vi.stubEnv("TMUX_PANE", pane);
-    expect(tmux.currentWindow()).toEqual(location);
-    expect(tmux.currentView()?.location).toEqual(location);
   } finally {
     vi.unstubAllEnvs();
     try {
@@ -169,6 +176,13 @@ test("multi-field tmux reads preserve names, socket paths and option values cont
       // Already gone, or never started.
     }
   }
+});
+
+test("a server that is not running is an empty answer, not an unknown one", () => {
+  // `[]` retires the panes a previous collect saw there; null would keep them
+  // forever. Only tmux's own stderr can say which this is.
+  const gone = { kind: "path", value: join(TMUX_ROOT, "never-started") } as const;
+  expect(tmux.listPanes(PANE_FIELDS, gone)).toEqual([]);
 });
 
 test("localPaneProcesses keeps a command name containing a pipe and a backslash intact", () => {

@@ -3,8 +3,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeEach, expect, test } from "vitest";
 import { createIdentity, loadIdentity, setDisplayName } from "../src/identity.js";
+import { buildSnapshot } from "../src/local.js";
 import { parseSnapshot } from "../src/snapshot.js";
-import { openStore } from "../src/store.js";
+import { localPane } from "./helpers/panes.js";
 
 beforeEach(() => {
   process.env.MURMUR_STATE_DIR = mkdtempSync(join(tmpdir(), "murmur-"));
@@ -63,16 +64,12 @@ test("every identity this module can produce survives its own validator", () => 
   // enforced nowhere, which is how the empty name shipped -- and this fails for
   // the NEXT field that gains a `text()` rule, not just for display_name.
   const identity = createIdentity("box");
-  const store = openStore();
-  try {
-    const snapshot = store.buildLocalSnapshot(identity, {
-      server: { kind: "default" },
-      panes: new Set(),
-    });
-    // The real round trip: serialise exactly as `murmur export` does, then feed
-    // it to the validator a peer runs. No throw means a peer accepts us.
-    expect(() => parseSnapshot(JSON.stringify(snapshot))).not.toThrow();
-  } finally {
-    store.close();
-  }
+  const snapshot = buildSnapshot(identity, [
+    localPane({
+      agent: { agent_name: "w-1", workstream: "ws", role: "impl", resume_command: "pi -c" },
+    }),
+  ]);
+  // The real round trip: serialise exactly as `murmur export` does, then feed
+  // it to the validator a peer runs. No throw means a peer accepts us.
+  expect(() => parseSnapshot(JSON.stringify(snapshot))).not.toThrow();
 });

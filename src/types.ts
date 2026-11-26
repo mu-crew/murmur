@@ -130,7 +130,7 @@ export type PeerRecord = {
 /**
  * The snapshot document version this node speaks, and the ONE place the
  * number lives. 8 is murmur 3.0: panes read from OSC 7501 and 7577 rather
- * than reported by hooks and the pi extension.
+ * than reported by harness hooks.
  */
 export const SNAPSHOT_VERSION = 8;
 

@@ -476,11 +476,9 @@ function paneView(pane: SnapshotPane | LocalPane, source: ViewSource): PaneView 
     // newer one. Both numbers are the owning node's own clock, so this was never
     // a two-clocks problem; it was one clock read from the wrong row.
     //
-    // The writer it hurt is the one that structurally cannot touch an agent row:
-    // `murmur notify` writes attention with no agent field, by design. So a
-    // codex agent blocked seconds ago on a pane whose pi last reported two hours
-    // ago carried a two-hour age -- and `viewSort`'s second key is "the newest
-    // news", so the freshest request for a human sank in the list the human
+    // A peer's document can carry an attention request newer than its agent's
+    // own clock, and `viewSort`'s second key is "the newest news": read from the
+    // agent alone, the freshest request for a human sank in the list the human
     // opened to act on it. The picker prints the same field as `age` and `said`.
     //
     // Matches the field's docblock, which says "when the pane's own node last
