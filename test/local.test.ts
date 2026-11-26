@@ -203,6 +203,11 @@ test("tmux's default pane title (the host name) is no title", () => {
   expect(chosenPaneTitle("", "box")).toBeNull();
 });
 
+test("a rex-feed pane (app=murmur) is murmur's own echo, never listed", () => {
+  expect(parse({ state: "error", app: "murmur" })).toBeNull();
+  expect(parse({ state: "error", app: "pi" })).not.toBeNull();
+});
+
 test("focus is the active pane of the active window of an attached session", () => {
   expect(parse({ state: "done", focused: "1" })?.focused).toBe(true);
   expect(parse({ state: "done", focused: "0" })?.focused).toBe(false);
@@ -250,7 +255,7 @@ test("readLocal merges every server, Rex, and the crashes murmur recorded", asyn
   });
 
   const read = await readLocal(store, mux, 5_000, {
-    rex: async () => ({ server: rex, panes: [{ ...rexPane, server: rex }] }),
+    rex: async () => ({ server: rex, panes: [{ ...rexPane, server: rex }], live: new Set(["%9"]) }),
   });
 
   expect(read.panes.map((pane) => [pane.server.kind, pane.pane])).toEqual([
@@ -261,13 +266,45 @@ test("readLocal merges every server, Rex, and the crashes murmur recorded", asyn
   expect(read.tmux.map((entry) => entry.server)).toEqual([DEFAULT]);
 });
 
+test("a pane in a linked window is listed once, focused if any session shows it", () => {
+  // `list-panes -a` prints a pane once per session its window is linked into.
+  const mux = vtmuxMux([
+    vtmuxRow({ pane: "%1", session: "$0", state: "working", focused: "0" }),
+    vtmuxRow({ pane: "%1", session: "$1", state: "working", focused: "1" }),
+    vtmuxRow({ pane: "%2", state: "done" }),
+  ]);
+  const [read] = readTmux(mux);
+  expect(read?.panes?.map((pane) => [pane.pane, pane.focused])).toEqual([
+    ["%1", true],
+    ["%2", false],
+  ]);
+});
+
+test("a pane that clears its record is not a crash; one that leaves the server is", async () => {
+  const rows = [
+    vtmuxRow({ pane: "%1", state: "working" }),
+    vtmuxRow({ pane: "%2", state: "blocked" }),
+  ];
+  const mux = vtmuxMux(rows);
+  await readLocal(store, mux, 1_000, { rex: false });
+  // %1 sent `state=clear` and is still there; %2 is gone.
+  rows.splice(0, 2, vtmuxRow({ pane: "%1" }));
+  const read = await readLocal(store, mux, 2_000, { rex: false });
+  expect(read.crashed).toEqual(["%2"]);
+  expect(read.panes.map((pane) => pane.pane)).toEqual(["%2"]);
+});
+
 test("a Rex reader that fails is no Rex, never an error and never a crash", async () => {
   const rex = { kind: "rex" } as const;
   const pane = parse({ pane: "block:1", state: "working" });
   if (!pane) throw new Error("not listed");
   const mux = vtmuxMux([]);
   await readLocal(store, mux, 1_000, {
-    rex: async () => ({ server: rex, panes: [{ ...pane, server: rex }] }),
+    rex: async () => ({
+      server: rex,
+      panes: [{ ...pane, server: rex }],
+      live: new Set(["block:1"]),
+    }),
   });
   const read = await readLocal(store, mux, 2_000, {
     rex: async () => {
@@ -379,6 +416,40 @@ test("a Rex block whose program exited non-zero is crashed", async () => {
   expect(byPane["block:b"]).toMatchObject({ state: "done", dead_status: null });
 });
 
+test("a Rex block whose status cannot be read makes the read no evidence, not a crash", async () => {
+  const ok = { status: { records: [{ state: "working", app: "pi" }] }, process: { child: {} } };
+  const { call } = rexApi({ "block:a": ok, "block:b": ok });
+  const rex = () => readRex(call);
+  await readLocal(store, vtmuxMux([]), 1_000, { rex });
+
+  const { call: failing } = rexApi({ "block:a": ok, "block:b": { status: null, process: null } });
+  expect(await readRex(failing)).toBeNull();
+  const read = await readLocal(store, vtmuxMux([]), 2_000, { rex: () => readRex(failing) });
+  expect(read.crashed).toEqual([]);
+});
+
+test("a Rex block that clears its status is not a crash", async () => {
+  const blocks = {
+    "block:a": { status: { records: [{ state: "working", app: "pi" }] } as unknown, process: {} },
+  };
+  const { call } = rexApi(blocks);
+  await readLocal(store, vtmuxMux([]), 1_000, { rex: () => readRex(call) });
+  blocks["block:a"].status = { records: [] };
+  const read = await readLocal(store, vtmuxMux([]), 2_000, { rex: () => readRex(call) });
+  expect(read.crashed).toEqual([]);
+  expect(read.panes).toEqual([]);
+});
+
+test("rex-feed's own records in a Rex block are never read back", async () => {
+  const { call } = rexApi({
+    "block:feed": {
+      status: { records: [{ id: "crew/1", state: "error", app: "murmur" }] },
+      process: { child: {} },
+    },
+  });
+  expect((await readRex(call))?.panes).toEqual([]);
+});
+
 test("no rex binary, or a Rex that will not answer, is no Rex", async () => {
   expect(await readRex(null)).toBeNull();
   expect(await readRex(async () => null)).toBeNull();
@@ -455,6 +526,10 @@ test("doctor asks every tmux server and Rex, and names a server as a person type
     ["stock-tmux", "-L mule"],
   ]);
 
-  const withRex = await checkMux(fakeMux(), async () => ({ server: { kind: "rex" }, panes: [] }));
+  const withRex = await checkMux(fakeMux(), async () => ({
+    server: { kind: "rex" },
+    panes: [],
+    live: new Set<string>(),
+  }));
   expect(withRex).toEqual({ tmux: [], rex: true });
 });

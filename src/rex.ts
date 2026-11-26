@@ -12,9 +12,19 @@ import { execFile } from "node:child_process";
 import { findHelper } from "./helper-path.js";
 import { asPaneId, asSessionId, asWindowId } from "./ids.js";
 import type { ObservedPane } from "./local.js";
-import { BLOCKED_KINDS, type BlockedKind, DELEGATES_RECORD, type PaneState } from "./types.js";
+import {
+  BLOCKED_KINDS,
+  type BlockedKind,
+  DELEGATES_RECORD,
+  FEED_APP,
+  type PaneState,
+} from "./types.js";
 
-export type RexRead = { server: { kind: "rex" }; panes: ObservedPane[] };
+/** Rex's panes with a program status, and every block id Rex holds. */
+export type RexRead = { server: { kind: "rex" }; panes: ObservedPane[]; live: Set<string> };
+
+/** A reply murmur cannot read, part way through: the whole read is no evidence. */
+class Unreadable extends Error {}
 
 /** One `rex api call`, answering its JSON reply or null. */
 export type RexCall = (method: string, input: Record<string, unknown>) => Promise<unknown>;
@@ -61,16 +71,37 @@ function summary(records: readonly Json[]): Json | null {
   return best;
 }
 
-/** Every Rex terminal with a program status, or null when Rex cannot be asked. */
+/**
+ * Every Rex terminal with a program status, or null when Rex cannot be asked.
+ * A session's blocks or a block's status that cannot be read makes the whole
+ * read null: reporting the rest would read that block as gone, and a block
+ * gone mid-work is a crash.
+ */
 export async function readRex(call: RexCall | null = rexCli()): Promise<RexRead | null> {
   if (call === null) return null;
+  try {
+    return await readRexOrThrow(call);
+  } catch (error) {
+    if (error instanceof Unreadable) return null;
+    throw error;
+  }
+}
+
+async function readRexOrThrow(call: RexCall): Promise<RexRead | null> {
   const sessions = await call("session.list", {});
   if (!isJson(sessions)) return null;
+  const live = new Set<string>();
   const panes = await Promise.all(
     list(sessions, "sessions").map(async (session) => {
       const sessionId = str(session.session_id);
       if (sessionId === null) return [];
-      const blocks = list(await call("session.list_blocks", { session_id: sessionId }), "blocks");
+      const reply = await call("session.list_blocks", { session_id: sessionId });
+      if (!isJson(reply)) throw new Unreadable();
+      const blocks = list(reply, "blocks");
+      for (const block of blocks) {
+        const blockId = str(block.block_id);
+        if (blockId !== null) live.add(blockId);
+      }
       return Promise.all(
         blocks.map(async (block): Promise<ObservedPane | null> => {
           const blockId = str(block.block_id);
@@ -81,7 +112,13 @@ export async function readRex(call: RexCall | null = rexCli()): Promise<RexRead 
             method("program_status"),
             method("process"),
           ]);
-          const top = summary(list(status, "records"));
+          if (!isJson(status)) throw new Unreadable();
+          // `murmur rex-feed`'s own records are its echo of the fleet.
+          const top = summary(
+            list(status, "records").filter(
+              (record) => record.app !== FEED_APP && record.effective_app !== FEED_APP,
+            ),
+          );
           if (top === null) return null;
           const proc = isJson(process) ? process : {};
           const exit = isJson(proc.last_exit) ? proc.last_exit : null;
@@ -145,5 +182,6 @@ export async function readRex(call: RexCall | null = rexCli()): Promise<RexRead 
   return {
     server: { kind: "rex" },
     panes: panes.flat().filter((pane): pane is ObservedPane => pane !== null),
+    live,
   };
 }

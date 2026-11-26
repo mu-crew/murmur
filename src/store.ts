@@ -750,8 +750,12 @@ function buildStore(database: Database): Store {
         // The multiplexer's clock when it has one; else carried while the
         // state holds, so an unchanged state keeps its age and a changed one
         // is news at this collect.
-        const since =
-          pane.state_time ?? (before && before.state === pane.state ? before.since : now);
+        // A crash is news when murmur first sees it: the program's last
+        // record (an `error` an hour old, say) says nothing about when the
+        // process died, and inheriting its time would age the crash past
+        // every alert window before it was ever reported.
+        const held = before && before.state === pane.state ? before.since : null;
+        const since = pane.state === "crashed" ? (held ?? now) : (pane.state_time ?? held ?? now);
         result.since.set(paneKey(pane), since);
         // A live pane at the address is a new occupant: any crash recorded
         // there describes a process that is gone.
@@ -778,8 +782,11 @@ function buildStore(database: Database): Store {
       // Gone since the last collect. Mid-work is a crash murmur must remember
       // (the multiplexer has nothing left to say about the pane); at rest it
       // simply finished.
+      // A pane still on the server cleared its record (or stopped being
+      // listed); only one the server no longer holds vanished.
       for (const gone of previous.values()) {
         deleteSeen.run(kind, value, gone.pane);
+        if (read.live?.has(gone.pane)) continue;
         if (!MID_WORK.includes(gone.state)) continue;
         insertCrash.run({ ...gone, last_state: gone.state, requested_at: now });
         result.crashed.push(asPaneId(gone.pane));

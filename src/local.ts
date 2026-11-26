@@ -28,6 +28,7 @@ import {
   type BlockedKind,
   DELEGATES_RECORD,
   type Driver,
+  FEED_APP,
   type LocalPane,
   type PaneState,
   paneKey,
@@ -230,6 +231,8 @@ export function parsePaneRow(fields: readonly string[], server: TmuxServer): Obs
   ] = fields;
   if (!pane || !session || !window) return null;
   if (state === "" && agentName === "") return null;
+  // `murmur rex-feed`'s own pane: reading it back would re-report the fleet.
+  if (app === FEED_APP) return null;
   const isDead = dead === "1";
   const paneState = programState({
     dead: isDead,
@@ -326,8 +329,35 @@ export function localPane(pane: ObservedPane, since: number): LocalPane {
   };
 }
 
-/** What one server's single pass returned: its panes, and its raw rows for the pill. */
-export type TmuxRead = { server: TmuxSocket; panes: ObservedPane[] | null; rows: string[][] };
+/**
+ * What one server's single pass returned: its panes, every pane id it holds
+ * (listed or not), and its raw rows for the pill.
+ */
+export type TmuxRead = {
+  server: TmuxSocket;
+  panes: ObservedPane[] | null;
+  live: Set<string>;
+  rows: string[][];
+};
+
+/**
+ * The rows as panes, one per pane id. `list-panes -a` prints a window linked
+ * into several sessions once per session; the pane is focused if any of its
+ * sessions shows it.
+ */
+function uniquePanes(rows: readonly string[][], server: TmuxServer): ObservedPane[] {
+  const panes = new Map<string, ObservedPane>();
+  for (const row of rows) {
+    const next = parsePaneRow(row, server);
+    if (next === null) continue;
+    const existing = panes.get(next.pane);
+    panes.set(
+      next.pane,
+      existing ? { ...existing, focused: existing.focused || next.focused } : next,
+    );
+  }
+  return [...panes.values()];
+}
 
 /** One `list-panes` per tmux server: every server tmux's directory names, and every one seen before. */
 export function readTmux(mux: Mux, known: readonly TmuxServer[] = []): TmuxRead[] {
@@ -343,13 +373,8 @@ export function readTmux(mux: Mux, known: readonly TmuxServer[] = []): TmuxRead[
     return {
       server,
       rows: rows ?? [],
-      panes:
-        rows === null
-          ? null
-          : rows.flatMap((row) => {
-              const pane = parsePaneRow(row, server);
-              return pane ? [pane] : [];
-            }),
+      panes: rows === null ? null : uniquePanes(rows, server),
+      live: new Set((rows ?? []).flatMap(([pane]) => (pane ? [pane] : []))),
     };
   });
 }
@@ -382,12 +407,12 @@ export async function readLocal(
 ): Promise<LocalRead> {
   const tmux = readTmux(mux, store.knownServers());
   const rex = options.rex === false ? null : await (options.rex ?? readRex)().catch(() => null);
-  const reads: { server: TmuxServer; panes: ObservedPane[] | null }[] = [
+  const reads: { server: TmuxServer; panes: ObservedPane[] | null; live: Set<string> }[] = [
     ...tmux,
     ...(rex ? [rex] : []),
   ];
   const sync = store.syncLocal(
-    reads.map((read): ServerRead => ({ server: read.server, panes: read.panes })),
+    reads.map((read): ServerRead => ({ server: read.server, panes: read.panes, live: read.live })),
     now,
   );
   const live = reads.flatMap((read) =>

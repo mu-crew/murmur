@@ -18,7 +18,15 @@ const socket = "mule";
 const id = "c00e2e";
 const jobRoot = join(state, "mule", "jobs", id);
 const murmurState = join(state, "murmur");
-const env = { ...process.env, MURMUR_STATE_DIR: murmurState, XDG_STATE_HOME: state };
+// No TMUX/TMUX_PANE, and a private TMUX_TMPDIR: this run, and the murmur it
+// drives, can neither see nor touch a live tmux server.
+const { TMUX: _tmux, TMUX_PANE: _tmuxPane, ...inherited } = process.env;
+const env = {
+  ...inherited,
+  MURMUR_STATE_DIR: murmurState,
+  XDG_STATE_HOME: state,
+  TMUX_TMPDIR: state,
+};
 const run = (file, args, options = {}) =>
   execFileSync(file, args, {
     encoding: "utf8",

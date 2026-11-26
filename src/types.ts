@@ -42,6 +42,12 @@ export type BlockedKind = (typeof BLOCKED_KINDS)[number];
 export const DELEGATES_RECORD = "mu/delegates";
 
 /**
+ * The OSC 7501 `app` `murmur rex-feed` reports as. A pane carrying it is
+ * murmur's own echo of the fleet, never an agent, so collectors skip it.
+ */
+export const FEED_APP = "murmur";
+
+/**
  * Who is waiting on this agent -- a human, or a supervisor that consumes the
  * result. Not "which harness"; that is `harness`.
  *
@@ -255,6 +261,12 @@ export type SeenPane = Location & {
 export type ServerRead = {
   server: TmuxServer;
   panes: SeenPane[] | null;
+  /**
+   * Every pane id the server holds, listed or not. A listed pane that drops
+   * out of `panes` but is still here cleared its status; only one missing
+   * from this set vanished. Absent, `panes` is taken as the whole server.
+   */
+  live?: ReadonlySet<string>;
 };
 
 /** What `Store.syncLocal` concluded from one collect. */

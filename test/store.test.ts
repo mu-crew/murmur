@@ -104,6 +104,25 @@ test("the multiplexer's own state time wins over murmur's sighting", () => {
   expect(sync.since.get(`default\0\0%1`)).toBe(500);
 });
 
+test("a crash is news when first seen, not when the program last reported", () => {
+  // The pane sat in `error` since 500; it dying at 9_000 is a new alert.
+  const s = store();
+  s.syncLocal([{ server: DEFAULT, panes: [seen("%1", "error", { state_time: 500 })] }], 1_000);
+  const crash = seen("%1", "crashed", { state_time: 500 });
+  const first = s.syncLocal([{ server: DEFAULT, panes: [crash] }], 9_000);
+  expect(first.since.get(`default\0\0%1`)).toBe(9_000);
+  const again = s.syncLocal([{ server: DEFAULT, panes: [crash] }], 12_000);
+  expect(again.since.get(`default\0\0%1`)).toBe(9_000);
+});
+
+test("a pane still on the server that drops out of the listing did not crash", () => {
+  const s = store();
+  s.syncLocal([{ server: DEFAULT, panes: [seen("%1", "running")] }], 1_000);
+  const sync = s.syncLocal([{ server: DEFAULT, panes: [], live: new Set(["%1"]) }], 2_000);
+  expect(sync.crashed).toEqual([]);
+  expect(s.localPanes()).toEqual([]);
+});
+
 test.each<[PaneState, boolean]>([
   ["running", true],
   ["waiting", true],
