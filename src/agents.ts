@@ -48,7 +48,7 @@ export function sessionLeaf(session: string): string {
  * the pane, so a local and a remote row read the same -- a reader cannot resolve
  * a remote window id against its own tmux.
  *
- * The session name is shortened to its last segment, and that last rung is
+ * The session name is shortened to its last segment, and that last segment is
  * reached far more often than it looks: `agent_name` is mu-only, `window_name`
  * is null whenever tmux is auto-renaming (its default), and `pi_session` is
  * null for the whole life of an unnamed session, because pi's auto-namer runs
