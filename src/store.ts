@@ -391,6 +391,8 @@ export interface Store {
   ingestInbox(read: () => readonly InboxDelivery[], options: IngestOptions): IngestSummary;
   /** One local pane's harness-side state, for `murmur pane --json`. Never in a snapshot. */
   harnessState(pane: PaneIdentity): HarnessState | null;
+  /** Every local pane's harness-side state with its pane identity. Read-only; works on `openStore({ readonly: true })`. */
+  listHarnessStates(): (PaneIdentity & HarnessState)[];
 
   close(): void;
 }
@@ -434,6 +436,18 @@ type AgentDbRow = {
   claimed_at: number;
   updated_at: number;
 };
+
+function toHarnessState(row: AgentDbRow): HarnessState {
+  return {
+    source: row.source,
+    harness: row.harness,
+    session_id: row.session_id,
+    run_count: row.run_count,
+    last_text: row.last_text,
+    last_text_run: row.last_text_run,
+    confirmed: row.confirmed === 1,
+  };
+}
 
 type AttentionDbRow = {
   server_kind: TmuxServer["kind"];
@@ -1038,6 +1052,9 @@ function openWritableDatabase(path: string): Database {
 function buildStore(database: Database): Store {
   const selectAgentByPane = database.prepare(
     "SELECT * FROM agents WHERE server_kind = ? AND server_value = ? AND pane = ?",
+  );
+  const selectAllAgents = database.prepare(
+    "SELECT * FROM agents ORDER BY server_kind, server_value, pane",
   );
   const insertAgent = database.prepare(`
     INSERT INTO agents (agent_id, server_kind, server_value, pane, owner_pid, activity,
@@ -1678,16 +1695,18 @@ function buildStore(database: Database): Store {
         "value" in pane.server ? pane.server.value : "",
         pane.pane,
       ) as AgentDbRow | undefined;
-      if (!row) return null;
-      return {
-        source: row.source,
-        harness: row.harness,
-        session_id: row.session_id,
-        run_count: row.run_count,
-        last_text: row.last_text,
-        last_text_run: row.last_text_run,
-        confirmed: row.confirmed === 1,
-      };
+      return row ? toHarnessState(row) : null;
+    },
+
+    listHarnessStates() {
+      return (selectAllAgents.all() as AgentDbRow[]).map((row) => ({
+        server:
+          row.server_kind === "default"
+            ? { kind: "default" }
+            : ({ kind: row.server_kind, value: row.server_value } as TmuxServer),
+        pane: asPaneId(row.pane),
+        ...toHarnessState(row),
+      }));
     },
 
     setRuntime: writeRuntime,

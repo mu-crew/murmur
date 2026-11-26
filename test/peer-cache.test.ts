@@ -391,6 +391,7 @@ test("the store exposes no reader-side mutation of remote state", () => {
     "close",
     "harnessState",
     "ingestInbox",
+    "listHarnessStates",
     "localPanes",
     "peers",
     "reconcileLocal",

@@ -1436,3 +1436,28 @@ test("status() reads through a readonly store", () => {
   const view = status(reader, { host_id: "HOST", display_name: "host" }, Date.now(), () => false);
   expect(view.panes.length).toBe(1);
 });
+
+test("listHarnessStates and harnessState read session_id under a readonly open", () => {
+  const writer = store();
+  claimedId(writer, "%1");
+  claimedId(writer, "%2");
+  const raw = new Database(dbPath());
+  raw
+    .prepare("UPDATE agents SET session_id = 'sess-1', harness = 'claude' WHERE pane = '%1'")
+    .run();
+  raw.close();
+
+  const reader = openStore({ readonly: true });
+  stores.push(reader);
+  const states = reader.listHarnessStates();
+  expect(states.map((s) => s.pane)).toEqual(["%1", "%2"]);
+  expect(states[0]).toMatchObject({
+    server: { kind: "default" },
+    harness: "claude",
+    session_id: "sess-1",
+  });
+  expect(states[1]?.session_id).toBeNull();
+  expect(reader.harnessState({ server: { kind: "default" }, pane: asPaneId("%1") })).toMatchObject({
+    session_id: "sess-1",
+  });
+});
