@@ -1,6 +1,6 @@
 {
   "name": "@mu-crew/murmur",
-  "version": "2.6.0",
+  "version": "3.0.0-alpha.1",
   "description": "Agent state across every machine you work on, in one view.",
   "publishConfig": {
     "access": "public"
@@ -20,8 +20,9 @@
     "tmux",
     "agents",
     "ai",
-    "pi-coding-agent",
-    "pi-package",
+    "osc-7501",
+    "vtmux",
+    "rex",
     "ssh"
   ],
   "engines": {
@@ -48,19 +49,14 @@
     "CHANGELOG.md",
     "SSH.md"
   ],
-  "pi": {
-    "extensions": [
-      "./dist/extension/murmur-pi.js"
-    ]
-  },
   "scripts": {
     "build": "tsup",
     "test": "npm run build && vitest run",
     "test:only": "vitest run",
     "test:private-tmux-e2e": "npm run build && node scripts/private-tmux-e2e.mjs",
-    "lint": "biome check --error-on-warnings src test scripts extension",
-    "lint:fix": "biome check --write src test scripts extension",
-    "format": "biome format --write src test scripts extension",
+    "lint": "biome check --error-on-warnings src test scripts",
+    "lint:fix": "biome check --write src test scripts",
+    "format": "biome format --write src test scripts",
     "typecheck": "tsc --noEmit",
     "check": "npm run typecheck && npm run lint && npm run test",
     "prepare": "npm run build && node scripts/install-hooks.mjs"
@@ -71,14 +67,6 @@
     "ink": "^7.1.1",
     "react": "^19.3.0",
     "string-width": "^8.2.2"
-  },
-  "peerDependencies": {
-    "@earendil-works/pi-coding-agent": "*"
-  },
-  "peerDependenciesMeta": {
-    "@earendil-works/pi-coding-agent": {
-      "optional": true
-    }
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.6",

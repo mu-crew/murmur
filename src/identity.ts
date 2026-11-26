@@ -33,7 +33,7 @@ let cache: { path: string; identity: NodeIdentity | null } | null = null;
  * rather than bringing a node into existence as a side effect of a status-bar
  * tick.
  *
- * Copying a 1.x murmur's identity is not minting: on the first read that finds
+ * Copying a 2.x murmur's identity is not minting: on the first read that finds
  * none, the old directory's `identity.json` is copied in, so the host keeps
  * the `host_id` its peers know it by (`migrateLegacyIdentity`).
  */

@@ -13,6 +13,6 @@ export function registerJump(program: Command): void {
     .option("--json", "print one JSON object for success or failure")
     .action(async (target: string, options: { client?: string; json?: boolean }) => {
       const { runJumpCommand } = await import("./jump-run.js");
-      runJumpCommand(target, options);
+      await runJumpCommand(target, options);
     });
 }

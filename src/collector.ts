@@ -1,13 +1,13 @@
-import { publishAgentStates } from "./agent-state.js";
 import { type AlertRunner, alertHook, fireAlerts, runHook } from "./alert.js";
 import { type AttachPeer, connectsToPeer, type SshResolver, sshResolver } from "./attachment.js";
 import { type Channel, hasWarmSocket } from "./channel.js";
 import { loadIdentity, type NodeIdentity } from "./identity.js";
-import { type DrainOptions, drainInbox } from "./inbox.js";
+import { type LocalOptions, type LocalRead, readLocal } from "./local.js";
 import { type Mux, tmux } from "./mux.js";
+import { publishCounts } from "./pill.js";
 import { parseSnapshot, SnapshotInvalidError } from "./snapshot.js";
 import type { Store } from "./store.js";
-import type { PeerRecord, TmuxServer } from "./types.js";
+import type { PeerRecord } from "./types.js";
 import { paneViews, STALENESS_MS } from "./view.js";
 
 export { STALENESS_MS };
@@ -178,8 +178,10 @@ export async function mapSettled<T, R>(
 export type CollectOptions = {
   /** Bounds the whole run. Injectable so tests need not wait out real time. */
   deadline?: Promise<void>;
-  /** The mux reconciliation asks which panes are alive. */
+  /** The mux the local read asks. */
   mux?: Mux;
+  /** How the local read reaches Rex; see `readLocal`. */
+  rex?: LocalOptions["rex"];
   /**
    * Skip peers attempted within this many ms. Zero -- the default -- fetches
    * every peer, which is what a deliberate `murmur collect` wants. Only the
@@ -207,10 +209,10 @@ export type CollectOptions = {
   /** Pause before retrying a busy session channel. Injected so tests need not wait. */
   busyRetryMs?: number;
   /**
-   * How the pane inbox is drained before reconciliation; `false` skips it.
-   * Injected so a test needs no tmux and no process table.
+   * Skip the local read entirely: no tmux, no Rex, no pill. For tests about
+   * peers alone.
    */
-  inbox?: DrainOptions | false;
+  local?: false;
   /**
    * The on-attention hook, its runner, and the identity the merged view needs.
    * Injected so a test needs no executable on disk and no `murmur init`.
@@ -507,6 +509,22 @@ export async function collect(
   now = Date.now(),
   options: CollectOptions = {},
 ): Promise<CollectResult[]> {
+  return (await collectAll(store, channel, now, options)).peers;
+}
+
+/** What one collect produced: each peer's outcome, and the local read it made. */
+export type Collected = { peers: CollectResult[]; local: LocalRead | null };
+
+/**
+ * `collect`, also answering the local read it made, so `statusWithCollect`
+ * paints from the same read rather than asking tmux twice.
+ */
+export async function collectAll(
+  store: Store,
+  channel: Channel,
+  now = Date.now(),
+  options: CollectOptions = {},
+): Promise<Collected> {
   const {
     deadline,
     mux = tmux,
@@ -618,58 +636,41 @@ export async function collect(
     clearTimeout(timer);
   }
 
-  // Hook harnesses' events first, so this read -- every surface's -- shows them,
-  // and so reconciliation below sees the panes they claimed.
-  if (options.inbox !== false) {
+  // The local read: one list-panes per tmux server, Rex when it runs. It
+  // also records which panes vanished mid-work, so a crash found this run
+  // alerts this run. Never fails a collect.
+  let local: LocalRead | null = null;
+  if (options.local !== false) {
     try {
-      drainInbox(store, { mux, ...options.inbox });
+      local = await readLocal(store, mux, now, { rex: options.rex });
     } catch {
-      // Same rule as housekeeping: the drain must never fail a collect.
+      local = null;
+    }
+  }
+  if (local) {
+    try {
+      publishCounts(mux, local);
+    } catch {
+      // The pill is presentation: a failed write is the next tick's to fix.
     }
   }
 
-  // Runs once per invocation including with zero peers, which is why it is here
-  // rather than on `export` -- that only runs when a peer asks over ssh, so a
-  // single-machine node would reconcile never. Idempotent, so
-  // `buildLocalSnapshot` calling it too is a cheap repeat, not a second policy.
-  const servers = new Map<string, TmuxServer>();
-  for (const { server } of store.localPanes()) {
-    const key = `${server.kind}\0${"value" in server ? server.value : ""}`;
-    servers.set(key, server);
-  }
-  for (const server of servers.values()) {
-    try {
-      const summary = store.reconcileLocal({ server, panes: mux.livePanes(server), now });
-      // A crash is recorded here, not by the agent that died, so this is the
-      // only writer that can publish it to tmux.
-      const windows = new Set(
-        store
-          .localPanes()
-          .filter(
-            (pane) =>
-              summary.crashed.includes(pane.pane) &&
-              pane.server.kind === server.kind &&
-              (server.kind === "default" ||
-                ("value" in pane.server && pane.server.value === server.value)),
-          )
-          .map((pane) => pane.window),
-      );
-      for (const window of windows) publishAgentStates(window, mux, store, server);
-    } catch {
-      // Housekeeping must not fail a command, and it must not report either.
-    }
-  }
-
-  // After reconciliation, so a crash found this run alerts this run, and after
-  // every peer is applied, so remote events alert from the same place.
+  // After the local read and after every peer is applied, so local and remote
+  // events alert from the same place.
   try {
     const identity = options.alerts?.identity ?? loadIdentity();
     const hook = options.alerts && "hook" in options.alerts ? options.alerts.hook : alertHook();
     if (identity && hook) {
-      fireAlerts(store, paneViews(store, identity, now), now, hook, options.alerts?.run ?? runHook);
+      fireAlerts(
+        store,
+        paneViews(store, identity, local?.panes ?? [], now),
+        now,
+        hook,
+        options.alerts?.run ?? runHook,
+      );
     }
   } catch {
     // Same rule as housekeeping: an alert must never fail a collect.
   }
-  return results;
+  return { peers: results, local };
 }

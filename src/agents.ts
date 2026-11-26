@@ -43,17 +43,17 @@ export function sessionLeaf(session: string): string {
 /**
  * The most specific human-readable name a pane's agent has, never a tmux id.
  *
- * Four sources, most to least specific: mu's agent name, pi's session name, the
- * tmux window name, the tmux session name. All are recorded by the node owning
+ * Four sources, most to least specific: mu's agent name (`@mu_agent`), the
+ * pane's title (pi names its session there), the tmux window name, the tmux
+ * session name. All are recorded by the node owning
  * the pane, so a local and a remote row read the same -- a reader cannot resolve
  * a remote window id against its own tmux.
  *
  * The session name is shortened to its last segment, and that last segment is
  * reached far more often than it looks: `agent_name` is mu-only, `window_name`
- * is null whenever tmux is auto-renaming (its default), and `pi_session` is
- * null for the whole life of an unnamed session, because pi's auto-namer runs
- * at CLOSE. So the common row for a hand-started pi printed `hacking/murmur` --
- * a path where a name belongs.
+ * is null whenever tmux is auto-renaming (its default), and a pane title is
+ * null until its program sets one. So the common row for a hand-started agent
+ * printed `hacking/murmur` -- a path where a name belongs.
  *
  * The full name is not lost: the picker's stream column shows it, and shows it
  * BECAUSE of this shortening, since that column blanks when it would repeat the
@@ -66,7 +66,7 @@ export function sessionLeaf(session: string): string {
 export function agentLabel(agent: PaneView): string {
   const name =
     agent.agent_name ??
-    agent.pi_session ??
+    agent.pane_title ??
     agent.window_name ??
     (agent.session_name === null ? null : sessionLeaf(agent.session_name));
   return terminalText(name ?? agent.window);
@@ -128,7 +128,7 @@ export function remoteSessionName(
   // to another server's panes -- so reuse must key on the server as well.
   if (server.kind === "default") return base;
   let hash = 0;
-  for (const character of `${server.kind}:${server.value}`) {
+  for (const character of `${server.kind}:${"value" in server ? server.value : ""}`) {
     hash = (Math.imul(hash, 31) + character.charCodeAt(0)) | 0;
   }
   return `${base.slice(0, -1)}-s${Math.abs(hash).toString(36).padStart(6, "0").slice(0, 6)}~`;
@@ -242,6 +242,28 @@ export type JumpResult =
     };
 
 /**
+ * Focus a local Rex block: Rex's own API, since a Rex pane has no tmux to
+ * attach. Focuses the block within its session; showing that session in the
+ * app is Rex's to do.
+ */
+function jumpToRex(agent: PaneView, run: Runner): JumpResult {
+  const result = run("rex", [
+    "--autostart=false",
+    "api",
+    "call",
+    "session.focus_block",
+    JSON.stringify({ session_id: agent.session, block_id: agent.pane }),
+  ]);
+  return result.status === 0 && !result.failed
+    ? { ok: true }
+    : {
+        ok: false,
+        reason: "attach_failed",
+        message: `could not focus ${agentLabel(agent)} in Rex (rex session.focus_block failed).`,
+      };
+}
+
+/**
  * Jump to a pane, wherever it lives.
  *
  * NEVER MUTATES STATE ON FAILURE. A failure is a report: a reason and a message,
@@ -338,13 +360,24 @@ export function jumpToAgent(
   // is not running in, so "outside tmux" does not apply.
   explicitClient?: string,
 ): JumpResult {
+  const server = agent.server;
+  if (server.kind === "rex") {
+    if (agent.local) return jumpToRex(agent, run);
+    return {
+      ok: false,
+      reason: "unsupported_server",
+      message: `${agentLabel(agent)} is a Rex pane on ${agent.host}; jump to it from that machine's Rex.`,
+    };
+  }
+  // A tmux pane from here on: the address an attach can name.
+  const destination = { server, pane: agent.pane };
   const inside = Boolean(env.TMUX) || explicitClient !== undefined;
   if (agent.local && !inside) {
     // Outside tmux there is no client to switch. A bare `switch-client` did
     // not fail here: tmux picked SOME attached client -- another terminal's --
     // and moved that one, so the jump "succeeded" on a screen the operator
     // was not looking at. Attach instead, as the remote path does.
-    const panes = mux.livePanes(agent.server);
+    const panes = mux.livePanes(server);
     if (panes && !panes.has(agent.pane)) {
       return {
         ok: false,
@@ -352,7 +385,7 @@ export function jumpToAgent(
         message: `${agentLabel(agent)} is gone -- its pane no longer exists.`,
       };
     }
-    const attach = tmuxAttachCommand(agent);
+    const attach = tmuxAttachCommand(destination);
     return runOutside(run, outsideTmux(env), attach, agentLabel(agent), env)
       ? { ok: true }
       : {
@@ -365,7 +398,7 @@ export function jumpToAgent(
     // The PANE decides. This once asked about the WINDOW, which a live pane
     // routinely outlives: after `move-pane -s %0 -t @1`, list-panes still has
     // %0 and list-windows no longer has @0, so healthy agents read as gone.
-    const panes = mux.livePanes(agent.server);
+    const panes = mux.livePanes(server);
     if (panes && !panes.has(agent.pane)) {
       return {
         ok: false,
@@ -380,7 +413,7 @@ export function jumpToAgent(
     // check above and the action here cannot disagree about what is being
     // jumped to. Passing the recorded window instead meant a pane that had
     // moved passed the liveness check and then failed to attach.
-    if (!mux.attach(agent.pane, agent.server, explicitClient)) {
+    if (!mux.attach(agent.pane, server, explicitClient)) {
       return {
         ok: false,
         reason: "attach_failed",
@@ -430,9 +463,9 @@ export function jumpToAgent(
   // session list.
 
   const tmuxPrefix =
-    agent.server.kind === "default"
+    server.kind === "default"
       ? "tmux"
-      : `tmux ${agent.server.kind === "label" ? "-L" : "-S"} ${shellQuote(agent.server.value)}`;
+      : `tmux ${server.kind === "label" ? "-L" : "-S"} ${shellQuote(server.value)}`;
   const probe = run("ssh", [
     ...SSH_OPTIONS,
     target,
@@ -495,7 +528,7 @@ export function jumpToAgent(
   //
   // Outside tmux there is no wrapper and no local client: a detach there would
   // drop the operator out of their own shell's session for nothing.
-  const attach = renderJumpCommand(template, agent);
+  const attach = renderJumpCommand(template, destination);
 
   // Hand the ssh to tmux as its own detached SESSION rather than running it
   // here: a picker is usually a display-popup, and a popup is modal, so an
@@ -612,7 +645,7 @@ export function jumpToAgent(
     // A fresh option per wrapper, so reuse can name this wrapper's remote
     // client among any others on that host, including other machines' jumps.
     const clientOption = `@murmur_wrapper_${randomBytes(6).toString("hex")}`;
-    const wrapper = renderJumpCommand(template, agent, [JUMP_CLIENT_OPTION, clientOption]);
+    const wrapper = renderJumpCommand(template, destination, [JUMP_CLIENT_OPTION, clientOption]);
     if (!mux.newSession(name, `${wrapper}${restore}`)) {
       return {
         ok: false,

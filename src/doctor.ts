@@ -6,7 +6,7 @@ import {
   mapSettled,
   needsInteractiveAuth,
 } from "./collector.js";
-import { describeDrift, type HookCheck } from "./hook-install.js";
+import type { ServerInfo } from "./mux.js";
 import { parseSnapshot } from "./snapshot.js";
 import type { PeerRecord } from "./types.js";
 
@@ -219,18 +219,18 @@ export type FindingKind =
   | "needs-session"
   | "naming-drift"
   | "unsurveyable"
-  | "inbox-full"
-  | "hook-drift"
-  | "hooks-absent"
-  | "reported-twice";
+  | "stock-tmux"
+  | "program-status-off"
+  | "program-resume-off"
+  | "no-local-mux";
 
 export type Finding = {
   kind: FindingKind;
   severity: Severity;
   /**
    * The handle the operator would type: a peer's local name, this node's
-   * display_name for a finding about this node, or a hook harness's name
-   * (`claude`) for one about its hook config. Never a host_id -- that is how
+   * display_name for a finding about this node, or a tmux server's name
+   * (`default`, `-L mule`) for one about its multiplexer. Never a host_id -- that is how
    * findings are computed, not how they are read.
    */
   subject: string;
@@ -287,18 +287,86 @@ export type LocalNode = {
   display_name: string;
   peers: LocalPeer[];
   /**
-   * Events waiting in each pane inbox (`inboxBacklog`). Optional, so a caller
-   * with no inbox to read -- every fleet-shape test -- passes nothing.
+   * What this node's multiplexers can report (`checkMux`). Optional, so a
+   * caller with no local mux to ask -- every fleet-shape test -- passes
+   * nothing, and no mux finding is made.
    */
-  inbox?: readonly { key: string; waiting: number }[];
-  /** The per-pane cap past which a hook stops writing. */
-  inboxCap?: number;
-  /**
-   * murmur's entries in each hook harness's config (`checkHooks`). Optional,
-   * like `inbox`: the fleet-shape tests have no home directory to read.
-   */
-  hooks?: readonly HookCheck[];
+  mux?: MuxCheck;
 };
+
+/**
+ * This node's multiplexers, as `doctor` found them: each local tmux server's
+ * answer about itself, and whether a Rex server answered.
+ */
+export type MuxCheck = {
+  tmux: readonly { server: string; info: ServerInfo | null }[];
+  rex: boolean;
+};
+
+/** The flag that names a tmux server on a command line, for a remedy. */
+function serverFlag(server: string): string {
+  return server === "default" ? "" : ` ${server}`;
+}
+
+/**
+ * Findings about this node's multiplexers. murmur 3 reads every local pane's
+ * state from OSC 7501, which only vtmux (with `vtmux-program-status on`) and
+ * Rex keep: stock tmux drops the sequence, so its panes read as nothing.
+ */
+function muxFindings(subject: string, mux: MuxCheck): Finding[] {
+  const findings: Finding[] = [];
+  const answered = mux.tmux.filter((entry) => entry.info !== null);
+  for (const { server, info } of answered) {
+    if (info === null) continue;
+    if (info.vtmux === null) {
+      const stock = info.version ? `stock tmux ${info.version}` : "stock tmux";
+      findings.push({
+        kind: "stock-tmux",
+        severity: "problem",
+        subject: server,
+        message:
+          `tmux server ${server} is ${stock}, which drops OSC 7501, so murmur 3 sees none of its panes: ` +
+          "run vtmux there (with `vtmux-program-status on` and `vtmux-program-resume on`), or stay on murmur 2.x for stock tmux",
+        detail: `${stock}: no OSC 7501, panes invisible`,
+        remedy: "npm i -g @mu-crew/murmur@2  # or switch this server to vtmux",
+      });
+      continue;
+    }
+    if (info.programStatus !== "on") {
+      findings.push({
+        kind: "program-status-off",
+        severity: "problem",
+        subject: server,
+        message: `vtmux server ${server} has vtmux-program-status ${info.programStatus ?? "unset"}, so it keeps no OSC 7501 records and murmur sees none of its panes`,
+        detail: `vtmux-program-status ${info.programStatus ?? "unset"}`,
+        remedy: `tmux${serverFlag(server)} set -s vtmux-program-status on`,
+      });
+    }
+    if (info.programResume !== "on") {
+      findings.push({
+        kind: "program-resume-off",
+        severity: "observation",
+        subject: server,
+        message: `vtmux server ${server} has vtmux-program-resume ${info.programResume ?? "unset"}, so its panes carry no resume command (OSC 7577) for mural or a session restore`,
+        detail: `vtmux-program-resume ${info.programResume ?? "unset"}`,
+        remedy: `tmux${serverFlag(server)} set -s vtmux-program-resume on`,
+      });
+    }
+  }
+  if (answered.length === 0 && !mux.rex) {
+    findings.push({
+      kind: "no-local-mux",
+      severity: "observation",
+      subject,
+      message:
+        "no tmux server or Rex is running on this node, so it has no local panes to report " +
+        "(murmur 3 needs vtmux or Rex; stock tmux users stay on murmur 2.x)",
+      detail: "no tmux server or Rex running",
+      remedy: null,
+    });
+  }
+  return findings;
+}
 
 /** One host this node can name, with the identity every check compares on. */
 type KnownHost = {
@@ -388,45 +456,11 @@ export function diagnose(local: LocalNode, surveys: SurveyResult[]): Finding[] {
     });
   }
 
-  // A hook harness whose murmur entries are not what `murmur init` writes --
-  // PROBLEM. First, because it is this node's own configuration and murmur
-  // provably loses events: a missing `Stop` never reports a finished turn, and
-  // Muse delivers no `Interrupt` to a handler not declared async. The subject
-  // is the harness, the handle `murmur init --hooks` takes.
-  for (const check of local.hooks ?? []) {
-    if (check.state !== "drift" && check.state !== "unreadable") continue;
-    const what =
-      check.state === "unreadable"
-        ? `cannot be checked: ${check.error ?? "unreadable"}`
-        : describeDrift(check);
-    findings.push({
-      kind: "hook-drift",
-      severity: "problem",
-      subject: check.harness,
-      message:
-        check.state === "unreadable"
-          ? `${check.harness}'s hook config ${check.path} ${what}, and \`murmur init\` will not rewrite it`
-          : `${check.harness}'s murmur hook entries in ${check.path} differ from what \`murmur init\` writes: ${what}`,
-      detail: `${what} (${check.path})`,
-      // An unreadable file is the user's to fix: init refuses it too.
-      remedy: check.state === "unreadable" ? null : "murmur init",
-    });
-  }
-
-  // codex hooked AND still running murmur from its older `notify` line --
-  // PROBLEM: every finished turn is reported twice. No command: murmur does
-  // not edit codex's TOML, so the line is the user's to remove.
-  for (const check of local.hooks ?? []) {
-    if (check.notifyConfig === undefined) continue;
-    findings.push({
-      kind: "reported-twice",
-      severity: "problem",
-      subject: check.harness,
-      message: `${check.harness} runs murmur from both its hooks and the \`notify\` line in ${check.notifyConfig}, so every finished turn is reported twice; remove the \`notify\` line`,
-      detail: `remove the \`notify\` line from ${check.notifyConfig}`,
-      remedy: null,
-    });
-  }
+  // This node's own multiplexers first: a node whose panes murmur cannot read
+  // is murmur provably seeing nothing, whatever the fleet looks like.
+  // Problems here, observations with the others at the end.
+  const mux = local.mux ? muxFindings(local.display_name, local.mux) : [];
+  findings.push(...mux.filter((finding) => finding.severity === "problem"));
 
   // Duplicate host_id -- PROBLEM. Compared on host_id and nothing else: two
   // names for one machine means every command pays two ssh round trips for one
@@ -693,36 +727,7 @@ export function diagnose(local: LocalNode, surveys: SurveyResult[]): Finding[] {
     });
   }
 
-  // A pane inbox at its cap: that pane's hook has stopped writing, so its
-  // harness's state is frozen until a reader drains it. Nothing drains on an
-  // idle host (no attached client, no mu call), which is the usual cause.
-  const cap = local.inboxCap ?? Number.POSITIVE_INFINITY;
-  for (const { key, waiting } of local.inbox ?? []) {
-    if (waiting < cap) continue;
-    findings.push({
-      kind: "inbox-full",
-      severity: "observation",
-      subject: local.display_name,
-      message: `pane inbox ${key} holds ${waiting} undrained events, so its hook has stopped writing -- run \`murmur status\` to drain it`,
-      detail: `inbox ${key}: ${waiting} events waiting`,
-      remedy: "murmur status",
-    });
-  }
-
-  // A hook harness set up here with no murmur entry at all -- OBSERVATION. It
-  // may be deliberate (a harness still on `murmur notify`, or not used with
-  // tmux), and only the operator can say, but its panes report nothing.
-  for (const check of local.hooks ?? []) {
-    if (check.state !== "unhooked") continue;
-    findings.push({
-      kind: "hooks-absent",
-      severity: "observation",
-      subject: check.harness,
-      message: `${check.harness} is set up here but ${check.path} has no murmur hook entries, so its panes report nothing to murmur`,
-      detail: `no murmur entries in ${check.path}`,
-      remedy: "murmur init",
-    });
-  }
+  findings.push(...mux.filter((finding) => finding.severity === "observation"));
 
   // Returned in the order they were appended, which is already problems first
   // and then the operator's own peer order. There is no sort: a comparator here

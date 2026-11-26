@@ -31,11 +31,7 @@ const tmux = (...args) => run("tmux", ["-L", socket, "-f", "/dev/null", ...args]
 let socketPath;
 let ownsServer = false;
 try {
-  run(process.execPath, [join(root, "dist/cli.js"), "init", "--name", "mule-e2e", "--no-hooks"]);
-  const command = [
-    `MURMUR_STATE_DIR=${JSON.stringify(murmurState)}`,
-    `node ${JSON.stringify(join(root, "test/helpers/private-claimant.mjs"))}`,
-  ].join(" ");
+  run(process.execPath, [join(root, "dist/cli.js"), "init", "--name", "mule-e2e"]);
   run("cargo", ["test", "--manifest-path", join(muleRoot, "Cargo.toml"), "--no-run"]);
   const probe = run("cargo", [
     "run",
@@ -60,13 +56,20 @@ try {
   }
   tmux("new-session", "-d", "-s", "keeper", "sleep 30");
   ownsServer = true;
-  tmux(
+  // mu marks a crew pane with pane options at spawn; murmur reads them in its
+  // single list-panes pass, whatever the program in the pane reports.
+  const crewPane = tmux(
     "new-session",
     "-d",
+    "-P",
+    "-F",
+    "#{pane_id}",
     "-s",
     `mule-${id}`,
-    `env MU_MANAGED_AGENT=1 MU_AGENT_NAME=mule-${id} MU_WORKSTREAM=e2e sh -c ${JSON.stringify(command)}`,
+    "sleep 30",
   );
+  tmux("set-option", "-p", "-t", crewPane, "@mu_agent", `mule-${id}`);
+  tmux("set-option", "-p", "-t", crewPane, "@mu_workstream", "e2e");
   socketPath = tmux("display-message", "-p", "#{socket_path}");
 
   const deadline = Date.now() + 5000;
@@ -76,7 +79,7 @@ try {
     if (snapshot.panes.length === 1) break;
   } while (Date.now() < deadline);
   const pane = snapshot.panes[0];
-  if (!pane) throw new Error("claimant did not appear");
+  if (!pane) throw new Error("crew pane did not appear");
   if (pane.server.kind !== "label" || pane.server.value !== socket)
     throw new Error(`wrong server: ${JSON.stringify(pane.server)}`);
   if (pane.agent?.driver !== "orchestrated" || pane.agent.agent_name !== `mule-${id}`)
@@ -84,7 +87,7 @@ try {
 
   const second = JSON.parse(run(process.execPath, [join(root, "dist/cli.js"), "export"]));
   if (!second.panes.some((candidate) => candidate.pane === pane.pane))
-    throw new Error("claimant disappeared during export liveness");
+    throw new Error("crew pane disappeared during export");
 
   const attach = renderJumpCommand("et dev -c {attach}", pane);
   if (!attach.includes("tmux -L") || !attach.includes(socket) || !attach.includes("attach -t"))
@@ -93,7 +96,7 @@ try {
   tmux("kill-session", "-t", `=mule-${id}`);
   const gone = JSON.parse(run(process.execPath, [join(root, "dist/cli.js"), "export"]));
   if (gone.panes.length !== 0)
-    throw new Error(`claimant survived kill: ${JSON.stringify(gone.panes)}`);
+    throw new Error(`crew pane survived kill: ${JSON.stringify(gone.panes)}`);
 
   console.log(`crew=1 server=label:${socket} agent=mule-${id}`);
   console.log(`export_survived=1 pane=${pane.pane}`);

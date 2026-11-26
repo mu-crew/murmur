@@ -4,12 +4,13 @@ import type { PaneId, SessionId, WindowId } from "./ids.js";
 import type { Store } from "./store.js";
 import {
   type Activity,
-  type AgentUsage,
   ATTENTION_PRIORITY,
   type AttentionKind,
+  type BlockedKind,
   DEFAULT_DRIVER,
   type Driver,
-  type Effort,
+  type LocalPane,
+  type PaneState,
   type SnapshotPane,
   type TmuxServer,
 } from "./types.js";
@@ -20,7 +21,7 @@ export type Freshness = "fresh" | "stale";
  * What a surface paints. Presentation only, derived from the three independent
  * facts and never stored.
  */
-export type RenderState = "crashed" | "error" | "blocked" | "done" | "running" | "waiting" | "idle";
+export type RenderState = PaneState;
 
 /**
  * THE single ordering table: which state matters most, for sorting and for
@@ -165,27 +166,13 @@ function piFooter(line: string): string | null {
 }
 
 /**
- * What the agent is running with, from its own report.
- *
- * Formatted to one decimal so it matches `piFooter` exactly: a card must not
- * visibly change shape the moment an agent starts reporting, or the reader sees
- * a cosmetic difference and reads it as a state change.
- *
- * Returns "" when nothing was reported, which is the common case for any
- * harness without the pi extension.
+ * What the program says it is doing, in its own words (OSC 7501 `msg`, else
+ * `title`), with its progress when it reports one. "" when it said nothing.
  */
 function reportedSummary(agent: PaneView): string {
-  return [
-    agent.model,
-    agent.effort,
-    // Guarded on the VALUE, not on null: `PaneView` is exported from the SDK,
-    // so an object built against an older shape can reach here with the key
-    // missing entirely -- and a crash in a card renderer takes the whole dash
-    // down over a cosmetic field.
-    typeof agent.context_pct === "number" ? `${agent.context_pct.toFixed(1)}%` : "",
-  ]
-    .filter(Boolean)
-    .join(" \u00b7 ");
+  const words = (agent.message ?? "").trim() || (agent.title ?? "").trim();
+  const progress = typeof agent.progress === "number" ? `${agent.progress}%` : "";
+  return [words, progress].filter(Boolean).join(" \u00b7 ");
 }
 
 /** A short tag for which harness runs the agent; empty when unknown. */
@@ -199,11 +186,12 @@ export function harnessTag(agent: Pick<PaneView, "harness">): string {
  *
  * 1. An attention message. A human sentence the agent wrote outranks anything
  *    derived, and it is the one thing a reader may need to act on.
- * 2. The agent's own report. State the collector already carries, so it works
- *    for a remote pane as well as a local one and needs no capture.
+ * 2. The program's own report (OSC 7501 `msg`, `title`, `progress`). State the
+ *    collector already carries, so it works for a remote pane as well as a
+ *    local one and needs no capture.
  * 3. The last non-empty line of pane output, condensed if it is a pi footer.
- *    A guess, kept only because agents without the pi extension report nothing
- *    and a blank card would be worse.
+ *    A guess, kept only because a program may report nothing and a blank
+ *    card would be worse.
  *
  * The report beats the scrape because they answer the same question with
  * different authority: one is the owner speaking, the other is murmur reading
@@ -238,8 +226,8 @@ export function oneLiner(agent: PaneView, glanceLine?: string | null): string {
  * owner metadata, and ages.
  *
  * Local and remote panes are the same type, built by the same mapping, because
- * `Store.localPanes()` and a peer's cached snapshot both return
- * `SnapshotPane[]`. One mapping means local and remote cannot drift apart.
+ * a local read and a peer's cached snapshot both produce `SnapshotPane`s. One
+ * mapping means local and remote cannot drift apart.
  */
 export type PaneView = {
   // address
@@ -258,28 +246,30 @@ export type PaneView = {
   activity: Activity | null;
   attention: PaneAttention[];
   freshness: Freshness;
-  // owner-reported metadata, null for an attention-only pane
-  agent_id: string | null;
+  // who the agent is: mu's pane options, null for an attention-only pane
   agent_name: string | null;
-  pi_session: string | null;
   workstream: string | null;
   role: string | null;
+  /** The pane's foreground command. */
   cli: string | null;
-  // which harness runs the agent; null with no agent row or an unknown harness
+  /** Which program reports the pane's status (OSC 7501 `app`); null when unknown. */
   harness: string | null;
-  // owner-reported runtime: what the agent is running WITH, as opposed to the
-  // metadata above, which is who it is. Null when the harness reports none: pi
-  // reports all of it, a hook harness what its payloads name (model, effort).
-  model: string | null;
-  provider: string | null;
-  effort: Effort | null;
-  provider_effort: string | null;
-  context_pct: number | null;
-  context_tokens: number | null;
-  context_window: number | null;
-  usage: AgentUsage | null;
-  /** Outstanding background work (delegates), null when not reported. */
+  /** The pane's title (OSC 0/2): pi names its session there. */
+  pane_title: string | null;
+  // what the program says, in its own words (OSC 7501)
+  title: string | null;
+  message: string | null;
+  /** 0..100, for a working or blocked program that reports it. */
+  progress: number | null;
+  /** What a blocked program waits for: `permission`, `question` or `auth`. */
+  blocked_kind: BlockedKind | null;
+  /** Outstanding delegates (the `mu/delegates` record), null when not reported. */
   pending: number | null;
+  // how to relaunch it (OSC 7577), for a resolver such as mural
+  resume_command: string | null;
+  resume_cwd: string | null;
+  /** The pane's current directory. */
+  cwd: string | null;
   driver: Driver;
   // ages
   /** When the pane's own node last said something. Never `fetched_at`. */
@@ -290,6 +280,12 @@ export type PaneView = {
   fetched_at: number | null;
   /** A local pane already attached to this remote worker, derived per read. */
   attached_pane: PaneId | null;
+  /**
+   * Whether the operator is looking at this pane right now: the active pane
+   * of the active window of an attached session. Local only; always false for
+   * a remote pane and for Rex.
+   */
+  focused: boolean;
   /**
    * The host a local pane's agent actually runs on, when that is not this one:
    * a mu remote worker, whose pane here holds the ssh session to it. mu names
@@ -439,7 +435,7 @@ export function paneDriver(pane: Pick<SnapshotPane, "agent" | "attention">): Dri
   return pane.attention.some((entry) => entry.driver === "human") ? "human" : "orchestrated";
 }
 
-function paneView(pane: SnapshotPane, source: ViewSource): PaneView {
+function paneView(pane: SnapshotPane | LocalPane, source: ViewSource): PaneView {
   const agent = pane.agent;
   return {
     host_id: source.host_id,
@@ -458,21 +454,19 @@ function paneView(pane: SnapshotPane, source: ViewSource): PaneView {
       message: entry.message,
     })),
     freshness: source.freshness,
-    agent_id: agent?.agent_id ?? null,
     agent_name: agent?.agent_name ?? null,
-    pi_session: agent?.pi_session ?? null,
     workstream: agent?.workstream ?? null,
     role: agent?.role ?? null,
     cli: agent?.cli ?? null,
     harness: agent?.harness ?? null,
-    model: agent?.model ?? null,
-    provider: agent?.provider ?? null,
-    effort: agent?.effort ?? null,
-    provider_effort: agent?.provider_effort ?? null,
-    context_pct: agent?.context_pct ?? null,
-    context_tokens: agent?.context_tokens ?? null,
-    context_window: agent?.context_window ?? null,
-    usage: agent?.usage ?? null,
+    pane_title: agent?.pane_title ?? null,
+    title: agent?.title ?? null,
+    message: agent?.message ?? null,
+    progress: agent?.progress ?? null,
+    blocked_kind: agent?.blocked_kind ?? null,
+    resume_command: agent?.resume_command ?? null,
+    resume_cwd: agent?.resume_cwd ?? null,
+    cwd: agent?.cwd ?? null,
     pending: agent?.pending ?? null,
     driver: paneDriver(pane),
     // The NEWER of the two, not the agent row with attention as a fallback.
@@ -495,12 +489,14 @@ function paneView(pane: SnapshotPane, source: ViewSource): PaneView {
     snapshot_at: source.snapshot_at,
     fetched_at: source.fetched_at,
     attached_pane: null,
-    runs_on: null,
+    runs_on: "runs_on" in pane ? pane.runs_on : null,
+    focused: "focused" in pane ? pane.focused : false,
   };
 }
 
 /**
- * Every pane this node knows about: its own, plus one cached snapshot per peer.
+ * Every pane this node knows about: its own (one local read, `readLocal`),
+ * plus one cached snapshot per peer.
  *
  * `identity` is non-null because every caller is a command that already requires
  * `murmur init`, so no pane can be misclassified as remote by an absent one.
@@ -509,8 +505,13 @@ function paneView(pane: SnapshotPane, source: ViewSource): PaneView {
  * whatever its own node last said; a stale node keeps its last-known fields
  * verbatim beside an explicit warning.
  */
-export function paneViews(store: Store, identity: NodeIdentity, now = Date.now()): PaneView[] {
-  const views = store.localPanes().map((pane) =>
+export function paneViews(
+  store: Store,
+  identity: NodeIdentity,
+  local: readonly LocalPane[],
+  now = Date.now(),
+): PaneView[] {
+  const views = local.map((pane) =>
     paneView(pane, {
       host_id: identity.host_id,
       host: identity.display_name,

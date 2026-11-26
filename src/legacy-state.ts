@@ -4,17 +4,17 @@ import { join } from "node:path";
 import { ensureDir } from "./dirs.js";
 
 /**
- * The first-run migration from a 1.x murmur's state directory.
+ * The first-run migration from a 2.x murmur's state directory.
  *
- * 2.x keeps its state in `murmur2` (see `STATE_DIR_NAME`), because a 1.x build
- * refuses the 2.x store. The first time a 2.x build finds no identity it copies
+ * 3.x keeps its state in `murmur3` (see `STATE_DIR_NAME`), because a 2.x build
+ * refuses the 3.x store. The first time a 3.x build finds no identity it copies
  * the old `identity.json`, so the host keeps its `host_id` and every peer still
  * knows it; the first time it creates a store it reads the old store's peers
  * (`openStore`, through `copyLegacyStore`).
  *
  * The old directory is only ever read. Nothing here writes, moves or deletes
  * anything in it -- not even SQLite's `-shm` file, which a read-only open of a
- * WAL database still writes -- so a 1.x murmur keeps working beside 2.x.
+ * WAL database still writes -- so a 2.x murmur keeps working beside 3.x.
  */
 
 /**

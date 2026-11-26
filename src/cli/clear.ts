@@ -1,95 +1,29 @@
 import type { Command } from "commander";
-import { publishAgentStates } from "../agent-state.js";
 import { asPaneId } from "../ids.js";
-import { type Mux, tmux } from "../mux.js";
+import { deriveTmuxServer } from "../mux.js";
 import { openStore, type Store } from "../store.js";
 import type { TmuxServer } from "../types.js";
-import { paneServer } from "./pane.js";
 
 /**
- * Acknowledge every attention request on one pane, then republish its window.
+ * Dismiss murmur's own attention for one pane: the `crashed` row it recorded
+ * when the pane vanished mid-work.
  *
- * The whole write path. Nothing here must refuse to clear anything, because
- * attention is all focus can address: `acknowledgePane` is one `DELETE FROM
- * attention WHERE pane = ?` and cannot touch an agent's activity, identity or
- * owner metadata, so a focus hook has nothing to overwrite a running agent with.
+ * Everything else on a pane is its program's (OSC 7501), and vtmux clears
+ * `done` and `error` itself when the pane is focused, so there is nothing
+ * else here to clear. One `DELETE` keyed on the pane address: it cannot touch
+ * anything but the crash record.
  *
- * Best effort, silent and total: this runs inside the tmux server.
+ * Best effort, silent and total: a key binding or a script runs it.
  */
-export function clearPane(raw: string, mux: Mux = tmux, named?: TmuxServer): void {
+export function clearPane(raw: string, server: TmuxServer): number {
   let store: Store | undefined;
   try {
-    if (!raw) return;
-    // argv is the boundary: the pane id arrives as a bare string from the hook.
-    const pane = asPaneId(raw);
-    if (named) {
-      // A server named outright (`-L`/`-S`): mu acknowledging a pane of a
-      // server it is not running inside. The caller's own view says nothing
-      // about that server, so it is not read.
-      const window = mux.windowForPane(pane, named);
-      try {
-        store = openStore();
-        if (window) store.acknowledgePane({ server: named, pane });
-      } catch {
-        // As below: no evidence, no clear.
-      }
-      if (!window || !store) return;
-      try {
-        publishAgentStates(window, mux, store, named);
-      } catch {
-        // As below: leave the badge.
-      }
-      return;
-    }
-    // The badge is a tmux option, not murmur state, so resolving it needs no
-    // murmur knowledge -- and a pane murmur has never seen can still carry an
-    // orphan badge nothing else will clear.
-    //
-    // `currentView` is one tmux call for the caller's location AND the publish
-    // targets, so the common case (the hook's own pane) needs no second read;
-    // `currentWindow` is the same answer when the view is unavailable.
-    const view = mux.currentView();
-    const current = view ? view.location : mux.currentWindow();
-    const server = current?.server ?? ({ kind: "default" } as const);
-    const window = current?.pane === pane ? current.window : mux.windowForPane(pane, server);
-    // The prefetched targets describe the caller's window: valid only for that one.
-    const targets = view && window === view.location.window ? view.targets : undefined;
-    const location = current?.pane === pane ? current : window ? { server, pane } : null;
-
-    try {
-      store = openStore();
-      if (location) store.acknowledgePane(location);
-    } catch {
-      // No database, or an unwritable one. Nothing was read, so there is no
-      // evidence the request was satisfied -- and clearing on no evidence is the
-      // one direction that loses information.
-    }
-
-    // Both guards, for the same reason, stated at the top of this file: keep the
-    // badge when tmux OR the store cannot answer.
-    //
-    // The store guard used to be a ternary passing `null`, which erased the
-    // badge without murmur ever reading the attention it reported -- the exact
-    // opposite of the rule. A locked or transiently unwritable state.db plus one
-    // focus event wiped the crashed/blocked glyph off a window whose attention
-    // row was still in the database, and nothing repaints it until the agent's
-    // next event. For a crashed agent that is never.
-    //
-    // A pane murmur has never seen still clears, because there `openStore`
-    // succeeds and the projection finds no local state for it.
-    if (!window || !store) return;
-    // Pane and window states are derived projections, so they are recomputed
-    // after the delete: blindly clearing them made a live running agent display
-    // as idle though its agent row was untouched.
-    try {
-      publishAgentStates(window, mux, store, server, targets);
-    } catch {
-      // Unreadable projection: leave the badge. Stale is recoverable, erasing a
-      // real signal is not.
-    }
+    if (!raw) return 0;
+    store = openStore();
+    // argv is the boundary: the pane id arrives as a bare string.
+    return store.acknowledgePane({ server, pane: asPaneId(raw) });
   } catch {
-    // Focus hooks run inside the tmux server: they must always be silent and
-    // total.
+    return 0;
   } finally {
     try {
       store?.close();
@@ -99,26 +33,43 @@ export function clearPane(raw: string, mux: Mux = tmux, named?: TmuxServer): voi
   }
 }
 
+/**
+ * The server `-L`/`-S`/`--rex` names, else the one `$TMUX` names, else the
+ * default server.
+ */
+export function paneServer(
+  options: { socketName?: string; socketPath?: string; rex?: boolean },
+  env: NodeJS.ProcessEnv = process.env,
+): TmuxServer {
+  if (options.rex) return { kind: "rex" };
+  if (options.socketName) {
+    return options.socketName === "default"
+      ? { kind: "default" }
+      : { kind: "label", value: options.socketName };
+  }
+  if (options.socketPath) return deriveTmuxServer(options.socketPath);
+  const own = env.TMUX?.split(",")[0];
+  if (own) {
+    try {
+      return deriveTmuxServer(own);
+    } catch {
+      // An unreadable $TMUX names nothing; fall through.
+    }
+  }
+  return { kind: "default" };
+}
+
 export function registerClear(program: Command): void {
   program
     .command("clear")
-    .description("Acknowledge attention for a pane")
-    .option("--pane <pane-id>", "focused tmux pane id")
+    .description("Dismiss a crash murmur recorded for a pane")
+    .option("--pane <pane-id>", "tmux pane id (or Rex block id with --rex)")
     .option("-L, --socket-name <name>", "tmux server socket name of the pane")
     .option("-S, --socket-path <path>", "tmux server socket path of the pane")
-    .action((options: { pane?: string; socketName?: string; socketPath?: string }) =>
-      clearPane(options.pane ?? "", tmux, namedServer(options)),
+    .option("--rex", "the pane is a Rex block")
+    .action(
+      (options: { pane?: string; socketName?: string; socketPath?: string; rex?: boolean }) => {
+        clearPane(options.pane ?? "", paneServer(options));
+      },
     );
-}
-
-/**
- * The server `-L`/`-S` name, or undefined for neither. Only a server named
- * outright: without one, the focus hook's path is unchanged, finding the
- * server from the caller's own tmux.
- */
-export function namedServer(options: {
-  socketName?: string;
-  socketPath?: string;
-}): TmuxServer | undefined {
-  return options.socketName || options.socketPath ? paneServer(options, {}) : undefined;
 }

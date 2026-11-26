@@ -1,5 +1,9 @@
+import type { PaneId } from "./ids.js";
 import { CLIENT_IDENTITY_FORMAT } from "./routing.js";
-import type { PaneIdentity, PeerRecord, TmuxServer } from "./types.js";
+import type { PeerRecord, TmuxServer, TmuxSocket } from "./types.js";
+
+/** A pane on a tmux server: what an attach can name. Rex panes have no attach. */
+export type TmuxDestination = { server: TmuxSocket; pane: PaneId };
 
 export const ATTACH_PLACEHOLDER = "{attach}";
 export const PANE_PLACEHOLDER = "{pane}";
@@ -42,7 +46,7 @@ export function suggestedJumpCommand(template: string, target: string): string {
  * attached, so only an attach that happened can mark, and only its own client.
  */
 export function tmuxAttachCommand(
-  { server, pane }: PaneIdentity,
+  { server, pane }: TmuxDestination,
   marks: readonly string[] = [],
 ): string {
   const selector =
@@ -58,7 +62,7 @@ export function tmuxAttachCommand(
 /** Substitute values into a peer-owned transport without parsing or rewriting it. */
 export function renderJumpCommand(
   template: string,
-  destination: PaneIdentity,
+  destination: TmuxDestination,
   marks: readonly string[] = [],
 ): string {
   // One pass, so a placeholder spelled inside a substituted value (a socket
@@ -71,6 +75,7 @@ export function renderJumpCommand(
 }
 
 export function supportsServer(template: string, server: TmuxServer): boolean {
+  if (server.kind === "rex") return false;
   return server.kind === "default" || !template.includes(PANE_PLACEHOLDER);
 }
 

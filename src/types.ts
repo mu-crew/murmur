@@ -1,14 +1,19 @@
 import type { PaneId, SessionId, WindowId } from "./ids.js";
-import type { InboxEvent } from "./inbox-event.js";
 
 /**
  * The three independent facts, as types.
  *
- * `activity` is what the pane's own process says it is doing. `attention` is
+ * `activity` is what the pane's program says it is doing. `attention` is
  * whether a human is wanted. `freshness` (src/view.ts) is how recently we
  * reached the node that reported. They are three independent fields, never one
  * enum, and absence carries meaning: no attention row means "nothing to see",
  * no agent row means "no agent here".
+ *
+ * From 3.0 a local pane's facts come from its multiplexer: the program reports
+ * them over OSC 7501 (Program Status) and vtmux or Rex keeps the record. murmur
+ * reads that record once per collect (src/local.ts) and keeps only what the
+ * multiplexer cannot: a pane that vanished mid-work (`crashed`) and which
+ * transitions have already been alerted.
  */
 export type Activity = "running" | "stopped";
 export type AttentionKind = "done" | "blocked" | "error" | "crashed";
@@ -17,51 +22,78 @@ export type AttentionKind = "done" | "blocked" | "error" | "crashed";
  * Attention kinds, most urgent first. Beside the type they order.
  *
  * Typed as `AttentionKind` rather than reusing `RENDER_PRIORITY`, which is a
- * list of five `RenderState`s of which these are three. Sorting attention
- * through that table built an index map over two entries that could never be
- * looked up, forced the map to `Map<string, number>` to typecheck, and so
- * required a `?? 99` fallback -- a fallback branch in a sort path, in a repo
- * whose reason for CHECK-constraining this column is that "no sort, count or
- * render path needs a fallback branch". Typed correctly, the fallback deletes
- * itself.
- *
- * The two tables must not disagree about relative order; a test asserts this is
- * an order-consistent subset of `RENDER_PRIORITY` rather than importing one into
- * the other.
+ * list of seven `RenderState`s of which these are four. The two tables must
+ * not disagree about relative order; a test asserts this is an
+ * order-consistent subset of `RENDER_PRIORITY`.
  */
 export const ATTENTION_PRIORITY: readonly AttentionKind[] = ["crashed", "error", "blocked", "done"];
 
 /**
+ * What a blocked program is waiting for, as OSC 7501 names it: a tool
+ * permission, an answer, or a credential. Null when the program did not say.
+ */
+export const BLOCKED_KINDS = ["permission", "question", "auth"] as const;
+export type BlockedKind = (typeof BLOCKED_KINDS)[number];
+
+/**
+ * The OSC 7501 record id mu's pi extension reports outstanding delegates
+ * under: a `working` summary from it is an agent waiting, not working.
+ */
+export const DELEGATES_RECORD = "mu/delegates";
+
+/**
  * Who is waiting on this agent -- a human, or a supervisor that consumes the
- * result. Not "which harness"; that is `cli`.
+ * result. Not "which harness"; that is `harness`.
+ *
+ * mu marks the panes it places with the `@mu_agent` pane option, which is what
+ * makes a pane `orchestrated`.
  */
 export type Driver = "human" | "orchestrated";
 
 export const DEFAULT_DRIVER: Driver = "human";
 
 /**
- * The driver a process reads from its own environment: mu marks the agents it
- * places. Shared by the pi extension and `murmur notify`, whose hook inherits
- * the harness's environment.
+ * Where a pane lives: a tmux (vtmux) server, or the local Rex server.
+ *
+ * Rex has one server per user, so its tag carries no value. Its pane ids are
+ * Rex block ids (`block:<uuid>`), its sessions and windows Rex's own ids.
  */
-export function driverFromEnv(env: NodeJS.ProcessEnv): Driver {
-  return env.MU_MANAGED_AGENT === "1" || env.MU_AGENT_NAME ? "orchestrated" : "human";
-}
-
 export type TmuxServer =
   | { kind: "default" }
   | { kind: "label"; value: string }
-  | { kind: "path"; value: string };
+  | { kind: "path"; value: string }
+  | { kind: "rex" };
 
 export const DEFAULT_TMUX_SERVER: TmuxServer = { kind: "default" };
 
+/** A tmux server, as opposed to Rex: every server a tmux argv can name. */
+export type TmuxSocket = Exclude<TmuxServer, { kind: "rex" }>;
+
+/** Whether `server` is a tmux server (`-L`/`-S`/default), not Rex. */
+export function isTmuxSocket(server: TmuxServer): server is TmuxSocket {
+  return server.kind !== "rex";
+}
+
+/** The server's value, or "" for the two kinds that carry none. */
+export function serverValue(server: TmuxServer): string {
+  return "value" in server ? server.value : "";
+}
+
+/** One key per server, for maps and sets. */
+export function serverKey(server: TmuxServer): string {
+  return `${server.kind}\0${serverValue(server)}`;
+}
+
+/** One key per pane address: a pane id is unique only per server. */
+export function paneKey(address: { server: TmuxServer; pane: string }): string {
+  return `${serverKey(address.server)}\0${address.pane}`;
+}
+
 /**
- * Where a pane currently lives. Location, never identity.
+ * A pane's address. Location, never identity.
  *
- * `pane` is the address and is stable for the life of the pane; `session` and
- * `window` are only where that pane currently is, and both change under
- * move-pane and break-pane. Only a pane may decide whether an agent exists,
- * which is what the brands in ./ids.js enforce.
+ * `pane` is stable for the life of the pane; `session` and `window` are only
+ * where that pane currently is, and both change under move-pane and break-pane.
  */
 export type PaneIdentity = {
   server: TmuxServer;
@@ -71,142 +103,8 @@ export type PaneIdentity = {
 export type Location = PaneIdentity & {
   session: SessionId;
   window: WindowId;
-  pane: PaneId;
   session_name: string | null;
   window_name: string | null;
-};
-
-/**
- * pi's thinking levels, verbatim.
- *
- * A closed set, so `effort` can be CHECK-constrained in the schema and
- * `member()`-validated on the wire, the same way `activity` and `driver` are.
- * A display variant like "Medium" is a broken peer rather than a value to
- * coerce.
- *
- * A VALUE with the type derived from it, not a hand-written union, because four
- * places enforce this vocabulary: this type, the wire validator, the producer's
- * filter, and the SQLite CHECK. Written out four times it drifts, and the three
- * failures look nothing alike -- the producer silently drops a valid report, the
- * validator rejects a good peer snapshot, the store rejects a local write. This
- * repo has already paid for a duplicated protocol rule once: `SNAPSHOT_VERSION`
- * was four literals, and the copy in `peer.ts` made `peer list` call every
- * correctly upgraded peer incompatible.
- *
- * The schema is the one unavoidable second spelling, since SQL is a string and
- * cannot import. `test/architecture.test.ts` fails if a THIRD appears.
- */
-export const EFFORTS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
-
-export type Effort = (typeof EFFORTS)[number];
-
-/**
- * Tokens and money for one agent's session, as the provider reported them.
- *
- * A SUB-OBJECT rather than twelve more columns, and nullable as a unit. Three
- * reasons, in order of how much they cost when ignored:
- *
- * 1. It arrives as a bundle. pi hands over one `Usage` object per turn, so
- *    every field in here shares one clock and one provenance -- and a partial
- *    write mixing this turn's cost with last turn's tokens would be a number
- *    nobody could interpret.
- * 2. Absence is a real state. An agent that has not completed a turn has no
- *    usage at all, which is different from having zero tokens, and flat columns
- *    would have to spell that with twelve nulls.
- * 3. Nothing renders it yet. These are for a display concern that does not
- *    exist: the card draws `model`, `effort` and `context_pct` only. Carrying
- *    the numbers now means the next display option costs no wire change, which
- *    is the whole argument for collecting them early -- and the wire is not
- *    compatible across versions, so adding a field later costs a coordinated
- *    upgrade of every node in the fleet.
- *
- * `cache_write_1h` and `reasoning` are optional WITHIN the object because only
- * some providers report them -- Anthropic splits cache retention, and a
- * reasoning breakdown exists only where the model exposes one. Absent means the
- * provider said nothing, which is not the same as zero.
- */
-export type AgentUsage = {
-  input: number;
-  output: number;
-  cache_read: number;
-  cache_write: number;
-  total_tokens: number;
-  /** Subset of `cache_write` with 1h retention. Anthropic only. */
-  cache_write_1h: number | null;
-  /** Thinking tokens, already counted in `output`. Provider-dependent. */
-  reasoning: number | null;
-  cost_input: number;
-  cost_output: number;
-  cost_cache_read: number;
-  cost_cache_write: number;
-  cost_total: number;
-};
-
-/**
- * What the agent is running with, as the agent reports it.
- *
- * A SIBLING of `AgentMeta`, not more keys on it, and the split is the point.
- * `AgentMeta` is what an owner asserts once when it claims a pane -- name,
- * session, workstream, role, cli, driver -- and `claimAgent` is its only
- * writer. Nothing in it changes for the life of the process.
- *
- * These fields change repeatedly, from four report sites -- a model change, an
- * effort change, a completed turn, and a resumed session -- and `claimAgent`
- * never sees any of them. Folding them in would mean a "metadata" type half of
- * whose fields are live state, and the next reader could not tell which half
- * they were holding.
- *
- * All nullable: a bare shell, codex, or a notify-only harness reports none of
- * them, and an agent that cannot report one must not be forced to invent it.
- */
-export type AgentRuntime = {
-  /** Model id with the provider prefix stripped, e.g. `claude-opus-5`. */
-  model: string | null;
-  effort: Effort | null;
-  /**
-   * Percent of the context window in use, 0..100.
-   *
-   * Null is a normal state, not merely an absent one: pi reports a null percent
-   * immediately after a compaction, before the next response.
-   */
-  context_pct: number | null;
-  /** Absolute context figures, beside the percentage they were derived from. */
-  context_tokens: number | null;
-  context_window: number | null;
-  /** The provider id, kept apart from `model` so neither has to be parsed out. */
-  provider: string | null;
-  /**
-   * The effort the provider actually applied, when it says so.
-   *
-   * Distinct from `effort`, which is what was REQUESTED: a model can clamp a
-   * requested level, and the two disagreeing is a fact worth being able to see
-   * rather than a contradiction to resolve. Free text, because this is the
-   * provider's own vocabulary and not pi's closed set.
-   */
-  provider_effort: string | null;
-  /** Tokens and money, or null when no turn has completed. See `AgentUsage`. */
-  usage: AgentUsage | null;
-  /**
-   * Background work this agent started and is still waiting on, such as mu
-   * delegates: running, starting and queued. Null when the harness does not
-   * report it; 0 when it does and nothing is outstanding.
-   *
-   * Stopped with work pending renders `waiting` rather than `idle`, and the pi
-   * extension holds `done` back until the count is zero: an agent that ended
-   * its turn to wait on delegates has not finished, and the last answer
-   * re-runs it, so the settle after that is the real `done`.
-   */
-  pending: number | null;
-};
-
-/** Owner-reported metadata about the agent in a pane. */
-export type AgentMeta = {
-  agent_name: string | null;
-  pi_session: string | null;
-  workstream: string | null;
-  role: string | null;
-  cli: string;
-  driver: Driver;
 };
 
 export type PeerRecord = {
@@ -230,16 +128,11 @@ export type PeerRecord = {
 };
 
 /**
- * The snapshot document version this node speaks.
- *
- * Declared beside the type it describes, and the ONE place the number lives.
- * It was previously a literal in `Snapshot`, in `buildLocalSnapshot`, in
- * `parseSnapshot`'s check and again in `peer.ts` -- four copies of one fact,
- * which drifted the moment the version changed: `peer list` went on reporting
- * that every peer speaking the new version was incompatible, because its copy
- * still said 1.
+ * The snapshot document version this node speaks, and the ONE place the
+ * number lives. 8 is murmur 3.0: panes read from OSC 7501 and 7577 rather
+ * than reported by hooks and the pi extension.
  */
-export const SNAPSHOT_VERSION = 7;
+export const SNAPSHOT_VERSION = 8;
 
 /**
  * One node's whole current state. Complete, never a delta: a peer that returns
@@ -254,178 +147,75 @@ export type Snapshot = {
   panes: SnapshotPane[];
 };
 
-export type LocalPane = SnapshotPane;
-
-export type SnapshotPane = {
-  server: TmuxServer;
-  pane: PaneId;
-  session: SessionId;
-  window: WindowId;
-  session_name: string | null;
-  window_name: string | null;
-  /** Null for an attention-only pane: valid, listable, jumpable. */
+export type SnapshotPane = Location & {
+  /** Null for an attention-only pane (a crash murmur recorded): valid, listable. */
   agent: SnapshotAgent | null;
   attention: SnapshotAttention[];
 };
 
-export type SnapshotAgent = AgentMeta &
-  AgentRuntime & {
-    agent_id: string;
-    activity: Activity;
-    /** Which harness runs the agent (claude, codex, pi, ...); null when unknown. Not `cli`. */
-    harness: string | null;
-    claimed_at: number;
-    updated_at: number;
-  };
+/**
+ * A local pane as one collect read it: the snapshot row, plus whether the
+ * operator is looking at it right now. `focused` is local only and never
+ * reaches the wire: a remote node's focus says nothing about this operator.
+ */
+export type LocalPane = SnapshotPane & {
+  focused: boolean;
+  /**
+   * The host a mu remote worker runs on, from the `@mu_host` option mu sets
+   * on its local pane (which holds the ssh session). Local only, like focus.
+   */
+  runs_on: string | null;
+};
+
+/**
+ * The program in a pane, as its multiplexer reports it.
+ *
+ * Every field after `driver` is the program's own word (OSC 7501's `app`,
+ * `title`, `msg`, `progress`, `kind`; OSC 7577's resume record), never
+ * inferred by murmur.
+ */
+export type SnapshotAgent = {
+  activity: Activity;
+  /** mu's `@mu_agent`, `@mu_workstream` and `@mu_role` pane options. */
+  agent_name: string | null;
+  workstream: string | null;
+  role: string | null;
+  driver: Driver;
+  /** The pane's foreground command, as the multiplexer names it. */
+  cli: string | null;
+  /** The reporting program's name (OSC 7501 `app`): `pi`, `claude`, `codex`. */
+  harness: string | null;
+  /** The pane's title (OSC 0/2), a display-name fallback. */
+  pane_title: string | null;
+  /** OSC 7501 `title`: a short label for what the program is doing. */
+  title: string | null;
+  /** OSC 7501 `msg`: one line describing the status. */
+  message: string | null;
+  /** OSC 7501 `progress`, 0..100, for a working or blocked program. */
+  progress: number | null;
+  /** What a blocked program waits for; null otherwise or when unsaid. */
+  blocked_kind: BlockedKind | null;
+  /**
+   * Background work the agent is waiting on (mu delegates, reported as the
+   * `mu/delegates` OSC 7501 sub-record). Null when nothing reports it.
+   */
+  pending: number | null;
+  /** OSC 7577: how to relaunch the program, and where. Null without a record. */
+  resume_command: string | null;
+  resume_cwd: string | null;
+  /** The pane's current directory. */
+  cwd: string | null;
+  /** When the program's state last changed, on the owning node's clock. */
+  updated_at: number;
+};
 
 export type SnapshotAttention = {
   kind: AttentionKind;
   message: string;
   source: string;
-  /**
-   * Who is waiting on the pane, as the requester saw it. Carried on the request
-   * because a notify-only harness (codex, cursor, opencode) never claims an
-   * agent row, so without it an attention-only pane has no driver at all and
-   * every mu-placed codex worker counted as yours.
-   */
+  /** Who is waiting on the pane, as its node saw it. */
   driver: Driver;
   requested_at: number;
-};
-
-/**
- * Whether a pid is still running. A parameter everywhere it is consulted, so a
- * test needs no process table.
- */
-export type LiveCheck = (pid: number) => boolean;
-
-/**
- * Whether a pid is an ancestor of the claiming process. A parameter, like
- * `LiveCheck`, so a test needs no process table.
- */
-export type AncestorCheck = (pid: number) => boolean;
-
-/**
- * The pid of a live harness other than pi that the claiming pi runs inside,
- * or null. A parameter, like `LiveCheck`, so a test needs no process table.
- */
-export type NestCheck = () => number | null;
-
-export type AgentClaim = {
-  location: Location;
-  owner_pid: number;
-  meta: AgentMeta;
-  now?: number;
-  isAlive?: LiveCheck;
-  /**
-   * Consulted only against an `inbox` incumbent that is still alive: pi
-   * replaces it unless it is pi's own ancestor, which is the nested-agent case.
-   * Defaults to reading the process table, and fails closed (refuses) when the
-   * table cannot be read.
-   */
-  isAncestor?: AncestorCheck;
-  /**
-   * Consulted before any claim or replace: a pi inside a live claude, codex,
-   * cursor-agent or muse is refused even when that harness has no row yet --
-   * its events may still wait in the inbox, undrained. Defaults to reading the
-   * process table up to the server `$TMUX` names, for a claim made by this
-   * process; anything else, and an unreadable table, reads as not nested.
-   */
-  nestedUnder?: NestCheck;
-};
-
-export type ClaimResult =
-  | { outcome: "claimed"; agent_id: string }
-  | { outcome: "retained"; agent_id: string }
-  | { outcome: "replaced"; agent_id: string; previous_agent_id: string }
-  | { outcome: "refused"; held_by_pid: number };
-
-export type ActivityUpdate = {
-  agent_id: string;
-  owner_pid: number;
-  activity: Activity;
-  location: Location;
-  now?: number;
-};
-
-/**
- * A runtime report from an agent about itself.
- *
- * `Partial`, because the fields arrive from three different pi events -- a model
- * change, an effort change, a completed turn -- and a call that had to pass all
- * of them would force the producer to invent the ones it did not just learn.
- * Re-asserting a stale model on a context update is the bug this shape prevents.
- *
- * Only the keys PRESENT are written, so an explicit `null` (pi reports one for
- * the context percent right after a compaction) is distinct from omission.
- *
- * Keyed on `agent_id` AND `owner_pid`, the same gate `ActivityUpdate` uses: a
- * pi nested in an agent's pane inherits $TMUX_PANE and must not be able to
- * report as the agent that owns it.
- */
-export type RuntimeUpdate = Partial<AgentRuntime> & {
-  agent_id: string;
-  owner_pid: number;
-  now?: number;
-};
-
-export type AgentRelease = {
-  agent_id: string;
-  owner_pid: number;
-  location: PaneIdentity;
-};
-
-/**
- * The kinds an EXTERNAL writer may request.
- *
- * `crashed` is deliberately absent. It is reconciliation's word: it means "the
- * owning process died without saying so", which only the node that can probe
- * that pid may conclude. A caller asserting it would be manufacturing a fact it
- * cannot observe, and the rule was previously only a convention -- nothing
- * stopped `requestAttention({ kind: "crashed" })` from an extension, a notify
- * hook, or a future surface, and a sweep confirmed such a row lands in
- * `localPanes` indistinguishable from a real crash.
- *
- * The narrower type is the enforcement. Reconciliation writes its own row
- * through the same statement without going through this shape.
- */
-export type RequestableKind = Exclude<AttentionKind, "crashed">;
-
-/**
- * Everything an attention writer may say. There is no agent_id, no owner_pid,
- * no activity and no owner metadata field, and adding one is a contract change.
- *
- * `driver` is the one such change, made in snapshot 6. It is not a claim on an
- * agent: it says who should hear about THIS request, which the writer knows
- * from its own environment and nothing downstream can recover. Without it a
- * pane reached only through `murmur notify` defaulted to `human`.
- */
-export type AttentionRequest = {
-  kind: RequestableKind;
-  location: Location;
-  message: string;
-  source: string;
-  driver: Driver;
-  now?: number;
-};
-
-/**
- * The only local facts reconciliation is allowed to consult.
- *
- * `panes` is null when tmux could not answer, which is not evidence of death.
- * `isAlive` and `now` are parameters so a test needs no process table and no
- * clock control.
- */
-export type LocalWorld = {
-  server: TmuxServer;
-  panes: Set<PaneId> | null;
-  isAlive?: LiveCheck;
-  now?: number;
-};
-
-export type ReconcileSummary = {
-  crashed: PaneId[];
-  removed: PaneId[];
-  attention_removed: PaneId[];
 };
 
 export type PeerFetch =
@@ -433,63 +223,44 @@ export type PeerFetch =
   | { ok: false; error: string; at: number };
 
 /**
- * Who reports a pane's agent row: pi's extension in-process, or the inbox drain
- * for a hook harness. A `pi` row ignores inbox events; pi replaces an `inbox`
- * row unless its owner is alive and pi's ancestor.
+ * One word for a pane, as surfaces paint it. Defined here, beside the facts it
+ * is derived from, so the store can remember it; `view.ts` re-exports it as
+ * `RenderState`.
  */
-export type AgentSource = "pi" | "inbox";
+export type PaneState = "crashed" | "error" | "blocked" | "done" | "running" | "waiting" | "idle";
 
 /**
- * One inbox event, ready to apply, as the drain hands it to the store.
- *
- * The immutable file path identifies the delivery across drains. The store
- * records it in the same transaction as the event fold.
+ * One live pane as a collect saw it, before murmur adds what only it knows
+ * (since when, and any crash it recorded). The identity fields are kept so a
+ * pane that vanishes mid-work can still be named in its `crashed` row.
  */
-export type InboxDelivery = {
-  path: string;
-  location: Location;
-  /** Whether a human is looking at the pane: a focused `turn_stopped` raises no `done`. */
-  focused: boolean;
-  /** Null when the file did not hold a valid event. It is consumed and dropped. */
-  event: InboxEvent | null;
-  /** Whether a pi runs in the pane's process tree. Asked only before claiming an unclaimed pane. */
-  piRuns: () => boolean;
-};
-
-export type IngestOptions = {
-  isAlive?: LiveCheck;
-  /** Remove a committed file; an already absent file counts as success. */
-  consume: (path: string) => void;
-};
-
-export type IngestSummary = {
-  applied: number;
-  /** Valid events the ownership rules refused: a pi row, a live other owner, another session. */
-  ignored: number;
-  malformed: number;
-  /** Every pane whose state an applied event changed, for publishing. */
-  changed: Location[];
-};
-
-/**
- * A local pane's harness-side state, for `murmur pane --json`.
- *
- * Local only and never in a snapshot: `toAgent` picks its fields explicitly,
- * so none of these reach the wire. No `owner_pid` either, the same as every
- * other read shape.
- */
-export type HarnessState = {
-  source: AgentSource;
+export type SeenPane = Location & {
+  state: PaneState;
+  /** The multiplexer's own state-change time, when it reports one. */
+  state_time: number | null;
+  agent_name: string | null;
+  workstream: string | null;
+  role: string | null;
+  driver: Driver;
   harness: string | null;
-  session_id: string | null;
-  /** Prompts submitted in this session; null for a pi row, which does not count them. */
-  run_count: number | null;
-  last_text: string | null;
-  /** The run whose turn wrote `last_text` (see `TurnState`); null when none has. */
-  last_text_run: number | null;
-  /**
-   * False while the activity is mu's assertion rather than the harness's: an
-   * interrupt mu sent and no harness event has confirmed yet (`idle?`).
-   */
-  confirmed: boolean;
+  cli: string | null;
+  pane_title: string | null;
+};
+
+/**
+ * What one collect saw on one server: its panes, or null when the server could
+ * not be asked. Null is not evidence that the panes are gone, so it never
+ * synthesises a crash.
+ */
+export type ServerRead = {
+  server: TmuxServer;
+  panes: SeenPane[] | null;
+};
+
+/** What `Store.syncLocal` concluded from one collect. */
+export type LocalSync = {
+  /** Panes that vanished mid-work and now carry a `crashed` row. */
+  crashed: PaneId[];
+  /** When each live pane entered its current state, by `paneKey`. */
+  since: Map<string, number>;
 };

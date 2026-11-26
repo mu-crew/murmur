@@ -33,7 +33,7 @@ export const WRAPPER_ROUTE_OPTION = "@murmur_wrapper_route";
 
 export function wrapperRoute(target: { host_id: string; server: TmuxServer }): string {
   const { server } = target;
-  const value = server.kind === "default" ? "" : server.value;
+  const value = "value" in server ? server.value : "";
   // base64url so no tmux option quoting can alter it on the way back.
   return Buffer.from(JSON.stringify([target.host_id, server.kind, value])).toString("base64url");
 }
@@ -55,6 +55,8 @@ const flat = (text: string) => text.replaceAll("'\\''", "").replaceAll(/['"\\]/g
  * (tmux ignores `-L` then), or more than one `tmux ... attach`.
  */
 export function argvAddressesServer(argv: string, server: TmuxServer): boolean {
+  // A Rex pane is reached through Rex, never a tmux attach.
+  if (server.kind === "rex") return false;
   const attaches = [
     ...flat(argv).matchAll(/(?:^|[\s/])tmux\s(.*?)\s*\battach(?:-session)?(?=\s|$)/g),
   ];

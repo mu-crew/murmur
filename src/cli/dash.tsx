@@ -88,7 +88,7 @@ import {
   previewTextAsync,
   sessionNotice,
 } from "../paint.js";
-import { type Status, status, statusWithCollect } from "../status.js";
+import { localStatus, type Status, statusWithCollect } from "../status.js";
 import type { Store } from "../store.js";
 import {
   age,
@@ -190,12 +190,10 @@ export function selectedPaneIndex(panes: readonly PaneView[], key: string | null
  * pane is cleared on ITS server: without one, clearPane resolves the dash's own
  * server and clears whichever pane there has the same id.
  */
-export function acknowledgeDashPane(
-  store: Store,
-  pane: PaneView,
-  mux: Mux = tmux,
-): Promise<InputResult> {
-  return acknowledgeAttention(store, pane, (id, server) => clearPane(id, mux, server));
+export function acknowledgeDashPane(store: Store, pane: PaneView): Promise<InputResult> {
+  return acknowledgeAttention(store, pane, (id, server) => {
+    clearPane(id, server);
+  });
 }
 
 function nextSort(sort: DashSort): DashSort {
@@ -593,12 +591,25 @@ export function App({ dashStore, initial }: DashProps) {
 
   useEffect(() => {
     void refresh(true);
+    // One local read per redraw (a list-panes per server, Rex when it runs),
+    // never two at once: a slow read skips the tick rather than piling up.
+    let reading = false;
     const timer = setInterval(() => {
       const identity = requireIdentity();
-      if (!identity) return;
+      if (!identity || reading) return;
+      reading = true;
       const at = Date.now();
-      setView(status(store, identity, at));
-      setNow(at);
+      void localStatus(store, identity, at)
+        .then((next) => {
+          setView(next);
+          setNow(at);
+        })
+        .catch((error: unknown) =>
+          setMessage(error instanceof Error ? error.message : String(error)),
+        )
+        .finally(() => {
+          reading = false;
+        });
     }, REDRAW_MS);
     const collector = setInterval(() => void refresh(true), COLLECT_FLOOR_MS);
     return () => {
@@ -959,7 +970,7 @@ export function App({ dashStore, initial }: DashProps) {
         if (!result.ok) setInputError(result.message);
         else if (target.attention.length > 0) {
           const identity = requireIdentity();
-          if (identity && target.local) setView(status(store, identity, Date.now()));
+          if (identity && target.local) void localStatus(store, identity).then(setView);
           else if (!target.local) void refresh(false);
         }
       });
@@ -1318,7 +1329,7 @@ export async function runDash(options: { goto?: boolean }): Promise<void> {
   if (pane) tmux.markDashPane(asPaneId(pane));
   try {
     const instance = render(
-      <App dashStore={dashStore} initial={status(dashStore.store, identity)} />,
+      <App dashStore={dashStore} initial={await localStatus(dashStore.store, identity)} />,
       { alternateScreen: true },
     );
     await instance.waitUntilExit();

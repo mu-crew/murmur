@@ -1,13 +1,14 @@
 import { agentLabel } from "./agents.js";
 import { commandNames, connectsToPeer, type SshResolver, sshResolver } from "./attachment.js";
 import { type Channel, hasWarmSocket, ssh } from "./channel.js";
-import { type CollectOptions, collect, needsInteractiveAuth } from "./collector.js";
+import { type CollectOptions, collectAll, needsInteractiveAuth } from "./collector.js";
 import type { NodeIdentity } from "./identity.js";
 import { jumpTarget } from "./jump-target.js";
+import { type LocalOptions, readLocal } from "./local.js";
 import { type Mux, tmux } from "./mux.js";
 import { argvAddressesServer } from "./routing.js";
 import type { Store } from "./store.js";
-import type { PeerRecord, TmuxServer } from "./types.js";
+import type { LocalPane, PeerRecord, TmuxServer } from "./types.js";
 import {
   emptyCounts,
   freshness,
@@ -24,7 +25,13 @@ import {
 
 type Counts = StateCounts;
 
-type StatusOptions = { mux?: Mux; cached?: boolean; resolveSsh?: SshResolver };
+type StatusOptions = {
+  mux?: Mux;
+  cached?: boolean;
+  resolveSsh?: SshResolver;
+  /** Whether a peer has a warm ControlMaster socket; see `status`'s `warm`. */
+  warm?: (target: string) => boolean;
+};
 
 /**
  * Whether a local pane's command line is an attachment to `agentName`.
@@ -160,31 +167,6 @@ export function tmuxStatus(view: Status): string {
   return states + (Number.isSafeInteger(crew) && crew > 0 ? `crew\t${crew}\n` : "");
 }
 
-/** The pane option mu sets on a remote worker's local pane: the host the worker runs on. */
-export const MU_HOST_OPTION = "@mu_host";
-
-/**
- * Name the host each mu remote worker runs on. Such a worker's row is local --
- * its pane here holds the ssh session, and the origin is the one writer of the
- * row (ARCHITECTURE § The remote area) -- so nothing in the store says where
- * the agent is. mu does: it sets `@mu_host` on the pane when it spawns one.
- *
- * Only orchestrated local rows can be one, so a host with none asks tmux
- * nothing; otherwise one `list-panes` per tmux server those rows live on.
- */
-function markRemoteWorkers(panes: PaneView[], mux: Mux): void {
-  const candidates = panes.filter((pane) => pane.local && pane.driver === "orchestrated");
-  const byServer = new Map<string, PaneView[]>();
-  for (const pane of candidates) {
-    const key = JSON.stringify(pane.server);
-    byServer.set(key, [...(byServer.get(key) ?? []), pane]);
-  }
-  for (const group of byServer.values()) {
-    const values = mux.paneOptionValues(MU_HOST_OPTION, group[0]?.server);
-    for (const pane of group) pane.runs_on = values.get(pane.pane) ?? null;
-  }
-}
-
 function markAttachments(
   panes: PaneView[],
   peers: PeerRecord[],
@@ -234,6 +216,9 @@ function markAttachments(
 export function status(
   store: Store,
   identity: NodeIdentity,
+  // This node's panes, from one local read (`readLocal`): the caller decides
+  // when tmux is asked, as it decides when peers are.
+  local: readonly LocalPane[],
   now = Date.now(),
   // Injected for the same reason `Channel` and `Mux` are: a test must not need
   // an ssh binary, and "was this peer probed at all" has to be assertable --
@@ -252,12 +237,10 @@ export function status(
 ): Status {
   const counts = emptyCounts();
   const orchestratedCounts = emptyCounts();
-  const panes = paneViews(store, identity, now);
+  const panes = paneViews(store, identity, local, now);
   const peers = store.peers();
   if (!options.cached) {
-    const mux = options.mux ?? tmux;
-    markAttachments(panes, peers, mux, options.resolveSsh ?? sshResolver());
-    markRemoteWorkers(panes, mux);
+    markAttachments(panes, peers, options.mux ?? tmux, options.resolveSsh ?? sshResolver());
   }
   const sortedPanes = viewSort(panes, { ...context, now });
   for (const pane of sortedPanes) {
@@ -338,11 +321,33 @@ export async function statusWithCollect(
   channel: Channel = ssh,
   options: CollectOptions = {},
 ): Promise<Status> {
+  let local: readonly LocalPane[] = [];
   try {
-    await collect(store, channel, now, options);
+    local = (await collectAll(store, channel, now, options)).local?.panes ?? [];
   } catch {
     // Total by construction: a read of whatever the cache already holds is
     // always better than no output, and this path has no one to tell.
   }
-  return status(store, identity, now);
+  return status(store, identity, local, now);
+}
+
+/**
+ * The view without reaching any peer: one local read (tmux, Rex), then the
+ * cached peer snapshots. What a surface repaints from between collects, and
+ * what `status --cached` prints.
+ */
+export async function localStatus(
+  store: Store,
+  identity: NodeIdentity,
+  now = Date.now(),
+  options: StatusOptions & LocalOptions = {},
+): Promise<Status> {
+  const mux = options.mux ?? tmux;
+  let local: readonly LocalPane[] = [];
+  try {
+    local = (await readLocal(store, mux, now, { rex: options.rex })).panes;
+  } catch {
+    // As above: the cache alone is still a view.
+  }
+  return status(store, identity, local, now, options.warm, undefined, options);
 }

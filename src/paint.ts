@@ -192,9 +192,11 @@ function previewBody(
       : "",
     agent.workstream ? `stream   ${terminalText(agent.workstream)}` : "",
     agent.role ? `role     ${terminalText(agent.role)}` : "",
-    agent.pi_session ? `session  ${terminalText(agent.pi_session)}` : "",
+    agent.pane_title ? `title    ${terminalText(agent.pane_title)}` : "",
     agent.harness ? `harness  ${terminalText(agent.harness)}` : "",
     agent.cli ? `cli      ${terminalText(agent.cli)}` : "",
+    agent.blocked_kind ? `needs    ${agent.blocked_kind}` : "",
+    agent.resume_command ? `resume   ${terminalText(agent.resume_command)}` : "",
     agent.driver === "orchestrated" ? "driver   orchestrated (crew)" : "",
     // Two ages, never one. A node polled a second ago can be serving a
     // three-hour-old fact, and collapsing them is how that read as fresh.

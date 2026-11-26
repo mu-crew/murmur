@@ -47,7 +47,7 @@ import {
   sidepanelRows,
   sidepanelWindow,
 } from "../sidepanel-view.js";
-import { type Status, status, statusWithCollect } from "../status.js";
+import { localStatus, type Status, statusWithCollect } from "../status.js";
 import type { Store } from "../store.js";
 import type { PaneView } from "../view.js";
 import { requireIdentity } from "./identity-guard.js";
@@ -326,17 +326,31 @@ export function App({
   useEffect(() => {
     mounted.current = true;
     void refresh();
+    // Never two local reads at once: a slow read skips the tick.
+    let reading = false;
     const redraw = setInterval(() => {
       const identity = requireIdentity();
-      if (!identity) return;
+      if (!identity || reading) return;
       const at = Date.now();
       try {
         refreshDashStore(dashStore);
-        setView(status(dashStore.store, identity, at));
-        setNow(at);
       } catch (error) {
         setMessage(error instanceof Error ? error.message : String(error));
+        return;
       }
+      reading = true;
+      void localStatus(dashStore.store, identity, at)
+        .then((next) => {
+          if (!mounted.current) return;
+          setView(next);
+          setNow(at);
+        })
+        .catch((error: unknown) => {
+          if (mounted.current) setMessage(error instanceof Error ? error.message : String(error));
+        })
+        .finally(() => {
+          reading = false;
+        });
     }, REDRAW_MS);
     const collect = setInterval(() => void refresh(), COLLECT_FLOOR_MS);
     return () => {
@@ -589,7 +603,7 @@ export async function runSidepanelRenderer(): Promise<void> {
     const instance = render(
       <App
         dashStore={dashStore}
-        initial={status(dashStore.store, identity)}
+        initial={await localStatus(dashStore.store, identity)}
         origin={origin}
         refreshTracker={refreshTracker}
         deps={{ resize: (panel, width) => resizeSidepanel(panel, width) }}

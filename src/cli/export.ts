@@ -1,5 +1,5 @@
 import type { Command } from "commander";
-import { drainInbox } from "../inbox.js";
+import { buildSnapshot, readLocal } from "../local.js";
 import { tmux } from "../mux.js";
 import { openStore } from "../store.js";
 import { requireIdentity } from "./identity-guard.js";
@@ -11,29 +11,16 @@ export function registerExport(program: Command): void {
     // returns one has said everything it knows and absence in it is absence.
     // There is nothing narrower for a caller to ask for.
     .description("Print this node's current-state snapshot")
-    .action(() => {
+    .action(async () => {
       const identity = requireIdentity();
       if (!identity) return;
       const store = openStore();
       try {
-        // Hook harnesses' waiting events, so the document includes their panes.
-        drainInbox(store);
-        // `buildLocalSnapshot` reconciles first, which is what makes the
-        // document authoritative: a snapshot built from unreconciled rows would
-        // publish agents whose panes are gone, and a reader has no way to tell.
-        const servers = new Map(
-          store
-            .localPanes()
-            .map(({ server }) => [
-              `${server.kind}\0${"value" in server ? server.value : ""}`,
-              server,
-            ]),
-        );
-        const snapshot = store.buildLocalSnapshot(
-          identity,
-          [...servers.values()].map((server) => ({ server, panes: tmux.livePanes(server) })),
-        );
-        process.stdout.write(`${JSON.stringify(snapshot)}\n`);
+        // A fresh local read, never a cache: the document is authoritative,
+        // so it must describe the panes as they are now.
+        const now = Date.now();
+        const local = await readLocal(store, tmux, now);
+        process.stdout.write(`${JSON.stringify(buildSnapshot(identity, local.panes, now))}\n`);
       } finally {
         store.close();
       }

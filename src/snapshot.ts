@@ -2,7 +2,6 @@ import { isAbsolute } from "node:path";
 import { asPaneId, asSessionId, asWindowId } from "./ids.js";
 import type {
   Activity,
-  AgentUsage,
   AttentionKind,
   Driver,
   Snapshot,
@@ -11,7 +10,7 @@ import type {
   SnapshotPane,
   TmuxServer,
 } from "./types.js";
-import { ATTENTION_PRIORITY, EFFORTS, SNAPSHOT_VERSION } from "./types.js";
+import { ATTENTION_PRIORITY, BLOCKED_KINDS, paneKey, SNAPSHOT_VERSION } from "./types.js";
 
 /**
  * A peer answered, and what it said is not a snapshot.
@@ -76,18 +75,11 @@ function anyText(value: unknown, path: string): string {
   return value;
 }
 
-/**
- * A percentage, 0..100, or null.
- *
- * Nothing is clamped. A document asserting 140% is describing something that did
- * not happen on the node that served it, and saying so is more useful than
- * rendering it. NaN is rejected explicitly because it is a number by `typeof`
- * and would otherwise pass every comparison below.
- */
+/** A percentage, 0..100, or null. Nothing is clamped. */
 function percentOrNull(value: unknown, path: string): number | null {
   if (value === null) return null;
-  if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > 100) {
-    fail(path, "expected a number in 0..100 or null");
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 0 || value > 100) {
+    fail(path, "expected an integer in 0..100 or null");
   }
   return value;
 }
@@ -138,117 +130,51 @@ const PANE_KEYS = [
   "attention",
 ] as const;
 const AGENT_KEYS = [
-  "agent_id",
   "activity",
   "agent_name",
-  "pi_session",
   "workstream",
   "role",
+  "driver",
   "cli",
   "harness",
-  "driver",
-  "model",
-  "effort",
-  "context_pct",
-  "context_tokens",
-  "context_window",
-  "provider",
-  "provider_effort",
-  "usage",
+  "pane_title",
+  "title",
+  "message",
+  "progress",
+  "blocked_kind",
   "pending",
-  "claimed_at",
+  "resume_command",
+  "resume_cwd",
+  "cwd",
   "updated_at",
 ] as const;
 const ATTENTION_KEYS = ["kind", "message", "source", "driver", "requested_at"] as const;
-const SERVER_KINDS = ["default", "label", "path"] as const;
-const USAGE_KEYS = [
-  "input",
-  "output",
-  "cache_read",
-  "cache_write",
-  "total_tokens",
-  "cache_write_1h",
-  "reasoning",
-  "cost_input",
-  "cost_output",
-  "cost_cache_read",
-  "cost_cache_write",
-  "cost_total",
-] as const;
-
-/**
- * A token count or a cost: finite, non-negative, and not necessarily an integer.
- *
- * Costs are fractional dollars, so `timestamp`'s integer rule does not apply --
- * but the rest of it does. Nothing is clamped or coerced: a negative cost is a
- * node describing something that did not happen.
- */
-function quantity(value: unknown, path: string): number {
-  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
-    fail(path, "expected a non-negative finite number");
-  }
-  return value;
-}
-
-function quantityOrNull(value: unknown, path: string): number | null {
-  return value === null ? null : quantity(value, path);
-}
-
-/**
- * Tokens and money, or null when no turn has completed.
- *
- * Validated as strictly as the rest of the document despite being optional
- * baggage nothing renders yet: the point of collecting these early is that a
- * later display can trust them, and a lenient parse here would mean the first
- * surface to read them is the one that discovers they are garbage.
- */
-export function parseUsage(value: unknown, path = "usage"): AgentUsage | null {
-  if (value === null) return null;
-  const row = object(value, path, USAGE_KEYS);
-  return {
-    input: quantity(row.input, `${path}.input`),
-    output: quantity(row.output, `${path}.output`),
-    cache_read: quantity(row.cache_read, `${path}.cache_read`),
-    cache_write: quantity(row.cache_write, `${path}.cache_write`),
-    total_tokens: quantity(row.total_tokens, `${path}.total_tokens`),
-    // Null rather than absent: only some providers report these, and "the
-    // provider said nothing" is not the same claim as zero.
-    cache_write_1h: quantityOrNull(row.cache_write_1h, `${path}.cache_write_1h`),
-    reasoning: quantityOrNull(row.reasoning, `${path}.reasoning`),
-    cost_input: quantity(row.cost_input, `${path}.cost_input`),
-    cost_output: quantity(row.cost_output, `${path}.cost_output`),
-    cost_cache_read: quantity(row.cost_cache_read, `${path}.cost_cache_read`),
-    cost_cache_write: quantity(row.cost_cache_write, `${path}.cost_cache_write`),
-    cost_total: quantity(row.cost_total, `${path}.cost_total`),
-  };
-}
+const SERVER_KINDS = ["default", "label", "path", "rex"] as const;
 
 function parseAgent(value: unknown, path: string): SnapshotAgent | null {
   if (value === null) return null;
   const row = object(value, path, AGENT_KEYS);
   return {
-    agent_id: text(row.agent_id, `${path}.agent_id`),
     activity: member(row.activity, `${path}.activity`, ACTIVITIES),
     agent_name: textOrNull(row.agent_name, `${path}.agent_name`),
-    pi_session: textOrNull(row.pi_session, `${path}.pi_session`),
     workstream: textOrNull(row.workstream, `${path}.workstream`),
     role: textOrNull(row.role, `${path}.role`),
-    cli: text(row.cli, `${path}.cli`),
-    harness: textOrNull(row.harness, `${path}.harness`),
     driver: member(row.driver, `${path}.driver`, DRIVERS),
-    model: textOrNull(row.model, `${path}.model`),
-    // Null-tolerant `member`: the set is closed, but not reporting is always
-    // allowed. A harness with no notion of effort says null, not "off" -- those
-    // are different claims, and "off" is one pi can actually make.
-    effort: row.effort === null ? null : member(row.effort, `${path}.effort`, EFFORTS),
-    context_pct: percentOrNull(row.context_pct, `${path}.context_pct`),
-    context_tokens: quantityOrNull(row.context_tokens, `${path}.context_tokens`),
-    context_window: quantityOrNull(row.context_window, `${path}.context_window`),
-    provider: textOrNull(row.provider, `${path}.provider`),
-    provider_effort: textOrNull(row.provider_effort, `${path}.provider_effort`),
-    usage: parseUsage(row.usage, `${path}.usage`),
+    cli: textOrNull(row.cli, `${path}.cli`),
+    harness: textOrNull(row.harness, `${path}.harness`),
+    pane_title: textOrNull(row.pane_title, `${path}.pane_title`),
+    title: textOrNull(row.title, `${path}.title`),
+    message: textOrNull(row.message, `${path}.message`),
+    progress: percentOrNull(row.progress, `${path}.progress`),
+    // Null-tolerant `member`: the set is closed, but not saying is allowed.
+    blocked_kind:
+      row.blocked_kind === null
+        ? null
+        : member(row.blocked_kind, `${path}.blocked_kind`, BLOCKED_KINDS),
     pending: countOrNull(row.pending, `${path}.pending`),
-    claimed_at: timestamp(row.claimed_at, `${path}.claimed_at`),
+    resume_command: textOrNull(row.resume_command, `${path}.resume_command`),
+    resume_cwd: textOrNull(row.resume_cwd, `${path}.resume_cwd`),
+    cwd: textOrNull(row.cwd, `${path}.cwd`),
     updated_at: timestamp(row.updated_at, `${path}.updated_at`),
   };
 }
@@ -277,7 +203,7 @@ function parseServer(value: unknown, path: string): TmuxServer {
     fail(path, "expected an object");
   }
   const kind = member((value as Record<string, unknown>).kind, `${path}.kind`, SERVER_KINDS);
-  if (kind === "default") {
+  if (kind === "default" || kind === "rex") {
     object(value, path, ["kind"]);
     return { kind };
   }
@@ -338,28 +264,10 @@ export function parseSnapshot(input: string): Snapshot {
 
   const panes = top.panes.map((entry, index) => parsePane(entry, `panes[${index}]`));
   const seen = new Set<string>();
-  const owners = new Set<string>();
   for (const pane of panes) {
-    const server =
-      pane.server.kind === "default" ? "default" : `${pane.server.kind}:${pane.server.value}`;
-    const address = `${server}:${pane.pane}`;
-    if (seen.has(address)) fail("panes", `duplicate pane ${address}`);
+    const address = paneKey(pane);
+    if (seen.has(address)) fail("panes", `duplicate pane ${address.replaceAll("\0", ":")}`);
     seen.add(address);
-
-    // An agent_id is minted per PROCESS INSTANCE when it claims a pane, so the
-    // same id in two panes says one process owns two addresses -- a state the
-    // local store cannot produce, since `pane` is UNIQUE in `agents` and a
-    // claim writes exactly one row. A document asserting it is describing
-    // something that did not happen on the node that served it.
-    //
-    // Checked for the same reason duplicate panes are: the reader trusts this
-    // document to be a coherent picture of one node, and a late or replayed
-    // write is exactly how an incoherent one would arrive.
-    const owner = pane.agent?.agent_id;
-    if (owner !== undefined && owner !== null) {
-      if (owners.has(owner)) fail("panes", `duplicate agent_id ${owner}`);
-      owners.add(owner);
-    }
   }
 
   return {

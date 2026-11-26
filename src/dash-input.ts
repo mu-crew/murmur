@@ -85,7 +85,7 @@ export function dashFilter(state: DashFilter, action: DashFilterAction): DashFil
 }
 
 export type InputDelivery = {
-  command: "tmux" | "ssh";
+  command: "tmux" | "ssh" | "sh";
   args: string[];
   input: string;
 };
@@ -123,7 +123,18 @@ function tmuxArgs(pane: string, buffer: string): string[] {
  */
 function remoteSelector(server: TmuxServer): string[] {
   if (server.kind === "default") return [];
+  if (server.kind === "rex") return ["--rex"];
   return [server.kind === "label" ? "-L" : "-S", shellQuote(server.value)];
+}
+
+/** A local Rex block's input: `rex send` (the text on stdin), then Enter or a key. */
+function rexDelivery(pane: PaneView, text: string | null): InputDelivery {
+  const rex = "rex --autostart=false";
+  const script =
+    text === null
+      ? `${rex} send-key -s "$1" -b "$2" escape`
+      : `${rex} send -s "$1" -b "$2" && ${rex} send-key -s "$1" -b "$2" enter`;
+  return { command: "sh", args: ["-c", script, "sh", pane.session, pane.pane], input: text ?? "" };
 }
 
 export function buildPromptDelivery(
@@ -133,6 +144,7 @@ export function buildPromptDelivery(
   buffer = `murmur-input-${process.pid}`,
 ): InputDelivery {
   if (pane.local) {
+    if (pane.server.kind === "rex") return rexDelivery(pane, text);
     return {
       command: "tmux",
       args: serverArgs(pane.server, tmuxArgs(pane.pane, buffer)),
@@ -149,6 +161,7 @@ export function buildPromptDelivery(
 
 export function buildEscapeDelivery(pane: PaneView, target: string | null): InputDelivery {
   if (pane.local) {
+    if (pane.server.kind === "rex") return rexDelivery(pane, null);
     return {
       command: "tmux",
       args: serverArgs(pane.server, ["send-keys", "-t", pane.pane, "Escape"]),
@@ -203,6 +216,9 @@ async function deliver(
 ): Promise<InputResult> {
   const target = inputTarget(store, pane);
   if (!pane.local && !target) return { ok: false, message: `no peer for ${pane.host}` };
+  if (!pane.local && pane.server.kind === "rex") {
+    return { ok: false, message: `${pane.pane} is a Rex pane on ${pane.host}; steer it there` };
+  }
   try {
     await run(makeDelivery(target));
     return { ok: true };

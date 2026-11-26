@@ -12,7 +12,7 @@ export function dashPaneKey(pane: PaneView): string {
   return JSON.stringify([
     pane.host_id,
     pane.server.kind,
-    pane.server.kind === "default" ? null : pane.server.value,
+    "value" in pane.server ? pane.server.value : null,
     pane.pane,
   ]);
 }

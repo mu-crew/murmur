@@ -1,95 +1,45 @@
-import { randomUUID } from "node:crypto";
 import { closeSync, existsSync, openSync, rmSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname } from "node:path";
 import type BetterSqlite3 from "better-sqlite3";
 import { ensureDir } from "./dirs.js";
-import type { NodeIdentity } from "./identity.js";
 import { asPaneId, asSessionId, asWindowId } from "./ids.js";
-import type { InboxEvent } from "./inbox-event.js";
 import { currentJumpCommand, defaultJumpCommand } from "./jump-command.js";
 import { migrateLegacyIdentity, withLegacyStoreCopy } from "./legacy-state.js";
-import { pidAlive } from "./mux.js";
 import { dbPath, legacyStateDir, stateDir } from "./paths.js";
-import { ancestry, outerHarness, readProcessTable, tmuxServerPid } from "./process-chain.js";
-import { settledState } from "./settle.js";
-import { parseSnapshot, parseUsage } from "./snapshot.js";
-import { GENERATION_ENDS, type GenerationEnd, stepTurn } from "./turn.js";
+import { parseSnapshot } from "./snapshot.js";
 import type {
-  ActivityUpdate,
-  AgentClaim,
-  AgentRelease,
-  AgentRuntime,
-  AgentSource,
-  AncestorCheck,
-  AttentionKind,
-  AttentionRequest,
-  ClaimResult,
-  HarnessState,
-  InboxDelivery,
-  IngestOptions,
-  IngestSummary,
-  LiveCheck,
-  LocalPane,
-  LocalWorld,
+  Driver,
+  LocalSync,
   Location,
-  NestCheck,
   PaneIdentity,
+  PaneState,
   PeerFetch,
   PeerRecord,
-  ReconcileSummary,
-  RuntimeUpdate,
+  ServerRead,
   Snapshot,
-  SnapshotAgent,
-  SnapshotAttention,
+  SnapshotPane,
   TmuxServer,
 } from "./types.js";
-import { ATTENTION_PRIORITY, DEFAULT_DRIVER, EFFORTS, SNAPSHOT_VERSION } from "./types.js";
-import { MURMUR_VERSION } from "./version.js";
+import { paneKey, serverValue } from "./types.js";
 
 /**
  * The storage version. Any change to any table bumps it.
  *
- * Older incompatible files are rebuilt with just the configured peers.
- * Schema 11 can be upgraded in place: receipts only add a table.
+ * 13 is murmur 3.0, in its own state directory (`murmur3`): no agent rows, no
+ * inbox, only what the multiplexer cannot remember for murmur. Older
+ * incompatible files are rebuilt with just the configured peers.
  */
-const SCHEMA_USER_VERSION = 12;
-const BEFORE_INBOX_RECEIPTS = 11;
+const SCHEMA_USER_VERSION = 13;
 
 /**
  * The oldest schema whose build can read and write a store this build creates,
- * stamped into the file beside `user_version` (the `compat` table).
- *
- * What it buys is the next release, not this one. A later build that only adds
- * nullable columns bumps `SCHEMA_USER_VERSION` and keeps this stamp, so a build
- * like this one opens its newer store instead of refusing it -- every INSERT
- * here names its columns, and a column it does not know is left to its
- * default. The pi extension and the CLI are separate installs, so that is the
- * difference between an upgrade order that matters and one that does not.
- *
- * A store from before the stamp existed (schema 9 and older) is reset, once.
- * Schema 11 added `last_text_run` and `generation_run`, both nullable, and
- * kept the stamp: a schema-10 build still opens it.
+ * stamped into the file beside `user_version` (the `compat` table). A later
+ * build that only adds nullable columns bumps `SCHEMA_USER_VERSION` and keeps
+ * this stamp, so a build like this one opens its newer store instead of
+ * refusing it: every INSERT here names its columns.
  */
-const COMPATIBLE_SINCE = 10;
-
-/**
- * The effort vocabulary as a SQL value list, generated from the one tuple.
- *
- * SQL is a string and cannot import, so the schema would otherwise be a second
- * hand-written spelling of a closed protocol vocabulary -- the shape that has
- * already cost this repo once, when `SNAPSHOT_VERSION` was four literals and the
- * copy in `peer.ts` made `peer list` call every upgraded peer incompatible.
- *
- * Interpolating into DDL is safe here and only here: `EFFORTS` is a
- * compile-time `as const` tuple of identifiers this file owns, never input. The
- * quote escaping is belt-and-braces against a future member with an apostrophe,
- * which would otherwise end the literal and change the statement's meaning.
- */
-const EFFORT_SQL_LIST = EFFORTS.map((effort) => `'${effort.replaceAll("'", "''")}'`).join(", ");
-
-/** The generation-end vocabulary as a SQL value list, from the one tuple, like EFFORTS. */
-const GENERATION_END_SQL_LIST = GENERATION_ENDS.map((end) => `'${end}'`).join(", ");
+const COMPATIBLE_SINCE = 13;
 
 type Database = BetterSqlite3.Database;
 type OpenOptions = { fileMustExist?: boolean; readonly?: boolean };
@@ -153,25 +103,6 @@ const openDatabase: (path: string, options?: OpenOptions) => Database = (() => {
 })();
 
 /**
- * The columns `setRuntime` may write, as an allowlist.
- *
- * The SET clause is built from this and intersected with the caller's keys, so
- * the statement text is assembled from constants only and a caller cannot name a
- * column -- the reason this is a literal list rather than `Object.keys(update)`.
- */
-const RUNTIME_COLUMNS = [
-  "model",
-  "provider",
-  "effort",
-  "provider_effort",
-  "context_pct",
-  "context_tokens",
-  "context_window",
-  "usage",
-  "pending",
-] as const satisfies readonly (keyof AgentRuntime)[];
-
-/**
  * How long to wait for another process's reset before stealing its lock.
  *
  * A reset is a handful of file operations, so a lock held longer than this is a
@@ -180,91 +111,53 @@ const RUNTIME_COLUMNS = [
  */
 const RESET_LOCK_TIMEOUT_MS = 5_000;
 
-const INBOX_RECEIPTS_SCHEMA = `
-  CREATE TABLE inbox_receipts (path TEXT NOT NULL PRIMARY KEY) STRICT;
-`;
-
 const SCHEMA = `
-  ${INBOX_RECEIPTS_SCHEMA}
-  CREATE TABLE agents (
-    agent_id     TEXT    NOT NULL PRIMARY KEY,
-    server_kind  TEXT    NOT NULL CHECK (server_kind IN ('default', 'label', 'path')),
+  -- The last state each live local pane was seen in, and since when. The one
+  -- memory the multiplexer does not keep for murmur: a pane that vanishes
+  -- between two collects leaves its last state here, which is how a crash of
+  -- an unretained pane (remain-on-exit off) is told from a pane that finished.
+  CREATE TABLE seen (
+    server_kind  TEXT    NOT NULL CHECK (server_kind IN ('default', 'label', 'path', 'rex')),
     server_value TEXT    NOT NULL,
     pane         TEXT    NOT NULL,
-    owner_pid    INTEGER NOT NULL CHECK (owner_pid > 0),
-    activity     TEXT    NOT NULL CHECK (activity IN ('running', 'stopped')),
+    state        TEXT    NOT NULL CHECK (state IN ('crashed', 'error', 'blocked', 'done', 'running', 'waiting', 'idle')),
+    since        INTEGER NOT NULL,
     session      TEXT    NOT NULL,
     window       TEXT    NOT NULL,
     session_name TEXT,
     window_name  TEXT,
     agent_name   TEXT,
-    pi_session   TEXT,
     workstream   TEXT,
     role         TEXT,
-    cli          TEXT    NOT NULL,
     driver       TEXT    NOT NULL CHECK (driver IN ('human', 'orchestrated')),
-    -- What the agent is running with, as it reports it. Nullable because a bare
-    -- shell or a notify-only harness knows none of it. The effort column is
-    -- CHECK-ed for the same reason driver is: the set is closed, so no sort or
-    -- render path needs a fallback branch for a word nothing defines.
-    model        TEXT,
-    provider     TEXT,
-    context_tokens  INTEGER CHECK (context_tokens IS NULL OR context_tokens >= 0),
-    context_window  INTEGER CHECK (context_window IS NULL OR context_window >= 0),
-    provider_effort TEXT,
-    -- The usage bundle as one JSON document, because it is nullable as a UNIT
-    -- and no query looks inside it. Twelve more columns would buy nothing that
-    -- is read and cost every writer twelve placeholders; if a surface ever
-    -- needs to sort on cost, that is the point to promote a column.
-    -- Validated by parseUsage on the way in and out, so the opacity is at rest
-    -- only -- nothing trusts this text without parsing it.
-    usage        TEXT,
-    effort       TEXT    CHECK (effort IS NULL OR effort IN (${EFFORT_SQL_LIST})),
-    context_pct  REAL    CHECK (context_pct IS NULL OR (context_pct >= 0 AND context_pct <= 100)),
-    pending      INTEGER CHECK (pending IS NULL OR pending >= 0),
-    -- Who reports this row: pi's extension in-process, or the inbox drain for
-    -- a hook harness. Local only, like everything below: \`toAgent\` picks its
-    -- fields explicitly, so none of it reaches a snapshot.
-    source       TEXT    NOT NULL DEFAULT 'pi' CHECK (source IN ('pi', 'inbox')),
     harness      TEXT,
-    session_id   TEXT,
-    -- Prompts submitted this session: mu's send acknowledgement. Null for pi,
-    -- which does not count them.
-    run_count    INTEGER CHECK (run_count IS NULL OR run_count >= 0),
-    -- The last turn's assistant text, capped at 64 KB of UTF-8.
-    last_text    TEXT    CHECK (last_text IS NULL OR length(CAST(last_text AS BLOB)) <= 65536),
-    -- The run (run_count) whose turn wrote last_text, so a reader can tell
-    -- this turn's text from one an earlier turn left. Schema 11: a build at
-    -- schema 10 opens this store and leaves the column alone.
-    last_text_run  INTEGER CHECK (last_text_run IS NULL OR last_text_run >= 0),
-    -- 0 while the activity is mu's word (an interrupt it sent, \`idle?\`) and
-    -- no harness event has confirmed it.
-    confirmed    INTEGER NOT NULL DEFAULT 1 CHECK (confirmed IN (0, 1)),
-    -- The last ended turn's generation and how it ended, for a harness that
-    -- names its turns (cursor-agent): its late text and its echo stops pair
-    -- with the turn they belong to. See src/turn.ts.
-    generation_id  TEXT,
-    generation_end TEXT CHECK (generation_end IS NULL OR generation_end IN (${GENERATION_END_SQL_LIST})),
-    generation_run INTEGER CHECK (generation_run IS NULL OR generation_run >= 0),
-    claimed_at   INTEGER NOT NULL,
-    updated_at   INTEGER NOT NULL,
-    UNIQUE (server_kind, server_value, pane)
+    cli          TEXT,
+    pane_title   TEXT,
+    PRIMARY KEY (server_kind, server_value, pane)
   ) STRICT;
 
-  CREATE TABLE attention (
-    server_kind  TEXT    NOT NULL CHECK (server_kind IN ('default', 'label', 'path')),
+  -- A pane that vanished while it was working or blocked: murmur's own word,
+  -- kept until someone acknowledges it (\`murmur clear\`, the dash) or a new
+  -- pane takes the address. Carries the identity it was last seen with, so
+  -- the row still says WHICH agent died.
+  CREATE TABLE crashed (
+    server_kind  TEXT    NOT NULL CHECK (server_kind IN ('default', 'label', 'path', 'rex')),
     server_value TEXT    NOT NULL,
     pane         TEXT    NOT NULL,
-    kind         TEXT    NOT NULL CHECK (kind IN ('done', 'blocked', 'error', 'crashed')),
-    message      TEXT    NOT NULL,
-    source       TEXT    NOT NULL,
-    driver       TEXT    NOT NULL CHECK (driver IN ('human', 'orchestrated')),
     session      TEXT    NOT NULL,
     window       TEXT    NOT NULL,
     session_name TEXT,
     window_name  TEXT,
+    agent_name   TEXT,
+    workstream   TEXT,
+    role         TEXT,
+    driver       TEXT    NOT NULL CHECK (driver IN ('human', 'orchestrated')),
+    harness      TEXT,
+    cli          TEXT,
+    pane_title   TEXT,
+    last_state   TEXT    NOT NULL,
     requested_at INTEGER NOT NULL,
-    PRIMARY KEY (server_kind, server_value, pane, kind)
+    PRIMARY KEY (server_kind, server_value, pane)
   ) STRICT;
 
   -- Which attention events the on-attention hook has already been run for, so
@@ -301,64 +194,41 @@ const SCHEMA = `
  * The store, and the only place in murmur that holds a database handle or
  * writes SQL.
  *
- * This interface is CLOSED: no `append`, no log read, no partial-row update,
- * and no local read other than `localPanes` and the inbox's `harnessState`.
- * Each of those shapes lets a writer say something it has no standing to say,
- * and each cost a shipped bug. Attention methods take no agent identity, which
- * is what makes "a notifier cannot corrupt an agent row" structural.
+ * From 3.0 it holds no agent state at all: a local pane's state is its
+ * multiplexer's (OSC 7501), read fresh on every collect. What is left is what
+ * only murmur can know -- which panes vanished mid-work, which alerts have
+ * fired -- and the peer cache.
  *
- * It reopens for exactly ONE ingest, the inbox (`ingestInbox`): keyed on pane,
- * applied under the write lock, and deleted once applied. There is no replay
- * and no history; the store decides what each event means, and the caller only
- * delivers it.
+ * CLOSED: no `append`, no log read, no partial-row update, no handle.
  */
 export interface Store {
-  // --- agent lifecycle: owner-only, pid-gated -----------------------------
-  claimAgent(claim: AgentClaim): ClaimResult;
-  setActivity(update: ActivityUpdate): boolean;
+  // --- local memory -------------------------------------------------------
   /**
-   * Record what the agent is running with. Owner-gated, partial.
-   *
-   * Separate from `setActivity` because these are different claims by the same
-   * owner: activity is what the process is doing, runtime is what it is doing it
-   * with. One call that carried both would have to be given every field on every
-   * event, and three of pi's four report sites know only one of them.
+   * Record what one collect saw, in one transaction, and answer what murmur
+   * concluded: since when each live pane has been in its state, and which
+   * panes vanished while working or blocked (each now carries a `crashed`
+   * row). A server read as null is no evidence and changes nothing.
    */
-  setRuntime(update: RuntimeUpdate): boolean;
-  releaseAgent(release: AgentRelease): boolean;
-
-  // --- attention: pane-addressed, no agent authority ----------------------
-  requestAttention(request: AttentionRequest): void;
+  syncLocal(reads: readonly ServerRead[], now?: number): LocalSync;
+  /** Every server a previous collect saw, so a server whose socket vanished is still asked. */
+  knownServers(): TmuxServer[];
+  /** The crashes murmur recorded, as attention-only snapshot panes. */
+  localPanes(): SnapshotPane[];
   /**
-   * Record a crash for a pane, as reconciliation would, with `driver = human`.
-   *
-   * `crashed` is not in `AttentionRequest` because it is reconciliation's word:
-   * it asserts an owning process died without saying so, which only the node
-   * that probed that pid may conclude. This is the same statement reconciliation
-   * uses (which writes the dead agent's own driver; this seam has no agent to
-   * read, and an agent row on the pane decides the pane's driver anyway), named
-   * so that a caller reaching for it has to mean it -- tests seeding
-   * a crashed row are the honest use, and anything else in production would be
-   * manufacturing a fact it cannot observe.
+   * Record a crash for a pane, as \`syncLocal\` would on a vanished one.
+   * Named so a caller reaching for it has to mean it: tests seeding a crashed
+   * row are the honest use.
    */
   recordCrash(location: Location, now?: number): void;
-  acknowledgePane(location: PaneIdentity): number;
-
-  // --- local truth --------------------------------------------------------
-  /** The one local read. Joins agents and attention by server and pane. */
-  localPanes(): LocalPane[];
-  reconcileLocal(world: LocalWorld): ReconcileSummary;
-  buildLocalSnapshot(identity: NodeIdentity, worlds: LocalWorld | readonly LocalWorld[]): Snapshot;
+  /** Dismiss murmur's own attention for a pane (its \`crashed\` row). Returns rows removed. */
+  acknowledgePane(address: PaneIdentity): number;
 
   // --- alert dedup --------------------------------------------------------
   /**
    * Claim attention events for the on-attention hook, and answer which keys
    * this caller won. Atomic per key, so two processes collecting at once never
-   * both fire one event.
-   *
-   * Also forgets claims older than `retainMs` whose event is no longer in
-   * `current`. The age gate keeps a reader that read before a newer event
-   * landed from deleting another process's fresh claim and re-firing it.
+   * both fire one event. Also forgets claims older than \`retainMs\` whose
+   * event is no longer in \`current\`.
    */
   claimAlerts(
     keys: readonly string[],
@@ -373,96 +243,86 @@ export interface Store {
   setPeerJumpCommand(name: string, jumpCommand: string): boolean;
   removePeer(name: string): boolean;
   /**
-   * `target` is the target the fetch was made against: a write for a peer
+   * \`target\` is the target the fetch was made against: a write for a peer
    * retargeted since is dropped, so one node's answer never lands on another.
    */
   replacePeerSnapshot(name: string, fetch: PeerFetch, target?: string): void;
 
-  // --- the inbox: the one ingest -----------------------------------------
-  /**
-   * Apply hook events to the panes they name, in the order `read` returns
-   * them, inside one immediate transaction. The receipt and state commit
-   * together; unlink is retried after commit without folding the event again.
-   *
-   * The owner gate uses the pid the hook recorded, not the caller's. A `pi`
-   * row ignores every inbox event, and an unclaimed pane is never claimed while
-   * a pi runs in its process tree.
-   */
-  ingestInbox(read: () => readonly InboxDelivery[], options: IngestOptions): IngestSummary;
-  /** One local pane's harness-side state, for `murmur pane --json`. Never in a snapshot. */
-  harnessState(pane: PaneIdentity): HarnessState | null;
-  /** Every local pane's harness-side state with its pane identity. Read-only; works on `openStore({ readonly: true })`. */
-  listHarnessStates(): (PaneIdentity & HarnessState)[];
-
   close(): void;
 }
 
-type AgentDbRow = {
-  agent_id: string;
+/** The states a pane can vanish in that mean its program died mid-work. */
+const MID_WORK: readonly PaneState[] = ["running", "waiting", "blocked"];
+
+type SeenDbRow = {
   server_kind: TmuxServer["kind"];
   server_value: string;
   pane: string;
-  owner_pid: number;
-  activity: string;
+  state: PaneState;
+  since: number;
   session: string;
   window: string;
   session_name: string | null;
   window_name: string | null;
   agent_name: string | null;
-  pi_session: string | null;
   workstream: string | null;
   role: string | null;
-  cli: string;
-  driver: string;
-  model: string | null;
-  provider: string | null;
-  effort: string | null;
-  context_pct: number | null;
-  context_tokens: number | null;
-  context_window: number | null;
-  provider_effort: string | null;
-  usage: string | null;
-  pending: number | null;
-  source: AgentSource;
+  driver: Driver;
   harness: string | null;
-  session_id: string | null;
-  run_count: number | null;
-  last_text: string | null;
-  last_text_run: number | null;
-  confirmed: number;
-  generation_id: string | null;
-  generation_end: GenerationEnd | null;
-  generation_run: number | null;
-  claimed_at: number;
-  updated_at: number;
+  cli: string | null;
+  pane_title: string | null;
 };
 
-function toHarnessState(row: AgentDbRow): HarnessState {
-  return {
-    source: row.source,
-    harness: row.harness,
-    session_id: row.session_id,
-    run_count: row.run_count,
-    last_text: row.last_text,
-    last_text_run: row.last_text_run,
-    confirmed: row.confirmed === 1,
-  };
-}
-
-type AttentionDbRow = {
-  server_kind: TmuxServer["kind"];
-  server_value: string;
-  pane: string;
-  kind: string;
-  message: string;
-  source: string;
-  driver: string;
-  session: string;
-  window: string;
-  session_name: string | null;
-  window_name: string | null;
+type CrashedDbRow = Omit<SeenDbRow, "state" | "since"> & {
+  last_state: string;
   requested_at: number;
 };
+
+function serverFromRow(row: { server_kind: TmuxServer["kind"]; server_value: string }): TmuxServer {
+  if (row.server_kind === "default" || row.server_kind === "rex") return { kind: row.server_kind };
+  return { kind: row.server_kind, value: row.server_value };
+}
+
+function crashedPane(row: CrashedDbRow): SnapshotPane {
+  return {
+    server: serverFromRow(row),
+    pane: asPaneId(row.pane),
+    session: asSessionId(row.session),
+    window: asWindowId(row.window),
+    session_name: row.session_name,
+    window_name: row.window_name,
+    // The identity it was last seen with: a crash that cannot say which agent
+    // died is half a report.
+    agent: {
+      activity: "stopped",
+      agent_name: row.agent_name,
+      workstream: row.workstream,
+      role: row.role,
+      driver: row.driver,
+      cli: row.cli,
+      harness: row.harness,
+      pane_title: row.pane_title,
+      title: null,
+      message: null,
+      progress: null,
+      blocked_kind: null,
+      pending: null,
+      resume_command: null,
+      resume_cwd: null,
+      cwd: null,
+      updated_at: row.requested_at,
+    },
+    attention: [
+      {
+        kind: "crashed",
+        message: `pane vanished while ${row.last_state === "running" ? "working" : row.last_state}`,
+        source: "murmur",
+        driver: row.driver,
+        requested_at: row.requested_at,
+      },
+    ],
+  };
+}
 
 type PeerDbRow = {
   name: string;
@@ -557,7 +417,7 @@ function salvagePeers(path: string): SalvagedPeer[] {
 }
 
 /**
- * The peers of a 1.x murmur's store, for a store this build is creating for
+ * The peers of a 2.x murmur's store, for a store this build is creating for
  * the first time (see `src/legacy-state.ts`). Read from a private copy, so the
  * old directory is never written, and only from a schema this build can read:
  * its own or older, or a newer one whose `compat` stamp admits it.
@@ -609,62 +469,11 @@ function holdsMurmurStore(path: string): boolean {
 }
 
 /**
- * Whether the file at `path` must be thrown away and recreated.
- *
- * Three outcomes collapse into two answers, and getting that wrong was a bug:
- * a file that opens and matches needs nothing, a file that opens and disagrees
- * needs a reset, and a file murmur CANNOT READ needs one just as much.
- *
- * The last case is the subtle one. better-sqlite3's constructor does not touch
- * the file, so a corrupt `state.db` constructs fine and the first `pragma` is
- * what throws. That throw used to land in a catch that returned false -- "no
- * reset needed" for precisely the file that needed one -- and every command
- * that opened the store then died on the same pragma with a raw SqliteError,
- * including the status bar on every tick and every focus hook. The only
- * recovery was deleting the file by hand.
- *
- * Resetting is the right answer because nothing here is history: the store
- * holds current state only, every fact in it is re-derived by the next collect
- * or the next claim, so discarding an unusable file costs nothing. That is the
- * same argument the version-mismatch path already makes.
- *
- * A missing file is the one case that is NOT a reset: there is nothing to
- * delete, and `openStore` creates the schema anyway.
- */
-/**
- * What a rebuild is about to discard, for the warning above.
- *
- * Separate from `salvagePeers` because it asks the opposite question: that reads
- * what survives, this reads what does not. Returns null when the database cannot
- * be read at all, which is the case where there is nothing to warn about anyway.
- */
-function countDiscarded(path: string): { agents: number; attention: number } | null {
-  let existing: Database;
-  try {
-    existing = openDatabase(path, { fileMustExist: true, readonly: true });
-  } catch {
-    return null;
-  }
-  try {
-    const count = (table: string): number =>
-      (existing.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n;
-    return { agents: count("agents"), attention: count("attention") };
-  } catch {
-    // A pre-rewrite or damaged file may have neither table. Nothing to say.
-    return null;
-  } finally {
-    existing.close();
-  }
-}
-
-/**
  * A store written by a newer murmur than this one.
  *
- * Refused, never rebuilt. The pi extension and the CLI are separate installs
- * (`pi install` and `npm i -g`) and can run different versions; rebuilding
- * downward made each side wipe the other's agent and attention rows on every
- * open, a status-bar tick included. An older build stays out of the way
- * instead: the extension goes silent, a CLI verb prints this and exits.
+ * Refused, never rebuilt: rebuilding downward would wipe a newer build's rows
+ * on every open, a status-bar tick included. An older build stays out of the
+ * way instead: a CLI verb prints this and exits.
  */
 export class StoreTooNewError extends Error {
   constructor(
@@ -673,8 +482,7 @@ export class StoreTooNewError extends Error {
   ) {
     super(
       `${path} was written by a newer murmur (schema ${found}, this build ${SCHEMA_USER_VERSION}). ` +
-        "Upgrade this murmur: `npm i -g @mu-crew/murmur@latest` for the CLI, " +
-        "`pi update npm:@mu-crew/murmur` for the pi extension. " +
+        "Upgrade this murmur: `npm i -g @mu-crew/murmur@latest`. " +
         `To downgrade on purpose, delete ${path}.`,
     );
     this.name = "StoreTooNewError";
@@ -715,7 +523,7 @@ function storeCondition(path: string): "ok" | "reset" | StoreTooNewError {
   }
   try {
     const version = (existing.pragma("user_version", { simple: true }) as number) ?? 0;
-    if (version === BEFORE_INBOX_RECEIPTS || usable(existing, version)) return "ok";
+    if (usable(existing, version)) return "ok";
     if (version > SCHEMA_USER_VERSION) return new StoreTooNewError(path, version);
     return "reset";
   } catch {
@@ -727,130 +535,6 @@ function storeCondition(path: string): "ok" | "reset" | StoreTooNewError {
   }
 }
 
-function serverFromRow(row: AgentDbRow | AttentionDbRow): TmuxServer {
-  return row.server_kind === "default"
-    ? { kind: "default" }
-    : { kind: row.server_kind, value: row.server_value };
-}
-
-function serverKey(server: TmuxServer, pane: string): string {
-  return `${server.kind}\0${"value" in server ? server.value : ""}\0${pane}`;
-}
-
-function toAttention(row: AttentionDbRow): SnapshotAttention {
-  return {
-    kind: row.kind as AttentionKind,
-    message: row.message,
-    source: row.source,
-    driver: row.driver as SnapshotAttention["driver"],
-    requested_at: row.requested_at,
-  };
-}
-
-/**
- * The usage column, parsed, or null.
- *
- * Total by construction: anything unparseable becomes null, because a missing
- * usage bundle is a state every reader already handles and a throw here would
- * fail a whole local read over optional baggage.
- */
-function parseStoredUsage(text: string | null): SnapshotAgent["usage"] {
-  if (text === null) return null;
-  try {
-    return parseUsage(JSON.parse(text));
-  } catch {
-    return null;
-  }
-}
-
-function toAgent(row: AgentDbRow): SnapshotAgent {
-  return {
-    agent_id: row.agent_id,
-    activity: row.activity as SnapshotAgent["activity"],
-    agent_name: row.agent_name,
-    pi_session: row.pi_session,
-    workstream: row.workstream,
-    role: row.role,
-    cli: row.cli,
-    harness: row.harness,
-    driver: row.driver as SnapshotAgent["driver"],
-    model: row.model,
-    provider: row.provider,
-    effort: row.effort as SnapshotAgent["effort"],
-    context_pct: row.context_pct,
-    context_tokens: row.context_tokens,
-    context_window: row.context_window,
-    provider_effort: row.provider_effort,
-    // Re-validated, not cast. The column is opaque text at rest, so the only
-    // thing that makes it trustworthy on the way out is parsing it again -- and
-    // a row written by an older build, or edited by hand, must degrade to null
-    // rather than hand a render path a shape it never checked.
-    usage: parseStoredUsage(row.usage),
-    pending: row.pending,
-    claimed_at: row.claimed_at,
-    updated_at: row.updated_at,
-  };
-}
-
-/**
- * Rank per kind, as a total Record rather than a Map.
- *
- * A Record keyed by the union is EXHAUSTIVE AT COMPILE TIME: adding a kind to
- * `AttentionKind` without ranking it here fails typecheck, and the lookup
- * returns `number` rather than `number | undefined`. The Map version needed a
- * `?? ATTENTION_PRIORITY.length` to typecheck, which put a fallback branch in a
- * sort path -- and the reason this column is CHECK-constrained in SQL, and
- * validated by `parseSnapshot` on the way in, is precisely so that no sort,
- * count or render path needs one. A sweep confirmed the branch was unreachable
- * by changing it to -1000 and watching 68 assertions stay green.
- *
- * Derived from `ATTENTION_PRIORITY` so the order lives in one place, beside the
- * type, with the two kept consistent by a test.
- */
-const RANK: Record<AttentionKind, number> = {
-  crashed: ATTENTION_PRIORITY.indexOf("crashed"),
-  error: ATTENTION_PRIORITY.indexOf("error"),
-  blocked: ATTENTION_PRIORITY.indexOf("blocked"),
-  done: ATTENTION_PRIORITY.indexOf("done"),
-};
-
-function attentionOrder(left: SnapshotAttention, right: SnapshotAttention): number {
-  return RANK[left.kind] - RANK[right.kind];
-}
-
-/**
- * Whether a pid is an ancestor of `pid`, read from the process table once, on
- * first use. Fails closed: when the table cannot be read, every pid reads as an
- * ancestor, so pi refuses rather than displacing a possibly-live parent.
- */
-function processAncestry(pid: number): AncestorCheck {
-  let ancestors: Set<number> | null | undefined;
-  return (candidate) => {
-    if (ancestors === undefined) {
-      const table = readProcessTable();
-      ancestors = table ? ancestry(table, pid) : null;
-    }
-    return ancestors === null || ancestors.has(candidate);
-  };
-}
-
-/**
- * The live non-pi harness a pi claiming as `pid` runs inside, read from the
- * process table up to the tmux server `$TMUX` names. Only for a claim this
- * process makes about itself: `$TMUX` is this process's, and says nothing about
- * another pid's server. Fails open (not nested) when it cannot tell, which is
- * how every pi claim behaved before the check, so a pi that is not nested
- * claims as it always did.
- */
-function processNesting(pid: number): NestCheck {
-  return () => {
-    const serverPid = tmuxServerPid(process.env.TMUX);
-    if (pid !== process.pid || serverPid === null) return null;
-    const table = readProcessTable();
-    return table ? outerHarness(table, pid, serverPid) : null;
-  };
-}
-
 /**
  * Open the store (`{ readonly: true }` for a read-only open) and mint no identity.
  *
@@ -858,7 +542,7 @@ function processNesting(pid: number): NestCheck {
  * only by `murmur init`, so a read path — a status-bar tick, a focus hook —
  * cannot bring a node into existence as a side effect. The one exception is
  * migration, not minting: when it creates the store for the first time it
- * copies a 1.x node's existing `identity.json` across (`src/legacy-state.ts`).
+ * copies a 2.x node's existing `identity.json` across (`src/legacy-state.ts`).
  */
 export function openStore(options: { readonly?: boolean } = {}): Store {
   const path = dbPath();
@@ -929,14 +613,14 @@ function openWritableDatabase(path: string): Database {
   const database = withResetLock(path, () => {
     const condition = storeCondition(path);
     if (condition instanceof StoreTooNewError) throw condition;
-    // A store created for the first time starts with a 1.x murmur's peers,
+    // A store created for the first time starts with a 2.x murmur's peers,
     // read from its directory without touching it, and takes its identity
     // along: the first command after an upgrade may never read identity.
     //
     // "For the first time" is decided by what the file holds, not by whether it
     // exists: the file appears at the first `openDatabase` below, before the
     // schema transaction commits, so an open killed or failed in between would
-    // otherwise leave an empty file that hid the 1.x peers for good.
+    // otherwise leave an empty file that hid the 2.x peers for good.
     let salvaged: SalvagedPeer[];
     if (holdsMurmurStore(path)) salvaged = salvagePeers(path);
     else {
@@ -945,28 +629,8 @@ function openWritableDatabase(path: string): Database {
       salvaged = legacyPeers(legacy);
     }
     if (condition === "reset") {
-      // SAY WHAT IS BEING THROWN AWAY, on stderr, once.
-      //
-      // The rebuild is documented and correct -- ARCHITECTURE.md accepts that a
-      // store from a different `user_version` is rebuilt with only peers
-      // salvaged -- but it was silent, and silence is what made a documented
-      // upgrade look like data loss. Measured: a schema bump on a machine whose
-      // murmur is a symlinked dev checkout wiped every agent row while `doctor`
-      // stayed clean, `user_version` matched, and all peers survived. The picker
-      // simply went empty, and a live agent cannot re-claim until its extension
-      // reloads, so the rows do not come back on their own.
-      //
-      // Counted before the delete, since after it there is nothing to count.
-      // Best effort in the same spirit as the lock: an unreadable database
-      // reports nothing rather than failing the open.
-      const discarded = countDiscarded(path);
-      if (discarded !== null && discarded.agents > 0) {
-        process.stderr.write(
-          `murmur: rebuilding ${path} for a new schema version; ` +
-            `${discarded.agents} agent row(s) and ${discarded.attention} attention row(s) are discarded, ` +
-            `${salvaged.length} peer(s) kept. Running agents reappear when each reloads (\`/new\` in the pane).\n`,
-        );
-      }
+      // Nothing here is history: crashes and alert claims are re-derived or
+      // simply news that has passed, and peers are kept.
       for (const suffix of ["", "-wal", "-shm"]) rmSync(`${path}${suffix}`, { force: true });
     }
 
@@ -1008,11 +672,6 @@ function openWritableDatabase(path: string): Database {
         .transaction(() => {
           const version = (opened.pragma("user_version", { simple: true }) as number) ?? 0;
           if (usable(opened, version)) return;
-          if (version === BEFORE_INBOX_RECEIPTS) {
-            opened.exec(INBOX_RECEIPTS_SCHEMA);
-            opened.pragma(`user_version = ${SCHEMA_USER_VERSION}`);
-            return;
-          }
           // The reset lock is best effort and can be stolen, so a newer build may
           // have written the file since the check above. Never build over it.
           if (version > SCHEMA_USER_VERSION) throw new StoreTooNewError(path, version);
@@ -1050,589 +709,98 @@ function openWritableDatabase(path: string): Database {
 }
 
 function buildStore(database: Database): Store {
-  const selectAgentByPane = database.prepare(
-    "SELECT * FROM agents WHERE server_kind = ? AND server_value = ? AND pane = ?",
+  const selectSeen = database.prepare(
+    "SELECT * FROM seen WHERE server_kind = ? AND server_value = ?",
   );
-  const selectAllAgents = database.prepare(
-    "SELECT * FROM agents ORDER BY server_kind, server_value, pane",
+  const upsertSeen = database.prepare(`
+    INSERT INTO seen (server_kind, server_value, pane, state, since, session, window,
+                      session_name, window_name, agent_name, workstream, role, driver,
+                      harness, cli, pane_title)
+    VALUES (@server_kind, @server_value, @pane, @state, @since, @session, @window,
+            @session_name, @window_name, @agent_name, @workstream, @role, @driver,
+            @harness, @cli, @pane_title)
+    ON CONFLICT (server_kind, server_value, pane) DO UPDATE SET
+      state = excluded.state, since = excluded.since, session = excluded.session,
+      window = excluded.window, session_name = excluded.session_name,
+      window_name = excluded.window_name, agent_name = excluded.agent_name,
+      workstream = excluded.workstream, role = excluded.role, driver = excluded.driver,
+      harness = excluded.harness, cli = excluded.cli, pane_title = excluded.pane_title
+  `);
+  const deleteSeen = database.prepare(
+    "DELETE FROM seen WHERE server_kind = ? AND server_value = ? AND pane = ?",
   );
-  const insertAgent = database.prepare(`
-    INSERT INTO agents (agent_id, server_kind, server_value, pane, owner_pid, activity,
-                        session, window, session_name, window_name, agent_name, pi_session,
-                        workstream, role, cli, driver, source, harness, claimed_at, updated_at)
-    VALUES (@agent_id, @server_kind, @server_value, @pane, @owner_pid, @activity,
-            @session, @window, @session_name, @window_name, @agent_name, @pi_session,
-            @workstream, @role, @cli, @driver, 'pi', 'pi', @claimed_at, @updated_at)
+  // `requested_at` is kept on a repeat, so age keeps meaning "how long this
+  // has gone unmet" and a re-recorded crash is not a new alert.
+  const insertCrash = database.prepare(`
+    INSERT INTO crashed (server_kind, server_value, pane, session, window, session_name,
+                         window_name, agent_name, workstream, role, driver, harness, cli,
+                         pane_title, last_state, requested_at)
+    VALUES (@server_kind, @server_value, @pane, @session, @window, @session_name,
+            @window_name, @agent_name, @workstream, @role, @driver, @harness, @cli,
+            @pane_title, @last_state, @requested_at)
+    ON CONFLICT (server_kind, server_value, pane) DO NOTHING
   `);
-  const insertInboxAgent = database.prepare(`
-    INSERT INTO agents (agent_id, server_kind, server_value, pane, owner_pid, activity,
-                        session, window, session_name, window_name, agent_name, pi_session,
-                        workstream, role, cli, driver, source, harness, session_id,
-                        run_count, claimed_at, updated_at)
-    VALUES (@agent_id, @server_kind, @server_value, @pane, @owner_pid, 'stopped',
-            @session, @window, @session_name, @window_name, @agent_name, NULL,
-            @workstream, @role, @cli, @driver, 'inbox', @harness, @session_id,
-            0, @claimed_at, @updated_at)
-  `);
-  const retainAgent = database.prepare(`
-    UPDATE agents
-       SET session = @session, window = @window, session_name = @session_name,
-           window_name = @window_name, agent_name = @agent_name,
-           pi_session = @pi_session, workstream = @workstream, role = @role,
-           cli = @cli, driver = @driver, updated_at = @updated_at
-     WHERE agent_id = @agent_id
-  `);
-  const deleteAgentByPane = database.prepare(
-    "DELETE FROM agents WHERE server_kind = ? AND server_value = ? AND pane = ?",
-  );
-  const deleteAttentionForPane = database.prepare(
-    "DELETE FROM attention WHERE server_kind = ? AND server_value = ? AND pane = ?",
-  );
-  const deleteAttentionKind = database.prepare(
-    "DELETE FROM attention WHERE server_kind = ? AND server_value = ? AND pane = ? AND kind = ?",
-  );
-  // The inbox's row update: every column an event can move, written whole from
-  // the row the transaction just read, keyed on the owner the event named.
-  const updateInboxAgent = database.prepare(`
-    UPDATE agents
-       SET activity = @activity, session = @session, window = @window,
-           session_name = @session_name, window_name = @window_name,
-           session_id = @session_id, run_count = @run_count, last_text = @last_text,
-           last_text_run = @last_text_run, confirmed = @confirmed,
-           generation_id = @generation_id, generation_end = @generation_end,
-           generation_run = @generation_run, updated_at = @updated_at
-     WHERE agent_id = @agent_id AND owner_pid = @owner_pid AND source = 'inbox'
-  `);
-  const updateActivity = database.prepare(`
-    UPDATE agents
-       SET activity = @activity, session = @session, window = @window,
-           session_name = @session_name, window_name = @window_name,
-           updated_at = @updated_at
-     WHERE agent_id = @agent_id AND owner_pid = @owner_pid
-       AND server_kind = @server_kind AND server_value = @server_value AND pane = @pane
-  `);
-  const deleteAgentOwned = database.prepare(
-    `DELETE FROM agents
-      WHERE agent_id = ? AND owner_pid = ? AND server_kind = ? AND server_value = ? AND pane = ?`,
-  );
-  const upsertAttention = database.prepare(`
-    INSERT INTO attention (server_kind, server_value, pane, kind, message, source, driver,
-                           session, window, session_name, window_name, requested_at)
-    VALUES (@server_kind, @server_value, @pane, @kind, @message, @source, @driver,
-            @session, @window, @session_name, @window_name, @requested_at)
-    ON CONFLICT (server_kind, server_value, pane, kind) DO UPDATE SET
-      message = excluded.message,
-      source = excluded.source,
-      -- Human wins per ROW, as paneDriver makes it win per pane. requested_at
-      -- is kept on a repeat, so letting a crew repeat (a sibling's
-      -- notify --pane) overwrite the driver would hide a human request that
-      -- is still unmet, keeping its age.
-      driver = CASE WHEN attention.driver = 'human' THEN 'human' ELSE excluded.driver END,
-      session = excluded.session,
-      window = excluded.window,
-      session_name = excluded.session_name,
-      window_name = excluded.window_name
-  `);
-  const selectAgents = database.prepare("SELECT * FROM agents");
-  const selectAttention = database.prepare("SELECT * FROM attention");
-  /**
-   * One prepared statement per SET shape, cached.
-   *
-   * There are only a handful of real shapes -- one per pi report site -- so this
-   * settles after the first few turns instead of re-planning identical SQL
-   * forever. The assignment list is built from a FIXED column allowlist in
-   * `setRuntime`, never from caller keys, so no input reaches the statement text.
-   */
-  const runtimeStatements = new Map<string, ReturnType<typeof database.prepare>>();
-  const runtimeStatement = (assignments: string) => {
-    const cached = runtimeStatements.get(assignments);
-    if (cached) return cached;
-    const prepared = database.prepare(
-      `UPDATE agents SET ${assignments}, updated_at = @updated_at
-         WHERE agent_id = @agent_id AND owner_pid = @owner_pid`,
-    );
-    runtimeStatements.set(assignments, prepared);
-    return prepared;
-  };
-
-  const writeRuntime = (update: RuntimeUpdate): boolean => {
-    // Built from the keys actually PRESENT, so an explicit null is written and
-    // an absent key is left alone. COALESCE would have been shorter and cannot
-    // express the first case -- which is the one pi hits after every
-    // compaction, when the context percent legitimately becomes unknown.
-    const columns = RUNTIME_COLUMNS.filter((column) => column in update);
-    // Reachable, not defensive: an older pi offers none of the members, so the
-    // producer's `runtimeFromContext` returns {} and passes it straight here. A
-    // SET clause built from zero columns is a syntax error.
-    if (columns.length === 0) return false;
-    const assignments = columns.map((column) => `${column} = @${column}`).join(", ");
-    const values: Record<string, string | number | null> = {
-      agent_id: update.agent_id,
-      owner_pid: update.owner_pid,
-      updated_at: update.now ?? Date.now(),
-    };
-    for (const column of columns) {
-      const value = update[column];
-      // The bundle is one JSON column: it is nullable as a unit and no query
-      // looks inside it. Serialised here rather than by the caller, so no
-      // producer has to know the storage shape.
-      values[column] =
-        column === "usage" && value != null ? JSON.stringify(value) : (value as never);
-    }
-    // Prepared per shape and cached: there are a handful of real combinations
-    // (one per event), so this settles after the first few turns rather than
-    // re-planning identical SQL forever.
-    return runtimeStatement(assignments).run(values).changes === 1;
-  };
-
-  const setActivityByPane = database.prepare(
-    `UPDATE agents SET activity = ?, updated_at = ?
-      WHERE server_kind = ? AND server_value = ? AND pane = ?`,
+  const deleteCrash = database.prepare(
+    "DELETE FROM crashed WHERE server_kind = ? AND server_value = ? AND pane = ?",
   );
 
   /**
-   * `.immediate`, not deferred, and this is load-bearing.
-   *
-   * This reads the incumbent row and then writes, so a deferred transaction
-   * starts as a READER and must upgrade. Two at once fail the loser with
-   * SQLITE_BUSY_SNAPSHOT, which no busy_timeout can fix -- waiting cannot make a
-   * stale snapshot fresh. Measured at 5 of 8 concurrent writers failing.
+   * \`.immediate\`: this reads the previous sighting and then writes, so a
+   * deferred transaction would start as a reader and fail its upgrade with
+   * SQLITE_BUSY_SNAPSHOT when two collects race (the status bar and a dash).
    */
-  const claimAgent = database.transaction((claim: AgentClaim): ClaimResult => {
-    const now = claim.now ?? Date.now();
-    const isAlive = claim.isAlive ?? pidAlive;
-    const { location, meta, owner_pid } = claim;
-    const serverValue = "value" in location.server ? location.server.value : "";
-    const incumbent = selectAgentByPane.get(location.server.kind, serverValue, location.pane) as
-      | AgentDbRow
-      | undefined;
-
-    const values = {
-      server_kind: location.server.kind,
-      server_value: serverValue,
-      pane: location.pane,
-      owner_pid,
-      session: location.session,
-      window: location.window,
-      session_name: location.session_name,
-      window_name: location.window_name,
-      agent_name: meta.agent_name,
-      pi_session: meta.pi_session,
-      workstream: meta.workstream,
-      role: meta.role,
-      cli: meta.cli,
-      driver: meta.driver,
-      updated_at: now,
-    };
-
-    // pi inside a live hook harness is that harness's nested agent, refused
-    // whether or not the harness has a row yet: until a reader drains, its
-    // events wait in the inbox and the pane looks unclaimed. Asked lazily, and
-    // only on a path that would claim.
-    const nestedUnder = claim.nestedUnder ?? processNesting(owner_pid);
-
-    if (!incumbent) {
-      const outer = nestedUnder();
-      if (outer !== null) return { outcome: "refused", held_by_pid: outer };
-      const agentId = randomUUID();
-      insertAgent.run({ ...values, agent_id: agentId, activity: "stopped", claimed_at: now });
-      return { outcome: "claimed", agent_id: agentId };
-    }
-
-    // Our own claim, seen again. This is what makes pi's `/reload` a no-op: pi
-    // re-runs the extension factory in the same process, and a check that could
-    // not recognise its own claim would silence the real agent. `activity` and
-    // `agent_id` are deliberately untouched.
-    if (incumbent.owner_pid === owner_pid) {
-      retainAgent.run({ ...values, agent_id: incumbent.agent_id });
-      return { outcome: "retained", agent_id: incumbent.agent_id };
-    }
-
-    // An inbox-sourced incumbent: a hook harness's claim, or a stray one made
-    // while pi's own row was gone (its `/new` release window, a store reset).
-    // pi takes the pane back unless that owner is alive AND pi's ancestor --
-    // pi nested under a live claude, refused exactly as a nested pi is below.
-    //
-    // The incumbent's attention is KEPT. The same-pane replace further down
-    // deletes it because it described a process that is gone; here a human may
-    // not yet have seen what the hook harness raised, and a stray claim's
-    // attention is still about this pane.
-    if (incumbent.source === "inbox") {
-      const isAncestor = claim.isAncestor ?? processAncestry(owner_pid);
-      if (isAlive(incumbent.owner_pid) && isAncestor(incumbent.owner_pid)) {
-        return { outcome: "refused", held_by_pid: incumbent.owner_pid };
-      }
-      const outer = nestedUnder();
-      if (outer !== null) return { outcome: "refused", held_by_pid: outer };
-      deleteAgentByPane.run(location.server.kind, serverValue, location.pane);
-      const agentId = randomUUID();
-      insertAgent.run({ ...values, agent_id: agentId, activity: "stopped", claimed_at: now });
-      return { outcome: "replaced", agent_id: agentId, previous_agent_id: incumbent.agent_id };
-    }
-
-    // A different LIVE process in one pane: the nested-agent case, and the only
-    // answer for it. Fails closed — `pidAlive` reports death only on ESRCH, so
-    // an unanswerable probe (EPERM) reads as alive and refuses. An unknown must
-    // never let a second writer displace a possibly-live owner.
-    if (isAlive(incumbent.owner_pid)) {
-      return { outcome: "refused", held_by_pid: incumbent.owner_pid };
-    }
-
-    const outer = nestedUnder();
-    if (outer !== null) return { outcome: "refused", held_by_pid: outer };
-
-    // The previous occupant is gone. Its attention described a process that no
-    // longer exists, and a human looking at the pane now sees a different agent.
-    deleteAgentByPane.run(location.server.kind, serverValue, location.pane);
-    deleteAttentionForPane.run(location.server.kind, serverValue, location.pane);
-    const agentId = randomUUID();
-    insertAgent.run({ ...values, agent_id: agentId, activity: "stopped", claimed_at: now });
-    return { outcome: "replaced", agent_id: agentId, previous_agent_id: incumbent.agent_id };
-  }).immediate;
-
-  /**
-   * One transaction, because the `stopped` write and its `crashed` attention row
-   * must land together or not at all.
-   *
-   * A no-op when tmux could not answer: `panes === null` is absence of evidence,
-   * not evidence of death, and conflating the two once deleted ten live agents.
-   *
-   * A missing pane whose owner pid is still alive keeps its row. tmux can say
-   * "no panes" and be wrong: a `murmur status` run with a test rig's
-   * `TMUX_TMPDIR` asked about a socket that did not exist, read that as an empty
-   * default server, and deleted every agent on the machine. A live owner is
-   * evidence the agent exists that no tmux answer can outweigh; when its pane
-   * really closed, the owner dies with it and the next reconcile reaps the row.
-   */
-  const reconcileLocal = database.transaction((world: LocalWorld): ReconcileSummary => {
-    const summary: ReconcileSummary = { crashed: [], removed: [], attention_removed: [] };
-    if (world.panes === null) return summary;
-    const live = world.panes;
-    const worldServerValue = "value" in world.server ? world.server.value : "";
-    const isAlive = world.isAlive ?? pidAlive;
-    const now = world.now ?? Date.now();
-
-    // Which panes already carry a crash we recorded. Read once, before any
-    // write, so the loop below sees the state reconciliation started from.
-    const alreadyCrashed = new Set(
-      (selectAttention.all() as AttentionDbRow[])
-        .filter((row) => row.kind === "crashed")
-        .map((row) => serverKey(serverFromRow(row), row.pane)),
-    );
-
-    for (const row of selectAgents.all() as AgentDbRow[]) {
-      if (row.server_kind !== world.server.kind || row.server_value !== worldServerValue) continue;
-      const pane = asPaneId(row.pane);
-      if (!live.has(pane)) {
-        if (isAlive(row.owner_pid)) continue;
-        deleteAgentByPane.run(row.server_kind, row.server_value, row.pane);
-        deleteAttentionForPane.run(row.server_kind, row.server_value, row.pane);
-        summary.removed.push(pane);
-        continue;
-      }
-      if (isAlive(row.owner_pid)) continue;
-
-      // The asymmetry below is the point. A dead RUNNING owner is an unreported
-      // crash and must leave a durable trace. A dead STOPPED owner finished
-      // normally, so its row is noise — but any `done` it raised is a fact a
-      // human has not yet seen, so the attention stays.
-      if (row.activity === "running") {
-        setActivityByPane.run("stopped", now, row.server_kind, row.server_value, row.pane);
-        upsertAttention.run({
-          server_kind: row.server_kind,
-          server_value: row.server_value,
-          pane: row.pane,
-          kind: "crashed",
-          message: "",
-          source: "murmur",
-          // The dead agent's own driver: a crew worker that crashed is still
-          // crew, and NEEDS_HUMAN is what surfaces it anyway.
-          driver: row.driver,
-          session: row.session,
-          window: row.window,
-          session_name: row.session_name,
-          window_name: row.window_name,
-          requested_at: now,
-        });
-        summary.crashed.push(pane);
-      } else if (!alreadyCrashed.has(serverKey(serverFromRow(row), row.pane))) {
-        deleteAgentByPane.run(row.server_kind, row.server_value, row.pane);
-        summary.removed.push(pane);
-      }
-      // A pane already recorded as crashed keeps its agent row, the one place
-      // this departs from a literal reading of the contract's table (which says
-      // a live pane with a dead STOPPED owner loses its row). Taken literally,
-      // the second reconcile deletes the row the first just marked `stopped`, so
-      // the crashed pane loses agent_name, workstream, role and cli one tick
-      // after the crash -- contradicting the contract's own idempotence rule and
-      // stripping exactly the fields that say WHICH agent died.
-      //
-      // The table's real distinction is between an owner that finished normally,
-      // whose row is noise, and one that died mid-run. The `crashed` row is the
-      // record of which case this was, so it is the right thing to key on.
-    }
-
-    // Reaps attention for a pane that never had an agent row — an
-    // attention-only codex pane whose window was closed. Nothing else would.
-    for (const row of selectAttention.all() as AttentionDbRow[]) {
-      if (row.server_kind !== world.server.kind || row.server_value !== worldServerValue) continue;
-      const pane = asPaneId(row.pane);
-      if (live.has(pane)) continue;
-      deleteAttentionForPane.run(row.server_kind, row.server_value, row.pane);
-      if (!summary.attention_removed.includes(pane)) summary.attention_removed.push(pane);
-    }
-
-    return summary;
-  }).immediate;
-
-  /**
-   * Both tables read at ONE point in time, or a pane can appear with an agent
-   * and without the attention that was there when the agent was read.
-   */
-  const readLocalPanes = database.transaction((): LocalPane[] => {
-    const agents = selectAgents.all() as AgentDbRow[];
-    const attention = selectAttention.all() as AttentionDbRow[];
-    const panes = new Map<string, LocalPane>();
-
-    const locate = (row: AgentDbRow | AttentionDbRow): LocalPane => {
-      const server = serverFromRow(row);
-      const key = serverKey(server, row.pane);
-      const existing = panes.get(key);
-      if (existing) return existing;
-      const created: LocalPane = {
-        server,
-        pane: asPaneId(row.pane),
-        session: asSessionId(row.session),
-        window: asWindowId(row.window),
-        session_name: row.session_name,
-        window_name: row.window_name,
-        agent: null,
-        attention: [],
-      };
-      panes.set(key, created);
-      return created;
-    };
-
-    for (const row of agents) locate(row).agent = toAgent(row);
-    for (const row of attention) locate(row).attention.push(toAttention(row));
-
-    for (const pane of panes.values()) pane.attention.sort(attentionOrder);
-    return [...panes.values()].sort((left, right) =>
-      serverKey(left.server, left.pane).localeCompare(serverKey(right.server, right.pane)),
-    );
-  });
-
-  /**
-   * Apply one inbox event to its pane. Returns whether it was applied, and
-   * runs as a savepoint inside `ingestInbox`, so an event that fails half way
-   * leaves nothing behind.
-   *
-   * The order is the ownership rules, then the vocabulary:
-   *
-   * 1. A `pi` row ignores the inbox while its pi lives.
-   * 2. A pane with no row, or whose owner is dead (a dead pi's included), is
-   *    claimed on the event, whatever its kind -- so a hook installed
-   *    mid-session recovers -- except a `session_end`, and except while a pi
-   *    runs in the pane's tree outside the event's own harness.
-   * 3. A different live owner is refused: the store's nested-agent defence,
-   *    with the pid the hook recorded standing in for the writer's own.
-   * 4. An event from another session is ignored, unless it starts one.
-   */
-  const applyInboxEvent = database.transaction(
-    (delivery: InboxDelivery, event: InboxEvent, isAlive: LiveCheck): boolean => {
-      const { location } = delivery;
-      const serverValue = "value" in location.server ? location.server.value : "";
-      const key = [location.server.kind, serverValue, location.pane] as const;
-      let row = selectAgentByPane.get(...key) as AgentDbRow | undefined;
-      // A dead pi's row is replaced below like any dead owner's, as pi's own
-      // claim replaces it: a crashed pi must not leave its pane deaf to the
-      // harness started there next.
-      if (row?.source === "pi" && isAlive(row.owner_pid)) return false;
-
-      if (event.event === "runtime_reported") {
-        // Never claims a pane and never a turn: it patches the runtime of the
-        // live row its own harness owns, and is dropped otherwise.
-        if (
-          !row ||
-          !event.runtime ||
-          event.harness === "pi" ||
-          row.harness !== event.harness ||
-          row.owner_pid !== event.owner_pid ||
-          !isAlive(row.owner_pid)
-        ) {
-          return false;
-        }
-        return writeRuntime({
-          ...event.runtime,
-          agent_id: row.agent_id,
-          owner_pid: row.owner_pid,
-          now: event.at,
-        });
-      }
-
-      if (!row || row.owner_pid !== event.owner_pid) {
-        if (event.event === "session_end") return false;
-        if (row && isAlive(row.owner_pid)) return false;
-        if (delivery.piRuns()) return false;
-        if (row) {
-          // The previous owner is gone, as in `claimAgent`'s same-pane replace.
-          deleteAgentByPane.run(...key);
-          deleteAttentionForPane.run(...key);
-        }
-        insertInboxAgent.run({
-          agent_id: randomUUID(),
-          server_kind: location.server.kind,
-          server_value: serverValue,
-          pane: location.pane,
-          owner_pid: event.owner_pid,
-          session: location.session,
-          window: location.window,
-          session_name: location.session_name,
-          window_name: location.window_name,
-          agent_name: event.agent.agent_name,
-          workstream: event.agent.workstream,
-          role: event.agent.role,
-          cli: event.agent.cli ?? event.harness,
-          driver: event.agent.driver,
-          harness: event.harness,
-          session_id: event.session_id,
-          claimed_at: event.at,
-          updated_at: event.at,
-        });
-        row = selectAgentByPane.get(...key) as AgentDbRow;
-      } else if (
-        event.event !== "session_start" &&
-        event.session_id !== null &&
-        row.session_id !== null &&
-        event.session_id !== row.session_id
-      ) {
-        return false;
-      }
-
-      // The vocabulary's own transitions are shared with the remote fold.
-      const step = stepTurn(
-        {
-          activity: row.activity === "running" ? "running" : "stopped",
-          session_id: row.session_id,
-          run_count: row.run_count ?? 0,
-          last_text: row.last_text,
-          last_text_run: row.last_text_run,
-          confirmed: row.confirmed === 1,
-          generation_id: row.generation_id,
-          generation_end: row.generation_end,
-          generation_run: row.generation_run,
-        },
-        event,
+  const syncLocal = database.transaction((reads: readonly ServerRead[], now: number): LocalSync => {
+    const result: LocalSync = { crashed: [], since: new Map() };
+    for (const read of reads) {
+      if (read.panes === null) continue;
+      const kind = read.server.kind;
+      const value = serverValue(read.server);
+      const previous = new Map(
+        (selectSeen.all(kind, value) as SeenDbRow[]).map((row) => [row.pane, row]),
       );
-      if (step.kind === "ignore") return false;
-      for (const kind of step.clear) deleteAttentionKind.run(...key, kind);
-      if (step.release) {
-        // Released like pi's `session_shutdown`: the row goes, its attention
-        // stays, so a `done` outlives the process that raised it.
-        deleteAgentByPane.run(...key);
-        return true;
-      }
-      const attention = (kind: "blocked" | "done" | "error", message: string): void => {
-        upsertAttention.run({
-          server_kind: location.server.kind,
-          server_value: serverValue,
-          pane: location.pane,
-          kind,
-          message,
-          source: event.harness,
-          driver: row.driver,
-          session: location.session,
-          window: location.window,
-          session_name: location.session_name,
-          window_name: location.window_name,
-          requested_at: event.at,
-        });
-      };
-      if (step.raise?.kind === "settled") {
-        const settled = settledState(delivery.focused, row.driver === "orchestrated");
-        if (settled !== null) attention(settled, "");
-      } else if (step.raise) {
-        attention(step.raise.kind, step.raise.message);
-      }
-      // After the owner and session checks, and before the `next: null` return
-      // (a compact `session_start`): the ignore and release paths above wrote none.
-      // pi reports its own runtime; its store-free inbox events carry none to apply.
-      if (event.runtime && event.harness !== "pi") {
-        writeRuntime({
-          ...event.runtime,
-          agent_id: row.agent_id,
-          owner_pid: row.owner_pid,
-          now: event.at,
+      for (const pane of read.panes) {
+        const before = previous.get(pane.pane);
+        previous.delete(pane.pane);
+        // The multiplexer's clock when it has one; else carried while the
+        // state holds, so an unchanged state keeps its age and a changed one
+        // is news at this collect.
+        const since =
+          pane.state_time ?? (before && before.state === pane.state ? before.since : now);
+        result.since.set(paneKey(pane), since);
+        // A live pane at the address is a new occupant: any crash recorded
+        // there describes a process that is gone.
+        deleteCrash.run(kind, value, pane.pane);
+        upsertSeen.run({
+          server_kind: kind,
+          server_value: value,
+          pane: pane.pane,
+          state: pane.state,
+          since,
+          session: pane.session,
+          window: pane.window,
+          session_name: pane.session_name,
+          window_name: pane.window_name,
+          agent_name: pane.agent_name,
+          workstream: pane.workstream,
+          role: pane.role,
+          driver: pane.driver,
+          harness: pane.harness,
+          cli: pane.cli,
+          pane_title: pane.pane_title,
         });
       }
-      if (!step.next) return true;
-      updateInboxAgent.run({
-        agent_id: row.agent_id,
-        owner_pid: row.owner_pid,
-        activity: step.next.activity,
-        session: location.session,
-        window: location.window,
-        session_name: location.session_name,
-        window_name: location.window_name,
-        session_id: step.next.session_id,
-        run_count: step.next.run_count,
-        last_text: step.next.last_text,
-        last_text_run: step.next.last_text_run,
-        confirmed: step.next.confirmed ? 1 : 0,
-        generation_id: step.next.generation_id,
-        generation_end: step.next.generation_end,
-        generation_run: step.next.generation_run,
-        updated_at: event.at,
-      });
-      return true;
-    },
-  );
-
-  const receipt = database.prepare("INSERT OR IGNORE INTO inbox_receipts (path) VALUES (?)");
-  const receipts = database.prepare<[], { path: string }>("SELECT path FROM inbox_receipts");
-  const deleteReceipt = database.prepare("DELETE FROM inbox_receipts WHERE path = ?");
-  const consumeReceipts = database.transaction((consume: IngestOptions["consume"]) => {
-    for (const { path } of receipts.all()) {
-      try {
-        consume(path);
-      } catch {
-        continue; // Keep the receipt for the next drain.
+      // Gone since the last collect. Mid-work is a crash murmur must remember
+      // (the multiplexer has nothing left to say about the pane); at rest it
+      // simply finished.
+      for (const gone of previous.values()) {
+        deleteSeen.run(kind, value, gone.pane);
+        if (!MID_WORK.includes(gone.state)) continue;
+        insertCrash.run({ ...gone, last_state: gone.state, requested_at: now });
+        result.crashed.push(asPaneId(gone.pane));
       }
-      deleteReceipt.run(path);
     }
+    return result;
   });
-
-  // List under the same write lock as the fold and receipt. Concurrent drains
-  // see either the committed receipt or an inbox from which the file is gone.
-  const ingestInbox = database.transaction(
-    (read: () => readonly InboxDelivery[], options: IngestOptions): IngestSummary => {
-      const isAlive = options.isAlive ?? pidAlive;
-      const summary: IngestSummary = { applied: 0, ignored: 0, malformed: 0, changed: [] };
-      const changed = new Map<string, InboxDelivery["location"]>();
-      for (const delivery of read()) {
-        if (receipt.run(delivery.path).changes === 0) continue;
-        let outcome: "applied" | "ignored" | "malformed" = "malformed";
-        if (delivery.event) {
-          try {
-            outcome = applyInboxEvent(delivery, delivery.event, isAlive) ? "applied" : "ignored";
-          } catch {
-            // A value the schema refuses. Rolled back to its savepoint and
-            // dropped: one bad file must not wedge the pane's inbox.
-            outcome = "malformed";
-          }
-        }
-        summary[outcome] += 1;
-        if (outcome === "applied") {
-          changed.set(
-            serverKey(delivery.location.server, delivery.location.pane),
-            delivery.location,
-          );
-        }
-      }
-      summary.changed = [...changed.values()];
-      return summary;
-    },
-  );
 
   function peerRecord(row: PeerDbRow): PeerRecord {
     let snapshot: Snapshot | null = null;
@@ -1674,149 +842,48 @@ function buildStore(database: Database): Store {
   }
 
   return {
-    claimAgent,
-    reconcileLocal,
-
-    ingestInbox(read, options) {
-      const summary = ingestInbox.immediate(read, options);
-      // Never unlink on rollback. Retry old receipts too, including a file
-      // already removed when a previous reader died before clearing its receipt.
-      try {
-        consumeReceipts.immediate(options.consume);
-      } catch {
-        // Housekeeping must not hide the committed changes from the publisher.
-      }
-      return summary;
+    syncLocal(reads, now = Date.now()) {
+      return syncLocal.immediate(reads, now);
     },
 
-    harnessState(pane) {
-      const row = selectAgentByPane.get(
-        pane.server.kind,
-        "value" in pane.server ? pane.server.value : "",
-        pane.pane,
-      ) as AgentDbRow | undefined;
-      return row ? toHarnessState(row) : null;
+    knownServers() {
+      const rows = database
+        .prepare("SELECT DISTINCT server_kind, server_value FROM seen ORDER BY 1, 2")
+        .all() as { server_kind: TmuxServer["kind"]; server_value: string }[];
+      return rows.map(serverFromRow);
     },
 
-    listHarnessStates() {
-      return (selectAllAgents.all() as AgentDbRow[]).map((row) => ({
-        server:
-          row.server_kind === "default"
-            ? { kind: "default" }
-            : ({ kind: row.server_kind, value: row.server_value } as TmuxServer),
-        pane: asPaneId(row.pane),
-        ...toHarnessState(row),
-      }));
-    },
-
-    setRuntime: writeRuntime,
-
-    setActivity(update) {
-      // Both key components are required, so a write from a REPLACED owner
-      // matches nothing and returns false. That is not an error and must not be
-      // retried: it means this process is no longer the owner of record, and the
-      // correct response is silence.
-      return (
-        updateActivity.run({
-          activity: update.activity,
-          session: update.location.session,
-          window: update.location.window,
-          session_name: update.location.session_name,
-          window_name: update.location.window_name,
-          updated_at: update.now ?? Date.now(),
-          agent_id: update.agent_id,
-          owner_pid: update.owner_pid,
-          server_kind: update.location.server.kind,
-          server_value: "value" in update.location.server ? update.location.server.value : "",
-          pane: update.location.pane,
-        }).changes === 1
-      );
-    },
-
-    releaseAgent(release) {
-      // Attention is deliberately NOT deleted: a `done` raised at settle must
-      // survive the agent exiting, or completion becomes invisible the moment
-      // the process quits.
-      return (
-        deleteAgentOwned.run(
-          release.agent_id,
-          release.owner_pid,
-          release.location.server.kind,
-          "value" in release.location.server ? release.location.server.value : "",
-          release.location.pane,
-        ).changes === 1
-      );
+    localPanes() {
+      const rows = database
+        .prepare("SELECT * FROM crashed ORDER BY server_kind, server_value, pane")
+        .all() as CrashedDbRow[];
+      return rows.map(crashedPane);
     },
 
     recordCrash(location, now = Date.now()) {
-      upsertAttention.run({
+      insertCrash.run({
         server_kind: location.server.kind,
-        server_value: "value" in location.server ? location.server.value : "",
+        server_value: serverValue(location.server),
         pane: location.pane,
-        kind: "crashed",
-        message: "",
-        source: "murmur",
-        driver: DEFAULT_DRIVER,
         session: location.session,
         window: location.window,
         session_name: location.session_name,
         window_name: location.window_name,
+        agent_name: null,
+        workstream: null,
+        role: null,
+        driver: "human",
+        harness: null,
+        cli: null,
+        pane_title: null,
+        last_state: "running",
         requested_at: now,
       });
     },
 
-    requestAttention(request) {
-      // `requested_at` is absent from the DO UPDATE list on purpose. Age means
-      // "how long this has gone unmet", so a repeat must not reset the clock —
-      // which also makes crash attention idempotent for free. Touches no
-      // `agents` row, ever; there is no column here that could.
-      upsertAttention.run({
-        server_kind: request.location.server.kind,
-        server_value: "value" in request.location.server ? request.location.server.value : "",
-        pane: request.location.pane,
-        kind: request.kind,
-        message: request.message,
-        source: request.source,
-        driver: request.driver,
-        session: request.location.session,
-        window: request.location.window,
-        session_name: request.location.session_name,
-        window_name: request.location.window_name,
-        requested_at: request.now ?? Date.now(),
-      });
-    },
-
-    acknowledgePane(location) {
-      return deleteAttentionForPane.run(
-        location.server.kind,
-        "value" in location.server ? location.server.value : "",
-        location.pane,
-      ).changes;
-    },
-
-    localPanes() {
-      return readLocalPanes();
-    },
-
-    buildLocalSnapshot(identity, worlds) {
-      // Reconcile first, which is what makes "a snapshot is authoritative"
-      // true: absence from a successful snapshot means absence, so it must
-      // never be produced from unreconciled rows. Two transactions rather than
-      // one — a write transaction held open across the read would serialise
-      // every focus hook on the machine behind an export.
-      const allWorlds = Array.isArray(worlds) ? worlds : [worlds];
-      for (const world of allWorlds) reconcileLocal(world);
-      return {
-        murmur_snapshot: SNAPSHOT_VERSION,
-        host_id: identity.host_id,
-        display_name: identity.display_name,
-        murmur_version: MURMUR_VERSION,
-        generated_at: allWorlds[0]?.now ?? Date.now(),
-        // Rule 3: a pane with no agent and no attention must not be published.
-        // `readLocalPanes` builds a pane entry only from a row, so it cannot
-        // produce an empty one.
-        panes: readLocalPanes(),
-      };
+    acknowledgePane(address) {
+      return deleteCrash.run(address.server.kind, serverValue(address.server), address.pane)
+        .changes;
     },
 
     claimAlerts(keys, current, now, retainMs) {

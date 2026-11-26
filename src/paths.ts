@@ -2,16 +2,16 @@ import { homedir } from "node:os";
 import { isAbsolute, join } from "node:path";
 
 /**
- * The state directory's name. `murmur2` since the hook-harness store: a 1.x
- * murmur refuses that store (it reads schema 9 and refuses anything from 10
- * up), so the two keep separate directories and run side by side. A change
- * that breaks on-disk compatibility with the released version takes the next
- * name (`murmur3`); an additive one stays here.
+ * The state directory's name. `murmur3` since the OSC 7501 collector: 3.0's
+ * store holds no agent rows, and a 2.x murmur (its CLI, or its pi extension
+ * still loaded in a pi) refuses it, so the two keep separate directories and
+ * run side by side. A change that breaks on-disk compatibility with the
+ * released version takes the next name; an additive one stays here.
  */
-export const STATE_DIR_NAME = "murmur2";
+export const STATE_DIR_NAME = "murmur3";
 
-/** What 1.x murmur called it. Read once, by the first-run migration, never written. */
-export const LEGACY_STATE_DIR_NAME = "murmur";
+/** What 2.x murmur called it. Read once, by the first-run migration, never written. */
+export const LEGACY_STATE_DIR_NAME = "murmur2";
 
 /**
  * `$XDG_STATE_HOME`, or undefined when it is unset, empty or relative. The XDG
@@ -30,8 +30,7 @@ function stateDirOverride(env: NodeJS.ProcessEnv): string | undefined {
 }
 
 /**
- * Everything murmur keeps: the store, identity, the compile cache, the tmux
- * socket cache. `MURMUR_STATE_DIR` overrides it; otherwise the XDG state home.
+ * Everything murmur keeps: the store, identity, the compile cache. `MURMUR_STATE_DIR` overrides it; otherwise the XDG state home.
  */
 export function stateDir(env: NodeJS.ProcessEnv = process.env, home = homedir()): string {
   return (
@@ -41,19 +40,7 @@ export function stateDir(env: NodeJS.ProcessEnv = process.env, home = homedir())
 }
 
 /**
- * Where the pane inbox and the remote area live: under the home directory
- * whatever `XDG_STATE_HOME` says. Muse Code starts its hooks with an env
- * allowlist that keeps `HOME` and drops `XDG_STATE_HOME`, so a hook could not
- * find the XDG path, and writers and readers must agree on one place.
- * `MURMUR_STATE_DIR` still overrides it, for tests and sandboxes; a hook that
- * cannot see that variable cannot see the override either.
- */
-export function homeStateDir(env: NodeJS.ProcessEnv = process.env, home = homedir()): string {
-  return stateDirOverride(env) ?? join(home, ".local", "state", STATE_DIR_NAME);
-}
-
-/**
- * The directory a 1.x murmur in this environment uses, for the first-run
+ * The directory a 2.x murmur in this environment uses, for the first-run
  * migration, or null under `MURMUR_STATE_DIR`: an explicit directory is the
  * operator's, and nothing is migrated into it.
  */

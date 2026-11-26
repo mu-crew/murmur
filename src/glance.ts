@@ -185,6 +185,8 @@ function remoteGlance(
   // and a peer whose fetch failed keeps its last-known snapshot, which is
   // exactly why the row is on screen at all.
   if (peer.last_error !== null) return null;
+  // A remote Rex pane is reached through that node's Rex, not over ssh tmux.
+  if (agent.server.kind === "rex") return null;
   // ssh's remote side is a login shell. Build the tmux argv first, including
   // the snapshot's server selector, then quote every word into its one remote
   // command so hostile server values and pane ids remain data. `-e` keeps the
@@ -196,6 +198,20 @@ function remoteGlance(
   return { target, argv: [argv.map(shellQuote).join(" ")] };
 }
 
+/** A local Rex block's screen, its last `lines` lines kept, or null. */
+function rexCapture(agent: PaneView, lines: number): string | null {
+  try {
+    const out = execFileSync(
+      helperPath("rex"),
+      ["--autostart=false", "capture", "-s", agent.session, "-b", agent.pane, "--format", "vt"],
+      { encoding: "utf8", timeout: 3000, stdio: ["ignore", "pipe", "ignore"] },
+    );
+    return out.split("\n").slice(-lines).join("\n");
+  } catch {
+    return null;
+  }
+}
+
 export function glance(
   store: Store,
   agent: PaneView,
@@ -203,7 +219,10 @@ export function glance(
   run: GlanceRunner = sshRunner,
 ): string | null {
   if (agent.local) {
-    const local = tmux.capture(agent.pane, lines, agent.server);
+    const local =
+      agent.server.kind === "rex"
+        ? rexCapture(agent, lines)
+        : tmux.capture(agent.pane, lines, agent.server);
     return local === null ? null : previewSafe(local);
   }
   const remote = remoteGlance(store, agent, lines);

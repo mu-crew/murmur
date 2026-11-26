@@ -3,7 +3,7 @@ import { openStore } from "../store.js";
 import { requireIdentity } from "./identity-guard.js";
 
 /** Every failure, a corrupt identity or store included, is one line and exit 1. */
-export function runJumpCommand(target: string, options: JumpOptions = {}): void {
+export async function runJumpCommand(target: string, options: JumpOptions = {}): Promise<void> {
   try {
     const identity = requireIdentity();
     if (!identity) {
@@ -12,7 +12,7 @@ export function runJumpCommand(target: string, options: JumpOptions = {}): void 
     }
     const store = openStore();
     try {
-      runJump(store, identity, target, { fzf: spawnFzf }, options);
+      await runJump(store, identity, target, { fzf: spawnFzf }, options);
     } finally {
       store.close();
     }

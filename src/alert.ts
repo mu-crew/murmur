@@ -18,9 +18,14 @@ import type { PaneView } from "./view.js";
  * git hook.
  *
  * Fired from `collect` and nowhere else, because collect is the one place that
- * sees every node: local rows, freshly pulled peer snapshots, and the `crashed`
- * rows only reconciliation can write. The cost is latency -- an event fires on
- * the next status-bar tick, not the instant it is raised.
+ * sees every node: the local read, freshly pulled peer snapshots, and the
+ * `crashed` rows only the local read can conclude. The cost is latency -- an
+ * event fires on the next status-bar tick, not the instant it is raised.
+ *
+ * An event is a TRANSITION: a local pane's `requested_at` is when it entered
+ * its state (the multiplexer's `pane_program_state_time`, else when a collect
+ * first saw the state), so a state that holds is one event however many
+ * collects see it.
  */
 export const ALERT_HOOK = "on-attention";
 
@@ -50,6 +55,8 @@ export type AlertEvent = {
   window_name: string | null;
   workstream: string | null;
   driver: PaneView["driver"];
+  /** The operator is looking at the pane: claimed, but not announced. */
+  focused: boolean;
   /** The host's accent, as the tmux hostname pill and the dash color it. */
   host_color: string;
   /** The kind's glyph and color, as every murmur surface paints it. */
@@ -80,6 +87,7 @@ export function alertEvents(views: readonly PaneView[]): AlertEvent[] {
       window_name: view.window_name,
       workstream: view.workstream,
       driver: view.driver,
+      focused: view.local && view.focused,
       host_color: hostColor(view.host),
       glyph: DASH_GLYPH[entry.kind],
       kind_color: DASH_COLOR[entry.kind],
@@ -135,6 +143,10 @@ export function alertHook(dir = configDir()): string | null {
  * Fire the hook once for each attention event not yet alerted. Returns the
  * events fired.
  *
+ * An event on a pane the operator is looking at is claimed and NOT fired:
+ * they already see it, and claiming it means looking away later does not
+ * announce something they watched happen.
+ *
  * Does nothing without a hook, not even a store write, so a node that never
  * opted in pays one `access` per collect.
  */
@@ -156,7 +168,7 @@ export function fireAlerts(
       RETAIN_MS,
     ),
   );
-  const fired = fresh.filter((event) => won.has(event.key));
+  const fired = fresh.filter((event) => won.has(event.key) && !event.focused);
   for (const event of fired) {
     try {
       run(hook, event);

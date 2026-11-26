@@ -3,6 +3,7 @@ import { type JumpResult, jumpToAgent, outsideTmux, terminalText } from "./agent
 import { findHelper } from "./helper-path.js";
 import type { NodeIdentity } from "./identity.js";
 import { renderJumpCommand } from "./jump-command.js";
+import type { LocalOptions } from "./local.js";
 import { type Mux, tmux } from "./mux.js";
 import { resolveAgent } from "./steer.js";
 import type { Store } from "./store.js";
@@ -16,6 +17,8 @@ export type JumpDeps = {
   interactive?: () => boolean;
   mux?: Mux;
   warm?: (target: string) => boolean;
+  /** How the fresh read reaches Rex; see `readLocal`. */
+  rex?: LocalOptions["rex"];
 };
 
 /**
@@ -70,20 +73,20 @@ function reporter(token: string, options: JumpOptions): { fail: Reporter; ok: ()
   };
 }
 
-export function runJump(
+export async function runJump(
   store: Store,
   identity: NodeIdentity,
   token: string,
   deps: JumpDeps,
   options: JumpOptions = {},
-): void {
+): Promise<void> {
   const mux = deps.mux ?? tmux;
   const jumpTo =
     deps.jump ??
     ((jumpStore, target, client) =>
       jumpToAgent(jumpStore, target, tmux, undefined, process.env, client));
   const out = reporter(token, options);
-  const found = resolveAgent(store, identity, token, { mux, warm: deps.warm });
+  const found = await resolveAgent(store, identity, token, { mux, warm: deps.warm, rex: deps.rex });
   // A miss means the pane went away between the collect and the keypress. Said
   // out loud: in a popup a silent return is indistinguishable from a dead key.
   if (!found.ok) {
@@ -123,8 +126,11 @@ export function runJump(
     const latest = found.latest;
     const peer = store.peers().find((candidate) => candidate.host_id === agent.host_id);
     const needsTap = latest.peers.find((candidate) => candidate.name === agent.host)?.needs_session;
-    if (peer && needsTap) {
-      const command = renderJumpCommand(peer.jump_command, agent);
+    if (peer && needsTap && agent.server.kind !== "rex") {
+      const command = renderJumpCommand(peer.jump_command, {
+        server: agent.server,
+        pane: agent.pane,
+      });
       const confirmed = deps.fzf(
         [
           "--ansi",

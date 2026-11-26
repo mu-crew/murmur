@@ -2,8 +2,9 @@ import { hasWarmSocket } from "./channel.js";
 import { type InputRunner, sendEscape, sendPrompt } from "./dash-input.js";
 import type { NodeIdentity } from "./identity.js";
 import { parseJumpTarget } from "./jump-target.js";
+import type { LocalOptions } from "./local.js";
 import { type Mux, tmux } from "./mux.js";
-import { type Status, status } from "./status.js";
+import { localStatus, type Status } from "./status.js";
 import type { Store } from "./store.js";
 import type { PaneView } from "./view.js";
 
@@ -13,6 +14,7 @@ export type ResolveResult =
 
 export type SteerDeps = {
   mux?: Mux;
+  rex?: LocalOptions["rex"];
   warm?: (target: string) => boolean;
   run?: InputRunner;
 };
@@ -22,16 +24,18 @@ export type SteerDeps = {
  * on host_id + server + pane (a pane id is unique only per tmux server, and two
  * machines routinely hold the same `%1`). Shared by `jump`, `prompt` and `stop`.
  */
-export function resolveAgent(
+export async function resolveAgent(
   store: Store,
   identity: NodeIdentity,
   token: string,
-  deps: Pick<SteerDeps, "mux" | "warm"> = {},
-): ResolveResult {
+  deps: Pick<SteerDeps, "mux" | "warm" | "rex"> = {},
+): Promise<ResolveResult> {
   const address = parseJumpTarget(token);
   if (!address) return { ok: false, reason: "invalid_target", message: "not a valid jump target." };
-  const latest = status(store, identity, Date.now(), deps.warm ?? hasWarmSocket, undefined, {
+  const latest = await localStatus(store, identity, Date.now(), {
     mux: deps.mux ?? tmux,
+    warm: deps.warm ?? hasWarmSocket,
+    rex: deps.rex,
   });
   const agent = latest.panes.find(
     (candidate) =>
@@ -60,7 +64,7 @@ async function steer(
   deps: SteerDeps,
   send: (agent: PaneView) => ReturnType<typeof sendPrompt>,
 ): Promise<SteerResult> {
-  const found = resolveAgent(store, identity, token, deps);
+  const found = await resolveAgent(store, identity, token, deps);
   if (!found.ok) return found;
   const result = await send(found.agent);
   return result.ok

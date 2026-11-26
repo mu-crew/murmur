@@ -70,7 +70,8 @@ export function jumpCommand(store: Store, options: JumpCommandOptions): JumpComm
   const template = currentJumpCommand(peer.jump_command, peer.target);
   // Refused, not rendered: the printed command would run and land on the same
   // pane id on the remote's default server.
-  if (!supportsServer(template, pane.server)) {
+  const server = pane.server;
+  if (server.kind === "rex" || !supportsServer(template, server)) {
     process.stderr.write(
       `${unsupportedServerMessage(peer, peer.target, pane.agent.agent_name, pane.pane)}\n`,
     );
@@ -82,7 +83,7 @@ export function jumpCommand(store: Store, options: JumpCommandOptions): JumpComm
     agent: pane.agent.agent_name,
     pane: pane.pane,
     server: pane.server,
-    command: renderJumpCommand(template, pane),
+    command: renderJumpCommand(template, { server, pane: pane.pane }),
   };
 }
 

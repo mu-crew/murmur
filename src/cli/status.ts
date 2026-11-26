@@ -1,7 +1,7 @@
 import type { Command } from "commander";
 import { ssh } from "../channel.js";
 import { COLLECT_FLOOR_MS } from "../collector.js";
-import { status, statusJson, statusWithCollect, tmuxStatus } from "../status.js";
+import { localStatus, statusJson, statusWithCollect, tmuxStatus } from "../status.js";
 import { openStore } from "../store.js";
 import { requireIdentity } from "./identity-guard.js";
 
@@ -12,7 +12,7 @@ export function registerStatus(program: Command): void {
     .option("--json", "print JSON")
     .option(
       "--cached",
-      "read the store only; never reach a peer (a caller refreshes with `collect`)",
+      "read this node's panes and the cached peers; never reach a peer (a caller refreshes with `collect`)",
     )
     .action(async (options: { json?: boolean; cached?: boolean }) => {
       const identity = requireIdentity();
@@ -30,7 +30,7 @@ export function registerStatus(program: Command): void {
           ? // No warm-socket probe either: `ssh -O check` is an ssh exec. So
             // `needs_session` here means "last attempt was refused on auth" and
             // may stay true while a warm socket exists; `murmur jump` re-probes.
-            status(store, identity, undefined, undefined, undefined, { cached: true })
+            await localStatus(store, identity, Date.now(), { cached: true })
           : await statusWithCollect(store, identity, Date.now(), ssh, {
               floorMs: COLLECT_FLOOR_MS,
             });

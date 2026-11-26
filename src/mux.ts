@@ -1,42 +1,23 @@
 import { execFileSync } from "node:child_process";
-import { readFileSync, realpathSync } from "node:fs";
+import { readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { DASH_PANE_OPTION, JUMP_CLIENT_OPTION } from "./goto.js";
 import { helperPath } from "./helper-path.js";
-import {
-  asPaneId,
-  asSessionId,
-  asWindowId,
-  type PaneId,
-  type SessionId,
-  type WindowId,
-} from "./ids.js";
+import { asPaneId, asWindowId, type PaneId, type WindowId } from "./ids.js";
 import { CLIENT_IDENTITY_FORMAT } from "./routing.js";
 import { splitTmuxFields, tmuxFormat, tmuxText } from "./tmux-format.js";
-import type { Location, TmuxServer } from "./types.js";
-import { RENDER_PRIORITY, type RenderState, type StateCounts } from "./view.js";
+import { serverKey, type TmuxSocket } from "./types.js";
 
-/**
- * Everything one pi event needs from tmux, read in one call: where this pane is
- * now, the publish targets around it, and whether the human is looking at it.
- */
-export type CurrentView = {
-  location: Location;
-  targets: PublishTargets;
-  focused: boolean;
-};
-
-export type PublishTargets = {
-  session: SessionId | null;
-  windowPanes: PaneId[];
-  sessionPanes: PaneId[];
-};
-
-export type PublishPlan = {
-  panes: { pane: PaneId; state: RenderState | null; label: string | null }[];
-  window: { state: RenderState | null; hasAgent: boolean };
-  session: { session: SessionId; state: RenderState | null } | null;
-  counts: { totals: StateCounts; crew: number };
+/** What `doctor` asks a tmux server about itself. */
+export type ServerInfo = {
+  /** `#{vtmux_version}`: null on stock tmux, which has no such variable. */
+  vtmux: string | null;
+  /** `#{version}`, as the server reports it. */
+  version: string | null;
+  /** The `vtmux-program-status` server option (`on`/`off`), null where unknown. */
+  programStatus: string | null;
+  /** The `vtmux-program-resume` server option, likewise. */
+  programResume: string | null;
 };
 
 // Up to this many candidate panes, `localPaneProcesses` runs `ps` once per pid.
@@ -49,12 +30,7 @@ export type LocalPaneProcess = {
 };
 
 export interface Mux {
-  currentWindow(): Location | null;
-  // `currentWindow` plus `publishTargets` plus the focus question in ONE tmux
-  // call, for the pane in $TMUX_PANE. Null when not in a pane or when tmux
-  // cannot answer; the caller then asks the three questions separately.
-  currentView(): CurrentView | null;
-  livePanes(server?: TmuxServer): Set<PaneId> | null;
+  livePanes(server?: TmuxSocket): Set<PaneId> | null;
   /**
    * Local panes with their argv. `commands`, when given, keeps only panes whose
    * foreground command is in the set, so no process is read for a pane that
@@ -62,39 +38,31 @@ export interface Mux {
    */
   localPaneProcesses(commands?: ReadonlySet<string>): LocalPaneProcess[];
   /**
-   * Every pane on `server` whose pane option `option` is set, with its value.
-   * Best effort, for presentation: a failed read is an empty map.
+   * Every tmux server this user runs on this host, as far as a socket in the
+   * conventional directory (or `$TMUX`) says. A stale socket is listed too:
+   * asking it is how a dead server reads as an empty one.
    */
-  paneOptionValues(option: string, server?: TmuxServer): Map<PaneId, string>;
-  // Sets murmur's aggregate WINDOW state. Status bars and pickers read this.
-  setWindowState(
-    window: WindowId,
-    state: RenderState | null,
-    server?: TmuxServer,
-    hasAgent?: boolean,
-  ): void;
-  // Sets one pane's own state for pane-border formats. It must never be derived
-  // from the window option: a shell beside an agent would inherit the agent.
-  setPaneState(pane: PaneId, state: RenderState | null, server?: TmuxServer): void;
-  // Sets the owner-reported agent label on that pane, without window inheritance.
-  setPaneLabel(pane: PaneId, label: string | null, server?: TmuxServer): void;
-  // One read for a publish: the window's panes, its session, and every pane in
-  // that session. Null is an unknown answer, not an empty window. A null
-  // `session` means tmux named no session, so its option is left alone.
-  publishTargets(window: WindowId, server?: TmuxServer): PublishTargets | null;
-  // Writes a whole publish -- every pane, the window, the session and the
-  // server-global `@murmur_count_*` pill options -- as one chained tmux call
-  // that ends in a single status repaint.
-  publish(window: WindowId, plan: PublishPlan, server?: TmuxServer): void;
+  servers(): TmuxSocket[];
+  /**
+   * ONE `list-panes -a -F` on `server`, one row of `fields` per pane: `[]`
+   * when no server is running there (a definite answer), null when it could
+   * not be asked. The single read a collect makes per server.
+   */
+  listPanes(fields: readonly string[], server: TmuxSocket): string[][] | null;
+  /**
+   * Server-wide facts for `doctor`: the vtmux version (null on stock tmux)
+   * and its two OSC options. Null when the server cannot be asked.
+   */
+  serverInfo(server: TmuxSocket): ServerInfo | null;
+  /** Run tmux commands on `server` as one chained call. */
+  run(commands: readonly string[][], server: TmuxSocket): void;
   // Takes the PANE, which is the address, so one call resolves session, window
   // and pane together. Reports whether the attach happened: runTmux swallows
   // failures into null, and a silently failed jump looked exactly like "enter
   // did nothing" -- the symptom the remote probe exists to prevent, reproduced
   // locally.
-  attach(pane: PaneId, server?: TmuxServer, client?: string): boolean;
-  windowForPane(pane: PaneId, server?: TmuxServer): WindowId | null;
-  panesInWindow(window: WindowId, server?: TmuxServer): PaneId[] | null;
-  capture(pane: PaneId, lines?: number, server?: TmuxServer): string | null;
+  attach(pane: PaneId, server?: TmuxSocket, client?: string): boolean;
+  capture(pane: PaneId, lines?: number, server?: TmuxSocket): string | null;
   // --- remote-jump session seam -------------------------------------------
   // A remote attach lives in its own local session rather than a window, so it
   // can be full-screen (no local status bar) and prefix-free (no nested ^b).
@@ -151,7 +119,7 @@ export interface Mux {
  * `undefined` is the ambient server, for questions about wherever this process
  * is running: its own pane, its client, the dash pane it registered.
  */
-export function tmuxArgs(server: TmuxServer | undefined, args: string[]): string[] {
+export function tmuxArgs(server: TmuxSocket | undefined, args: string[]): string[] {
   if (!server) return args;
   if (server.kind === "label") return ["-L", server.value, ...args];
   if (server.kind === "path") return ["-S", server.value, ...args];
@@ -168,37 +136,10 @@ export function conventionalTmuxDirectory(): string {
 export function deriveTmuxServer(
   socketPath: string,
   conventionalDirectory = conventionalTmuxDirectory(),
-): TmuxServer {
+): TmuxSocket {
   if (dirname(socketPath) !== conventionalDirectory) return { kind: "path", value: socketPath };
   const label = basename(socketPath);
   return label === "default" ? { kind: "default" } : { kind: "label", value: label };
-}
-
-/** One pane as its server describes it: the server's pid, the pane's root pid, the socket. */
-export type PaneAddress = { server_pid: number; root_pid: number; socket: string };
-
-/**
- * Where pane `pane` of `server` lives, from one `display-message`, or null when
- * that server has no such pane or cannot answer. The pair of pids is exactly
- * what a hook in that pane records, so it names the pane's inbox (`inboxKey`).
- */
-export function paneAddress(pane: string, server: TmuxServer): PaneAddress | null {
-  const out = runTmux(
-    [
-      "display-message",
-      "-p",
-      "-t",
-      pane,
-      tmuxFormat("#{pid}", "#{pane_pid}", tmuxText("socket_path")),
-    ],
-    server,
-  );
-  if (out === null) return null;
-  const [serverPid, rootPid, socket] = splitTmuxFields(out);
-  const server_pid = Number(serverPid);
-  const root_pid = Number(rootPid);
-  if (!(server_pid > 0) || !(root_pid > 0) || !socket) return null;
-  return { server_pid, root_pid, socket };
 }
 
 /**
@@ -214,7 +155,7 @@ export function tmuxServerAbsent(stderr: string): boolean {
   );
 }
 
-function runTmux(args: string[], server?: TmuxServer): string | null {
+function runTmux(args: string[], server?: TmuxSocket): string | null {
   try {
     return execFileSync(helperPath("tmux"), tmuxArgs(server, args), {
       encoding: "utf8",
@@ -244,7 +185,7 @@ const CHAIN_LIMIT = 8000;
  * with no attached client it fails and aborts whatever follows it. A `-q` set
  * on a pane that vanished does not abort the chain.
  */
-export function chainedTmuxCalls(commands: string[][]): string[][] {
+export function chainedTmuxCalls(commands: readonly (readonly string[])[]): string[][] {
   const calls: string[][] = [];
   let call: string[] = [];
   let size = 0;
@@ -261,105 +202,6 @@ export function chainedTmuxCalls(commands: string[][]): string[][] {
   }
   calls.push(call.slice(0, -1));
   return calls;
-}
-
-function windowStateCommands(
-  window: WindowId,
-  state: RenderState | null,
-  hasAgent: boolean,
-): string[][] {
-  return [
-    state === null
-      ? ["set-window-option", "-qu", "-t", window, "@murmur_window_state"]
-      : ["set-window-option", "-q", "-t", window, "@murmur_window_state", tmuxAgentState(state)],
-    hasAgent
-      ? ["set-window-option", "-q", "-t", window, "@murmur_window_has_agent", "1"]
-      : ["set-window-option", "-qu", "-t", window, "@murmur_window_has_agent"],
-  ];
-}
-
-function paneStateCommands(pane: PaneId, state: RenderState | null): string[][] {
-  if (state === null) {
-    return [
-      ["set-option", "-pqu", "-t", pane, "@murmur_pane_state"],
-      ["set-option", "-pqu", "-t", pane, "@murmur_pane_since"],
-    ];
-  }
-  const token = tmuxAgentState(state);
-  return [
-    [
-      "if-shell",
-      "-F",
-      "-t",
-      pane,
-      `#{!=:#{@murmur_pane_state},${token}}`,
-      `set-option -pq -t ${pane} @murmur_pane_since ${Date.now()}`,
-      "",
-    ],
-    ["set-option", "-pq", "-t", pane, "@murmur_pane_state", token],
-  ];
-}
-
-function paneLabelCommand(pane: PaneId, label: string | null): string[] {
-  return label === null
-    ? ["set-option", "-pqu", "-t", pane, "@murmur_pane_label"]
-    : ["set-option", "-pq", "-t", pane, "@murmur_pane_label", label];
-}
-
-function sessionStateCommand(session: SessionId, state: RenderState | null): string[] {
-  return state === null
-    ? ["set-option", "-qu", "-t", session, "@murmur_session_state"]
-    : ["set-option", "-q", "-t", session, "@murmur_session_state", tmuxAgentState(state)];
-}
-
-function stateCountCommands({ totals, crew }: PublishPlan["counts"]): string[][] {
-  // Unset at zero, so a format can test presence: `#{?#{@murmur_count_blocked},...}`.
-  const set = (name: string, count: number): string[] =>
-    count > 0
-      ? ["set-option", "-gq", `@murmur_count_${name}`, String(count)]
-      : ["set-option", "-gqu", `@murmur_count_${name}`];
-  return [
-    ...RENDER_PRIORITY.map((state) => set(tmuxAgentState(state), totals[state])),
-    set("crew", crew),
-  ];
-}
-
-/** Every write of one publish, in order, before chaining. */
-export function publishCommands(window: WindowId, plan: PublishPlan): string[][] {
-  return [
-    ...plan.panes.flatMap(({ pane, state, label }) => [
-      ...paneStateCommands(pane, state),
-      paneLabelCommand(pane, label),
-    ]),
-    ...windowStateCommands(window, plan.window.state, plan.window.hasAgent),
-    ...(plan.session ? [sessionStateCommand(plan.session.session, plan.session.state)] : []),
-    ...stateCountCommands(plan.counts),
-  ];
-}
-
-/**
- * The window name worth RECORDING, given tmux's own answer and whether tmux is
- * renaming that window itself.
- *
- * Null while `automatic-rename` is on -- tmux's DEFAULT -- because the name is
- * then just the foreground process: the picker's `agent` column showed `Python`,
- * `node` and `zsh` for real agents.
- *
- * A name nobody chose is not a name, and recording it as one is worse than
- * recording nothing, because `agentLabel` prefers the window over the session,
- * so a process name shadowed `hacking/murmur` -- the string the reader searches
- * on. Dropped at RECORDING rather than at render, so every surface and every
- * peer agrees on what counts as a name.
- *
- * Split out of `currentWindow` to be testable: that method shells out to a real
- * tmux server, leaving the format string as the only thing a test could assert.
- */
-export function chosenWindowName(
-  name: string | undefined,
-  autoRename: string | undefined,
-): string | null {
-  if (autoRename === "1") return null;
-  return name || null;
 }
 
 /**
@@ -408,111 +250,7 @@ export function procArgv(pid: string, procRoot = "/proc"): string | null {
   return argv || null;
 }
 
-export function tmuxAgentState(state: RenderState): string {
-  // tmux formats spell active work "working"; murmur's model spells it
-  // "running".
-  return state === "running" ? "working" : state;
-}
-
 export const tmux: Mux = {
-  currentWindow() {
-    // $TMUX_PANE is the only trustworthy signal that we are inside a pane, and
-    // tmux sets it for every process in one.
-    //
-    // Asking tmux does not work: `display-message` answers from any process on a
-    // machine with a running server, reporting whichever pane that server
-    // considers active. A pi started outside tmux -- bare ssh, a plain terminal,
-    // cron -- would record itself in some unrelated agent's pane and overwrite
-    // that agent's state. Falling back to `display-message` was exactly that bug.
-    const raw = process.env.TMUX_PANE;
-    if (!raw) return null;
-    const pane = asPaneId(raw);
-
-    // One call for ids and names together. Names travel with every snapshot row,
-    // because a reader cannot resolve a remote id against its own tmux.
-    const fields = runTmux([
-      "display-message",
-      "-t",
-      pane,
-      "-p",
-      tmuxFormat(
-        "#{session_id}",
-        "#{window_id}",
-        tmuxText("session_name"),
-        tmuxText("window_name"),
-        "#{?automatic-rename,1,0}",
-        tmuxText("socket_path"),
-      ),
-    ]);
-    const [session, window, sessionName, windowName, autoRename, socketPath] =
-      fields === null ? [] : splitTmuxFields(fields);
-    if (!session || !window || !socketPath) return null;
-    return {
-      server: deriveTmuxServer(socketPath),
-      session: asSessionId(session),
-      window: asWindowId(window),
-      pane,
-      session_name: sessionName || null,
-      window_name: chosenWindowName(windowName, autoRename),
-    };
-  },
-
-  currentView() {
-    const unique = <T>(items: T[]): T[] => [...new Set(items)];
-    const raw = process.env.TMUX_PANE;
-    if (!raw) return null;
-    const pane = asPaneId(raw);
-    // `list-panes -s` on the pane lists its whole session, one row per pane, and
-    // each row carries its window's and session's fields. The row for our own
-    // pane supplies the location and the focus answer; the rest are the targets.
-    const out = runTmux([
-      "list-panes",
-      "-s",
-      "-t",
-      pane,
-      "-F",
-      tmuxFormat(
-        "#{pane_id}",
-        "#{session_id}",
-        "#{window_id}",
-        tmuxText("session_name"),
-        tmuxText("window_name"),
-        "#{?automatic-rename,1,0}",
-        tmuxText("socket_path"),
-        "#{&&:#{pane_active},#{&&:#{window_active},#{session_attached}}}",
-      ),
-    ]);
-    if (out === null) return null;
-    const rows = out.split("\n").filter(Boolean).map(splitTmuxFields);
-    // A window linked twice into one session lists our pane twice, once per link,
-    // and only the active link says focused. display-message resolves the active
-    // link, so prefer that row; rows that disagree on where the pane lives are
-    // ambiguous, and null sends the caller back to the separate reads.
-    const ours = rows.filter((row) => row[0] === pane);
-    if (ours.some((row) => row[1] !== ours[0]?.[1] || row[2] !== ours[0]?.[2])) return null;
-    const mine = ours.find((row) => row[7] === "1") ?? ours[0];
-    const [, session, window, sessionName, windowName, autoRename, socketPath, active] = mine ?? [];
-    if (!session || !window || !socketPath) return null;
-    return {
-      location: {
-        server: deriveTmuxServer(socketPath),
-        session: asSessionId(session),
-        window: asWindowId(window),
-        pane,
-        session_name: sessionName || null,
-        window_name: chosenWindowName(windowName, autoRename),
-      },
-      targets: {
-        session: asSessionId(session),
-        windowPanes: unique(
-          rows.flatMap((row) => (row[0] && row[2] === window ? [asPaneId(row[0])] : [])),
-        ),
-        sessionPanes: unique(rows.flatMap((row) => (row[0] ? [asPaneId(row[0])] : []))),
-      },
-      focused: active === "1",
-    };
-  },
-
   // Which of this host's PANES still exist: the only liveness question tmux is
   // asked, and the one matching how an agent is addressed, since a pane keeps its
   // id across windows while a recorded window id can be gone with the agent
@@ -524,7 +262,7 @@ export const tmux: Mux = {
   // A server that is not running IS an answer: it has no panes. Treating it as
   // null left a host whose tmux died (reboot, kill-server) exporting its last
   // panes forever, because reconciliation never had evidence to reap them.
-  livePanes(server?: TmuxServer) {
+  livePanes(server?: TmuxSocket) {
     let out: string;
     try {
       out = execFileSync(
@@ -543,19 +281,83 @@ export const tmux: Mux = {
     return new Set(out.split("\n").filter(Boolean).map(asPaneId));
   },
 
-  // One list-panes for the whole server rather than a show-options per pane:
-  // the format expands to the empty string on a pane without the option.
-  paneOptionValues(option: string, server?: TmuxServer) {
-    const values = new Map<PaneId, string>();
+  servers() {
+    const found = new Map<string, TmuxSocket>();
+    let directory: string | null = null;
+    try {
+      directory = conventionalTmuxDirectory();
+    } catch {
+      // No tmux directory at all: no server has ever run here.
+    }
+    if (directory !== null) {
+      let names: string[] = [];
+      try {
+        names = readdirSync(directory);
+      } catch {
+        names = [];
+      }
+      for (const name of names.sort()) {
+        const path = join(directory, name);
+        try {
+          if (!statSync(path).isSocket()) continue;
+        } catch {
+          continue;
+        }
+        const server = deriveTmuxServer(path, directory);
+        found.set(serverKey(server), server);
+      }
+    }
+    // The server this process runs inside, wherever its socket lives: a `-S`
+    // server outside the conventional directory is found no other way.
+    const own = process.env.TMUX?.split(",")[0];
+    if (own) {
+      try {
+        const server = deriveTmuxServer(own, directory ?? undefined);
+        found.set(serverKey(server), server);
+      } catch {
+        // An unreadable $TMUX names nothing.
+      }
+    }
+    return [...found.values()];
+  },
+
+  listPanes(fields, server) {
+    let out: string;
+    try {
+      out = execFileSync(
+        helperPath("tmux"),
+        tmuxArgs(server, ["list-panes", "-a", "-F", tmuxFormat(...fields)]),
+        { encoding: "utf8", timeout: 3000, stdio: ["ignore", "pipe", "pipe"] },
+      );
+    } catch (error) {
+      const stderr = String((error as { stderr?: unknown }).stderr ?? "");
+      return tmuxServerAbsent(stderr) ? [] : null;
+    }
+    return out
+      .split("\n")
+      .filter((line) => line !== "")
+      .map(splitTmuxFields);
+  },
+
+  serverInfo(server) {
     const out = runTmux(
-      ["list-panes", "-a", "-F", tmuxFormat("#{pane_id}", tmuxText(option))],
+      ["display-message", "-p", tmuxFormat("#{vtmux_version}", "#{version}")],
       server,
     );
-    for (const line of out?.split("\n") ?? []) {
-      const [pane, value] = splitTmuxFields(line);
-      if (pane && value) values.set(asPaneId(pane), value);
-    }
-    return values;
+    if (out === null) return null;
+    const [vtmux, version] = splitTmuxFields(out);
+    // `-q`: stock tmux has no such option, and says so on stderr.
+    const option = (name: string) => runTmux(["show-options", "-sqv", name], server) || null;
+    return {
+      vtmux: vtmux || null,
+      version: version || null,
+      programStatus: vtmux ? option("vtmux-program-status") : null,
+      programResume: vtmux ? option("vtmux-program-resume") : null,
+    };
+  },
+
+  run(commands, server) {
+    for (const call of chainedTmuxCalls(commands)) runTmux(call, server);
   },
 
   // A separate best-effort read for presentation. Unlike livePanes(), failure
@@ -640,46 +442,7 @@ export const tmux: Mux = {
     });
   },
 
-  setWindowState(window, state, server?: TmuxServer, hasAgent = state !== null) {
-    for (const command of windowStateCommands(window, state, hasAgent)) runTmux(command, server);
-    runTmux(["refresh-client", "-S"], server);
-  },
-
-  setPaneState(pane, state, server?: TmuxServer) {
-    for (const command of paneStateCommands(pane, state)) runTmux(command, server);
-  },
-
-  setPaneLabel(pane, label, server?: TmuxServer) {
-    runTmux(paneLabelCommand(pane, label), server);
-  },
-
-  publishTargets(window, server?: TmuxServer) {
-    const out = runTmux(
-      [
-        "list-panes",
-        "-s",
-        "-t",
-        window,
-        "-F",
-        tmuxFormat("#{session_id}", "#{window_id}", "#{pane_id}"),
-      ],
-      server,
-    );
-    if (out === null) return null;
-    const rows = out.split("\n").filter(Boolean).map(splitTmuxFields);
-    const session = rows[0]?.[0];
-    return {
-      session: session ? asSessionId(session) : null,
-      windowPanes: rows.flatMap(([, id, pane]) => (pane && id === window ? [asPaneId(pane)] : [])),
-      sessionPanes: rows.flatMap(([, , pane]) => (pane ? [asPaneId(pane)] : [])),
-    };
-  },
-
-  publish(window, plan, server?: TmuxServer) {
-    for (const call of chainedTmuxCalls(publishCommands(window, plan))) runTmux(call, server);
-  },
-
-  attach(pane, server?: TmuxServer, client?: string) {
+  attach(pane, server?: TmuxSocket, client?: string) {
     // ONE call, targeting the pane. tmux resolves a bare `%N` to its session,
     // window and pane together, which is the whole reason this takes the
     // address rather than a session and window.
@@ -707,13 +470,6 @@ export const tmux: Mux = {
       ? ["switch-client", "-c", client, "-t", pane]
       : ["switch-client", "-t", pane];
     return runTmux(args, server) !== null;
-  },
-
-  // Sibling panes, for recomputing each pane and the window aggregate. Null is
-  // an unknown answer, not an empty window.
-  panesInWindow(window, server?: TmuxServer) {
-    const out = runTmux(["list-panes", "-t", window, "-F", "#{pane_id}"], server);
-    return out === null ? null : out.split("\n").filter(Boolean).map(asPaneId);
   },
 
   // Which client to send home when the remote attach exits. `switch-client`
@@ -864,18 +620,11 @@ export const tmux: Mux = {
     return asPaneId(out);
   },
 
-  // The window a pane belongs to, for a pane murmur holds no row for: clearing a
-  // badge is a tmux operation and does not require owning the pane.
-  windowForPane(pane, server?: TmuxServer) {
-    const out = runTmux(["display-message", "-t", pane, "-p", "#{window_id}"], server);
-    return out ? asWindowId(out) : null;
-  },
-
   // `-e` because the pane's colours are the point of the preview: without it
   // tmux discards every attribute and nothing downstream can recover which line
   // was the failing one. What arrives is arbitrary terminal bytes, which is why
   // `src/ansi.ts` exists -- see `glance` for the sanitation that follows.
-  capture(pane, lines, server?: TmuxServer) {
+  capture(pane, lines, server?: TmuxSocket) {
     const args = ["capture-pane", "-p", "-e", "-t", pane];
     if (lines !== undefined) args.push("-S", `-${lines}`);
     return runTmux(args, server);

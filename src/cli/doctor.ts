@@ -12,14 +12,15 @@ import {
   hubCandidates,
   isNameResolutionFailure,
   type LocalNode,
+  type MuxCheck,
   reachableFromHere,
   type SurveyResult,
   surveyPeer,
   type Topology,
   type TopologyNode,
 } from "../doctor.js";
-import { checkHooks } from "../hook-install.js";
-import { INBOX_PANE_CAP, inboxBacklog } from "../inbox.js";
+import { type Mux, tmux } from "../mux.js";
+import { readRex } from "../rex.js";
 import { openStore } from "../store.js";
 import type { PeerRecord } from "../types.js";
 import { requireIdentity } from "./identity-guard.js";
@@ -121,15 +122,14 @@ const GROUP: Record<FindingKind, { heading: string; because: string | null }> = 
     heading: "Incompatible versions",
     because: "State will not sync with these until murmur versions match.",
   },
-  "hook-drift": {
-    heading: "Hook drift",
+  "stock-tmux": {
+    heading: "Stock tmux",
     because:
-      "murmur's hook entries for these harnesses are not what `murmur init` writes, so events go missing.",
+      "murmur 3 reads pane state from OSC 7501, which stock tmux drops: these servers' agents are invisible. Run vtmux, or stay on murmur 2.x.",
   },
-  "reported-twice": {
-    heading: "Reported twice",
-    because:
-      "These harnesses run murmur from a hook and from an older `notify` line, so each finished turn is reported twice.",
+  "program-status-off": {
+    heading: "Program status off",
+    because: "These vtmux servers keep no OSC 7501 records, so murmur sees none of their panes.",
   },
   island: {
     heading: "Not visible to the fleet",
@@ -157,14 +157,13 @@ const GROUP: Record<FindingKind, { heading: string; because: string | null }> = 
     heading: "Could not be surveyed",
     because: "Normal for a sleeping laptop or a box switched off.",
   },
-  "hooks-absent": {
-    heading: "Harnesses without murmur hooks",
-    because: "Set up on this node, but their panes report nothing to murmur.",
+  "program-resume-off": {
+    heading: "Program resume off",
+    because: "No OSC 7577 records: panes carry no resume command for mural or a session restore.",
   },
-  "inbox-full": {
-    heading: "Undrained pane inboxes",
-    because:
-      "A hook harness's events wait here until a reader drains them; past the cap its hook stops writing.",
+  "no-local-mux": {
+    heading: "No local multiplexer",
+    because: "Nothing here for murmur to read; peers still work.",
   },
 };
 
@@ -198,7 +197,7 @@ export function render(
   // and the reader cannot discount the findings without knowing which.
   //
   // With no peers there is no survey to bound anything, but this node's own
-  // findings (its hook config, its inboxes) still stand, so they are not lost
+  // findings (its multiplexer) still stand, so they are not lost
   // behind the early return.
   if (surveys.length === 0 && findings.length === 0) {
     return "No peers configured, so there is nothing to survey.\n";
@@ -401,6 +400,22 @@ export function exitCodeFor(findings: readonly Finding[]): number {
   return findings.some((finding) => finding.severity === "problem") ? 1 : 0;
 }
 
+/** A tmux server as a person names it on a command line. */
+function serverName(server: ReturnType<Mux["servers"]>[number]): string {
+  if (server.kind === "default") return "default";
+  return server.kind === "label" ? `-L ${server.value}` : `-S ${server.value}`;
+}
+
+/** Ask every local tmux server what it supports, and whether Rex answers. */
+export async function checkMux(mux: Mux = tmux, rex = readRex): Promise<MuxCheck> {
+  const tmuxServers = mux.servers().map((server) => ({
+    server: serverName(server),
+    info: mux.serverInfo(server),
+  }));
+  const rexRead = await rex().catch(() => null);
+  return { tmux: tmuxServers, rex: rexRead !== null };
+}
+
 export function registerDoctor(program: Command): void {
   program
     .command("doctor")
@@ -409,7 +424,7 @@ export function registerDoctor(program: Command): void {
     // configuration -- a far larger claim than a diagnostic, and one that cuts
     // against membership being local. The commands are printed instead.
     .description(
-      "Survey peers over ssh and report what only a fleet-wide view can see, plus this node's hook entries",
+      "Check this node's multiplexer for OSC 7501, then survey peers over ssh for what only a fleet-wide view can see",
     )
     .option("--json", "print the finding list")
     // Opt in, because it costs O(N^2) remote dials where the survey costs O(N).
@@ -432,9 +447,7 @@ export function registerDoctor(program: Command): void {
           host_id: identity.host_id,
           display_name: identity.display_name,
           peers,
-          inbox: inboxBacklog(),
-          inboxCap: INBOX_PANE_CAP,
-          hooks: checkHooks(),
+          mux: await checkMux(),
         };
         const findings = diagnose(local, surveys);
 
