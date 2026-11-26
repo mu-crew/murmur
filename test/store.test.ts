@@ -7,6 +7,7 @@ import Database from "better-sqlite3";
 import { afterEach, beforeEach, expect, test } from "vitest";
 import { asPaneId, asSessionId, asWindowId, type PaneId } from "../src/ids.js";
 import { dbPath } from "../src/paths.js";
+import { status } from "../src/status.js";
 import { openStore, type Store, StoreTooNewError } from "../src/store.js";
 import { type AgentMeta, type Location, SNAPSHOT_VERSION } from "../src/types.js";
 import { builtArtifact } from "./helpers/built.js";
@@ -1381,4 +1382,57 @@ test("setRuntime with no fields at all is a no-op, not malformed SQL", () => {
   const id = claimedId(s);
 
   expect(s.setRuntime({ agent_id: id, owner_pid: process.pid })).toBe(false);
+});
+
+test("openStore({ readonly: true }) reads an existing store and refuses writes", () => {
+  const s = store();
+  s.addPeer("dev", "dev.example");
+  s.claimAgent({ location: location(), owner_pid: 100, meta: meta() });
+  s.close();
+
+  const reader = openStore({ readonly: true });
+  stores.push(reader);
+  expect(reader.peers().map((peer) => peer.name)).toEqual(["dev"]);
+  expect(reader.localPanes()).toHaveLength(1);
+  expect(() => reader.addPeer("other", "other.example")).toThrow(/readonly/i);
+  expect(reader.peers()).toHaveLength(1);
+});
+
+test("a readonly open of a missing store throws and creates nothing", () => {
+  expect(() => openStore({ readonly: true })).toThrow();
+  expect(existsSync(dbPath())).toBe(false);
+});
+
+test("a readonly open of a newer murmur's store throws StoreTooNewError", () => {
+  store().close();
+  const database = new Database(dbPath());
+  const newer = (database.pragma("user_version", { simple: true }) as number) + 1;
+  database.pragma(`user_version = ${newer}`);
+  database.prepare("UPDATE compat SET compatible_since = ?").run(newer);
+  database.close();
+
+  expect(() => openStore({ readonly: true })).toThrow(StoreTooNewError);
+});
+
+test("a readonly open of an older schema throws instead of migrating", () => {
+  store().close();
+  const database = new Database(dbPath());
+  database.pragma("user_version = 1");
+  database.close();
+
+  expect(() => openStore({ readonly: true })).toThrow(/read-write/);
+  const after = new Database(dbPath(), { readonly: true });
+  expect(after.pragma("user_version", { simple: true })).toBe(1);
+  after.close();
+});
+
+test("status() reads through a readonly store", () => {
+  const s = store();
+  s.claimAgent({ location: location(), owner_pid: 100, meta: meta() });
+  s.close();
+
+  const reader = openStore({ readonly: true });
+  stores.push(reader);
+  const view = status(reader, { host_id: "HOST", display_name: "host" }, Date.now(), () => false);
+  expect(view.panes.length).toBe(1);
 });

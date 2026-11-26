@@ -838,7 +838,7 @@ function processNesting(pid: number): NestCheck {
 }
 
 /**
- * Open the store. Takes no arguments and mints no identity.
+ * Open the store (`{ readonly: true }` for a read-only open) and mint no identity.
  *
  * `openStore` deliberately never mints an `identity.json`: identity is created
  * only by `murmur init`, so a read path — a status-bar tick, a focus hook —
@@ -846,8 +846,38 @@ function processNesting(pid: number): NestCheck {
  * migration, not minting: when it creates the store for the first time it
  * copies a 1.x node's existing `identity.json` across (`src/legacy-state.ts`).
  */
-export function openStore(): Store {
+export function openStore(options: { readonly?: boolean } = {}): Store {
   const path = dbPath();
+  const database =
+    options.readonly === true ? openReadonlyDatabase(path) : openWritableDatabase(path);
+  return buildStore(database);
+}
+
+/**
+ * Open an existing store without writing to it: no directory creation, no reset
+ * lock, no migration, no journal-mode change. A missing file throws (SQLite's
+ * cannot-open error), a too-new store throws `StoreTooNewError`, and a store at
+ * an older schema throws too, since only a read-write open may upgrade it.
+ * Write methods on the result fail with SQLite's "readonly database" error.
+ */
+function openReadonlyDatabase(path: string): Database {
+  const opened = openDatabase(path, { fileMustExist: true, readonly: true });
+  try {
+    opened.pragma("busy_timeout = 5000");
+    const version = (opened.pragma("user_version", { simple: true }) as number) ?? 0;
+    if (usable(opened, version)) return opened;
+    if (version > SCHEMA_USER_VERSION) throw new StoreTooNewError(path, version);
+    throw new Error(
+      `${path} is at schema ${version}, this build needs ${SCHEMA_USER_VERSION}; ` +
+        "open it read-write once (any murmur command) to upgrade it.",
+    );
+  } catch (error) {
+    opened.close();
+    throw error;
+  }
+}
+
+function openWritableDatabase(path: string): Database {
   ensureDir(dirname(path));
 
   // Salvage, decide and delete under ONE lock, because deleting the database
@@ -1002,7 +1032,10 @@ export function openStore(): Store {
     opened.pragma("wal_checkpoint(TRUNCATE)");
     return opened;
   });
+  return database;
+}
 
+function buildStore(database: Database): Store {
   const selectAgentByPane = database.prepare(
     "SELECT * FROM agents WHERE server_kind = ? AND server_value = ? AND pane = ?",
   );
