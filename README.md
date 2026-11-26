@@ -86,10 +86,12 @@ Needs [vtmux](https://github.com/martintrojer/vtmux) **>= 3.8-rc3** (or Rex),
 `fzf`, and Node 22.14+. Multi-machine: ssh access, murmur on each node.
 
 **Vanilla tmux 3.8:** stock tmux drops OSC 7501 and OSC 7577, so murmur 3.0
-sees none of your local panes (remote peers running vtmux or Rex still appear,
-and jumping to them works). If you stay on stock tmux, use murmur 2.x, which is
-maintained on the `release/2.x` branch (`npm i -g @mu-crew/murmur@2`). It is the
-clean way out.
+sees no live state on untagged local panes (`@mu_agent`-tagged crew panes still
+appear as `idle`, or `crashed` on a retained nonzero exit). Remote peers
+running vtmux or Rex still appear, and jumping works to remote tmux/vtmux panes
+(remote Rex panes are visible only). If you stay on stock tmux, use murmur 2.x,
+which is maintained on the `release/2.x` branch (`npm i -g @mu-crew/murmur@2`).
+It is the clean way out.
 
 **Why vtmux.** OSC 7501 (program status) and OSC 7577 (program resume) are open
 terminal protocols that vtmux and Rex implement and pi, Claude Code and Codex
