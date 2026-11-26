@@ -16,6 +16,7 @@ import { registerReport } from "./cli/report.js";
 import { registerRexFeed } from "./cli/rex-feed.js";
 import { registerSidepanel } from "./cli/sidepanel-register.js";
 import { registerStatus } from "./cli/status.js";
+import { registerSteer } from "./cli/steer.js";
 import { StoreTooNewError, VERSION } from "./index.js";
 
 // A store from a newer murmur is a version mismatch the user fixes by upgrading,
@@ -53,6 +54,7 @@ registerPane(program);
 registerPeer(program);
 registerDoctor(program);
 registerStatus(program);
+registerSteer(program);
 registerDash(program);
 registerSidepanel(program);
 registerJump(program);

@@ -1,0 +1,194 @@
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { jumpToAgent } from "../src/agents.js";
+import type { InputDelivery } from "../src/dash-input.js";
+import { createIdentity, loadIdentity, type NodeIdentity } from "../src/identity.js";
+import { asPaneId, asSessionId, asWindowId } from "../src/ids.js";
+import { runJump } from "../src/jump-select.js";
+import { jumpTarget } from "../src/jump-target.js";
+import { promptAgent, stopAgent } from "../src/steer.js";
+import { openStore, type Store } from "../src/store.js";
+import type { Location } from "../src/types.js";
+import type { PaneView } from "../src/view.js";
+import { fakeMux } from "./helpers/fake-mux.js";
+
+let store: Store;
+
+beforeEach(() => {
+  vi.stubEnv("MURMUR_STATE_DIR", mkdtempSync(join(tmpdir(), "murmur-steer-")));
+  createIdentity("here");
+  store = openStore();
+  const location: Location = {
+    server: { kind: "default" },
+    session: asSessionId("$0"),
+    window: asWindowId("@1"),
+    pane: asPaneId("%1"),
+    session_name: "dev",
+    window_name: "w",
+  };
+  const claim = store.claimAgent({
+    location,
+    owner_pid: process.pid,
+    meta: {
+      agent_name: "a",
+      pi_session: null,
+      workstream: null,
+      role: null,
+      cli: "pi",
+      driver: "human",
+    },
+  });
+  store.setActivity({
+    agent_id: "agent_id" in claim ? claim.agent_id : "",
+    owner_pid: process.pid,
+    activity: "running",
+    location,
+  });
+});
+
+afterEach(() => {
+  store.close();
+  vi.unstubAllEnvs();
+  process.exitCode = 0;
+  vi.restoreAllMocks();
+});
+
+function identity(): NodeIdentity {
+  const loaded = loadIdentity();
+  if (!loaded) throw new Error("no identity");
+  return loaded;
+}
+
+function target(pane = "%1"): string {
+  return jumpTarget({
+    host_id: identity().host_id,
+    server: { kind: "default" },
+    pane: asPaneId(pane),
+  });
+}
+
+const deps = (log: InputDelivery[]) => ({
+  mux: fakeMux(),
+  warm: () => true,
+  run: async (delivery: InputDelivery) => {
+    log.push(delivery);
+  },
+});
+
+test("promptAgent pastes the text into the resolved pane and presses Enter", async () => {
+  const log: InputDelivery[] = [];
+  const result = await promptAgent(store, identity(), target(), "-fix it", deps(log));
+  expect(result).toEqual({ ok: true, action: "prompt", jump_target: target() });
+  expect(log).toHaveLength(1);
+  expect(log[0]?.command).toBe("tmux");
+  expect(log[0]?.input).toBe("-fix it");
+  expect(log[0]?.args).toContain("paste-buffer");
+  expect(log[0]?.args).toContain("%1");
+  expect(log[0]?.args.at(-1)).toBe("Enter");
+});
+
+test("stopAgent sends Escape to the resolved pane", async () => {
+  const log: InputDelivery[] = [];
+  const result = await stopAgent(store, identity(), target(), deps(log));
+  expect(result).toEqual({ ok: true, action: "stop", jump_target: target() });
+  expect(log[0]?.args.slice(-4)).toEqual(["send-keys", "-t", "%1", "Escape"]);
+});
+
+test("steering reports an invalid, vanished or empty target without delivering", async () => {
+  const log: InputDelivery[] = [];
+  expect(await stopAgent(store, identity(), "nope", deps(log))).toMatchObject({
+    ok: false,
+    reason: "invalid_target",
+  });
+  expect(await stopAgent(store, identity(), target("%99"), deps(log))).toMatchObject({
+    ok: false,
+    reason: "not_found",
+  });
+  expect(await promptAgent(store, identity(), target(), "  \n", deps(log))).toMatchObject({
+    ok: false,
+    reason: "empty_prompt",
+  });
+  expect(log).toEqual([]);
+});
+
+test("a failed delivery is reported, not thrown", async () => {
+  const result = await stopAgent(store, identity(), target(), {
+    ...deps([]),
+    run: async () => {
+      throw new Error("no server running");
+    },
+  });
+  expect(result).toEqual({ ok: false, reason: "delivery_failed", message: "no server running" });
+});
+
+test("jump --client forwards the client to tmux attach, even outside tmux", () => {
+  const attach = vi.fn(() => true);
+  const mux = fakeMux({ attach, livePanes: () => new Set([asPaneId("%1")]) });
+  let view: PaneView | undefined;
+  runJump(
+    store,
+    identity(),
+    target(),
+    {
+      fzf: () => "",
+      mux,
+      jump: (s, agent, client) => {
+        view = agent;
+        return jumpToAgent(s, agent, mux, undefined, {}, client);
+      },
+    },
+    { client: "/dev/ttys004" },
+  );
+  expect(view?.pane).toBe("%1");
+  expect(attach).toHaveBeenCalledWith("%1", { kind: "default" }, "/dev/ttys004");
+  expect(process.exitCode ?? 0).toBe(0);
+});
+
+test("jump --json prints a success object", () => {
+  const write = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+  runJump(
+    store,
+    identity(),
+    target(),
+    { fzf: () => "", mux: fakeMux(), jump: () => ({ ok: true }) },
+    { json: true, client: "c" },
+  );
+  expect(JSON.parse(String(write.mock.calls[0]?.[0]))).toEqual({
+    ok: true,
+    jump_target: target(),
+  });
+});
+
+test("jump --json reports failures as JSON on stdout with exit 1", () => {
+  const write = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+  const err = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+  runJump(store, identity(), "bad", { fzf: () => "", mux: fakeMux() }, { json: true });
+  expect(JSON.parse(String(write.mock.calls[0]?.[0]))).toMatchObject({
+    ok: false,
+    reason: "invalid_target",
+  });
+  expect(process.exitCode).toBe(1);
+  expect(err).not.toHaveBeenCalled();
+});
+
+test("jump --json outside tmux and Rex without a terminal is a clear no_tty error", () => {
+  vi.stubEnv("TMUX", "");
+  vi.stubEnv("TERM_PROGRAM", "");
+  const write = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+  const jump = vi.fn(() => ({ ok: true as const }));
+  runJump(
+    store,
+    identity(),
+    target(),
+    { fzf: () => "", mux: fakeMux(), jump, interactive: () => false },
+    { json: true },
+  );
+  expect(JSON.parse(String(write.mock.calls[0]?.[0]))).toMatchObject({
+    ok: false,
+    reason: "no_tty",
+  });
+  expect(jump).not.toHaveBeenCalled();
+  expect(process.exitCode).toBe(1);
+});

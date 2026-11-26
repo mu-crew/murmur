@@ -104,6 +104,14 @@ export {
 } from "./process-chain.js";
 export { parseSnapshot, SnapshotInvalidError } from "./snapshot.js";
 export { type Status, status, statusWithCollect, tmuxStatus } from "./status.js";
+export {
+  promptAgent,
+  type ResolveResult,
+  resolveAgent,
+  type SteerDeps,
+  type SteerResult,
+  stopAgent,
+} from "./steer.js";
 export { openStore, type Store, StoreTooNewError } from "./store.js";
 export type {
   Activity,

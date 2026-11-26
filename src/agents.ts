@@ -334,8 +334,12 @@ export function jumpToAgent(
   mux: Mux = tmux,
   run: Runner = spawnRunner,
   env: NodeJS.ProcessEnv = process.env,
+  // An explicit tmux client to move: the jump is steering a client this process
+  // is not running in, so "outside tmux" does not apply.
+  explicitClient?: string,
 ): JumpResult {
-  if (agent.local && !env.TMUX) {
+  const inside = Boolean(env.TMUX) || explicitClient !== undefined;
+  if (agent.local && !inside) {
     // Outside tmux there is no client to switch. A bare `switch-client` did
     // not fail here: tmux picked SOME attached client -- another terminal's --
     // and moved that one, so the jump "succeeded" on a screen the operator
@@ -376,7 +380,7 @@ export function jumpToAgent(
     // check above and the action here cannot disagree about what is being
     // jumped to. Passing the recorded window instead meant a pane that had
     // moved passed the liveness check and then failed to attach.
-    if (!mux.attach(agent.pane, agent.server)) {
+    if (!mux.attach(agent.pane, agent.server, explicitClient)) {
       return {
         ok: false,
         reason: "attach_failed",
@@ -507,7 +511,7 @@ export function jumpToAgent(
   // Both would be global on a window and would break every local session. The
   // cost is that the local server is unreachable from inside the wrapper; the
   // README documents a root-table key that detaches out.
-  if (env.TMUX) {
+  if (inside) {
     // Reuse this route's wrapper rather than stacking one per jump -- three
     // jumps to bubba left three identical windows. Found by its route stamp,
     // not its name: the name is a hashed label, and another route's wrapper
@@ -528,8 +532,9 @@ export function jumpToAgent(
 
     // Read BEFORE the wrapper exists, or the wrapper itself is recorded as the
     // place to come back to and the return is a no-op.
-    const client = mux.clientName();
-    const origin = mux.currentTarget();
+    // An explicit client has no "current" place to return to.
+    const client = explicitClient ?? mux.clientName();
+    const origin = explicitClient === undefined ? mux.currentTarget() : null;
 
     if (reuse) {
       // RETARGET the remote client first. Reuse is matched on the host's name
