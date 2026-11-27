@@ -15,7 +15,7 @@ export async function runSteerCommand(
   options: { json?: boolean },
 ): Promise<void> {
   try {
-    const identity = requireIdentity();
+    const identity = requireIdentity(options);
     if (!identity) return;
     const store = openStore();
     try {

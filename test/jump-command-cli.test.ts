@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeEach, expect, test, vi } from "vitest";
@@ -370,6 +370,23 @@ test("jump verb: an unreadable identity is one stderr line, no stack", () => {
   expect(result.status).toBe(1);
   expect(result.stderr.trim().split(/\r?\n/)).toHaveLength(1);
   expect(result.stderr).not.toContain("    at ");
+});
+
+test("jump, prompt and stop --json on an uninitialised node print one JSON failure", () => {
+  rmSync(join(stateDir, "identity.json"), { force: true });
+  const token = `j1:${Buffer.from(JSON.stringify(["h", { kind: "default" }, "%1"])).toString("base64url")}`;
+  for (const argv of [
+    ["jump", token, "--json"],
+    ["prompt", token, "hi", "--json"],
+    ["stop", token, "--json"],
+  ]) {
+    const result = cliResult(...argv);
+    expect(result.status, argv[0]).toBe(1);
+    expect(JSON.parse(result.stdout), argv[0]).toMatchObject({
+      ok: false,
+      reason: "not_initialised",
+    });
+  }
 });
 
 test("stop with an absent rex j1 token reports not_found, not invalid_target", () => {

@@ -16,10 +16,14 @@ import { loadIdentity, type NodeIdentity } from "../identity.js";
  * peers before `init` is allowed, and the self-add refusal is best effort.
  * `peer list` and `peer remove` never read it at all.
  */
-export function requireIdentity(): NodeIdentity | null {
+export function requireIdentity(options: { json?: boolean } = {}): NodeIdentity | null {
   const identity = loadIdentity();
   if (identity) return identity;
-  process.stderr.write("murmur is not initialised on this node; run: murmur init\n");
+  const message = "murmur is not initialised on this node; run: murmur init";
+  // `--json` promises one object on stdout for success and failure alike.
+  if (options.json) {
+    process.stdout.write(`${JSON.stringify({ ok: false, reason: "not_initialised", message })}\n`);
+  } else process.stderr.write(`${message}\n`);
   process.exitCode = 1;
   return null;
 }
