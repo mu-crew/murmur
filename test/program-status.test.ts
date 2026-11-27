@@ -148,3 +148,19 @@ test("the diff sends only changed records and clears the ones that went away", (
     msg: "nothing needs you",
   });
 });
+
+test("a blocked pane reports its own blocked_kind, question when none", () => {
+  const kind = (over: Partial<PaneView>) =>
+    fleetRecords(view([pane({ attention: blocked, ...over })]))[1]?.kind;
+  expect(kind({ blocked_kind: "permission" })).toBe("permission");
+  expect(kind({ blocked_kind: null })).toBe("question");
+});
+
+test("excludeRex drops Rex panes only", () => {
+  const v = view([
+    pane({ attention: blocked }),
+    pane({ pane: asPaneId("%9"), attention: blocked, server: { kind: "rex" } }),
+  ]);
+  expect(fleetRecords(v)).toHaveLength(3);
+  expect(fleetRecords(v, { excludeRex: true })).toHaveLength(2);
+});

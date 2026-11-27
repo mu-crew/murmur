@@ -20,7 +20,8 @@ export function registerRexFeed(program: Command): void {
   program
     .command("rex-feed")
     .description("Report agents that need you as terminal program status (OSC 7501), until stopped")
-    .action(async () => {
+    .option("--exclude-rex", "Leave out Rex panes (they already show their own state)")
+    .action(async (opts: { excludeRex?: boolean }) => {
       const identity = requireIdentity();
       if (!identity) return;
       // Keep feed rendering off the status-bar tick's import path.
@@ -47,7 +48,10 @@ export function registerRexFeed(program: Command): void {
         const view = await statusWithCollect(store, identity, Date.now(), ssh, {
           floorMs: COLLECT_FLOOR_MS,
         });
-        const { writes, now } = diffRecords(sent, fleetRecords(view));
+        const { writes, now } = diffRecords(
+          sent,
+          fleetRecords(view, { excludeRex: opts.excludeRex }),
+        );
         for (const w of writes) write(w);
         sent = now;
         await new Promise((resolve) => setTimeout(resolve, TICK_MS));

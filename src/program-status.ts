@@ -15,6 +15,7 @@
  */
 import { agentLabel, terminalText } from "./agents.js";
 import type { Status } from "./status.js";
+import type { BlockedKind } from "./types.js";
 import { NEEDS_HUMAN, oneLiner, type PaneView, type RenderState, renderState } from "./view.js";
 
 export type ProgramState = "idle" | "working" | "blocked" | "done" | "error";
@@ -23,7 +24,7 @@ export type ProgramState = "idle" | "working" | "blocked" | "done" | "error";
 export type ProgramRecord = {
   id: string | null;
   state: ProgramState;
-  kind?: "question";
+  kind?: BlockedKind;
   title?: string;
   msg?: string;
 };
@@ -75,9 +76,8 @@ export function paneRecord(pane: PaneView): ProgramRecord {
   return {
     id: recordId(pane),
     state,
-    // murmur's blocked carries no kind; question is the protocol's nearest
-    // (an agent waiting for an answer).
-    ...(state === "blocked" ? { kind: "question" as const } : {}),
+    // The agent's own blocked kind; question when it reported none.
+    ...(state === "blocked" ? { kind: pane.blocked_kind ?? "question" } : {}),
     title: where,
     ...(msg ? { msg } : {}),
   };
@@ -103,8 +103,11 @@ export function rootRecord(records: readonly ProgramRecord[]): ProgramRecord {
 }
 
 /** Every record the feed should hold for this view, root first. */
-export function fleetRecords(view: Status): ProgramRecord[] {
-  const panes = view.panes.filter(reported).map(paneRecord);
+export function fleetRecords(view: Status, opts: { excludeRex?: boolean } = {}): ProgramRecord[] {
+  const panes = view.panes
+    .filter((p) => !(opts.excludeRex && p.server.kind === "rex"))
+    .filter(reported)
+    .map(paneRecord);
   return [rootRecord(panes), ...panes];
 }
 
