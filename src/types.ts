@@ -52,7 +52,9 @@ const KNOWN_HARNESSES: ReadonlySet<string> = new Set(["pi", "claude", "codex"]);
 
 /** Whether a pane's foreground program (`cli`) is a known agent harness. */
 export function isHarnessCli(cli: string | null | undefined): boolean {
-  return !!cli && KNOWN_HARNESSES.has(cli.split("/").pop() ?? "");
+  return (
+    !!cli && KNOWN_HARNESSES.has((cli.split("/").pop() ?? "").replace(/\.(?:real|js|mjs|cjs)$/, ""))
+  );
 }
 
 /**

@@ -108,12 +108,22 @@ test("a fresh idle harness pane is listed idle; a plain shell is not", async () 
     ["pi", { name: "pi" }],
     ["claude", { argv0: "/usr/local/bin/claude" }],
     ["codex", { name: "codex" }],
+    ["node-pi", { argv0: "/usr/bin/node", name: "pi" }],
+    ["pi-real", { argv0: "/opt/bin/pi.real" }],
+    ["codex-real", { name: "codex.real" }],
   ] as const) {
     blocks[id] = { status: quiet, process: { foreground: fg } };
   }
   const { call } = rexWalk([{ session_id: "s-1", label: "work", blocks }]);
   const panes = (await readRex(call))?.panes ?? [];
-  expect(panes.map((p) => p.pane).sort()).toEqual(["claude", "codex", "pi"]);
+  expect(panes.map((p) => p.pane).sort()).toEqual([
+    "claude",
+    "codex",
+    "codex-real",
+    "node-pi",
+    "pi",
+    "pi-real",
+  ]);
   for (const p of panes) expect(p).toMatchObject({ state: "idle", driver: "human" });
 });
 

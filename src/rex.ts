@@ -77,6 +77,9 @@ return out
 type Json = Record<string, unknown>;
 const isJson = (value: unknown): value is Json =>
   typeof value === "object" && value !== null && !Array.isArray(value);
+/** Whether any record's argv0 basename or name is a known harness. */
+const isHarnessProc = (records: unknown[]): boolean =>
+  records.some((r) => isJson(r) && (isHarnessCli(str(r.argv0)) || isHarnessCli(str(r.name))));
 const str = (value: unknown): string | null =>
   typeof value === "string" && value !== "" ? value : null;
 /**
@@ -297,7 +300,13 @@ function blockPane(block: {
   const fg = isJson(proc.foreground) ? proc.foreground : isJson(proc.child) ? proc.child : {};
   const cli = str(fg.argv0)?.split("/").pop() ?? str(fg.name);
   // A foreground known harness is listed idle before it reports anything.
-  if (top === null && agentName === null && resume === null && !isHarnessCli(cli)) return null;
+  if (
+    top === null &&
+    agentName === null &&
+    resume === null &&
+    !isHarnessProc([proc.foreground, proc.child])
+  )
+    return null;
 
   const exit = isJson(proc.last_exit) ? proc.last_exit : null;
   const code = exit && typeof exit.exit_code === "number" ? exit.exit_code : null;
