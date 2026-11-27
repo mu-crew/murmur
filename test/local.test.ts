@@ -16,11 +16,12 @@ import {
   localPane as toLocalPane,
 } from "../src/local.js";
 import { pillValues } from "../src/pill.js";
-import { type RexCall, readRex } from "../src/rex.js";
+import { readRex } from "../src/rex.js";
 import { openStore, type Store } from "../src/store.js";
 import { DELEGATES_RECORD, type TmuxServer } from "../src/types.js";
 import { fakeMux } from "./helpers/fake-mux.js";
 import { localPane, ROW_FIELDS, vtmuxMux, vtmuxRow } from "./helpers/panes.js";
+import { type FakeBlock, rexWalk } from "./helpers/rex.js";
 
 /**
  * The local collector: one `list-panes -a -F` per tmux server, read into
@@ -317,30 +318,12 @@ test("a Rex reader that fails is no Rex, never an error and never a crash", asyn
 
 // --- Rex ------------------------------------------------------------------------
 
-/** A fake `rex api call`, answering by method (and block method). */
-function rexApi(blocks: Record<string, { status: unknown; process: unknown; label?: string }>) {
-  const calls: string[] = [];
-  const call: RexCall = async (method, input) => {
-    calls.push(method === "block.method" ? `${method}:${input.method}` : method);
-    if (method === "session.list") {
-      return { sessions: [{ session_id: "s-1", label: "work" }, { label: "no id" }] };
-    }
-    if (method === "session.list_blocks") {
-      return {
-        blocks: Object.entries(blocks).map(([id, block]) => ({
-          block_id: id,
-          window_id: "w-1",
-          label: block.label ?? null,
-        })),
-      };
-    }
-    if (method === "block.method") {
-      const block = blocks[String(input.block_id)];
-      return input.method === "program_status" ? block?.status : block?.process;
-    }
-    return null;
-  };
-  return { call, calls };
+/** A fake `rex do` walk over one session, `work`, holding `blocks`. */
+function rexApi(blocks: Record<string, FakeBlock>) {
+  return rexWalk([
+    { session_id: "s-1", label: "work", blocks },
+    { label: "no id", blocks: {} },
+  ]);
 }
 
 test("Rex blocks read into the same shape as tmux panes", async () => {
