@@ -5,6 +5,8 @@ so it says what changed for a user rather than listing every commit.
 
 ## Unreleased
 
+## 3.0.2
+
 - **Clean pi session labels.** `chosenPaneTitle` strips pi's `π - <name> - <dir>`
   pane-title wrapper so `tsesh` and `murmur dash` show just the session name.
 - **Keep focused agents visible after `done` clears.** `parsePaneRow` now also
