@@ -123,7 +123,7 @@ test("a blocked pane carries its kind; any other state carries none", () => {
 // --- which panes are listed -------------------------------------------------
 
 test("a pane with neither a program record nor a crew tag is not listed", () => {
-  expect(parse({})).toBeNull();
+  expect(parse({ command: "zsh" })).toBeNull();
   expect(parse({ state: "idle" })).not.toBeNull();
   // A crew pane is listed whatever its program says, so a dead one is never missed.
   expect(parse({ mu_agent: "w-1" })).toMatchObject({ state: "idle", driver: "orchestrated" });
@@ -289,7 +289,7 @@ test("a pane that clears its record is not a crash; one that leaves the server i
   const mux = vtmuxMux(rows);
   await readLocal(store, mux, 1_000, { rex: false });
   // %1 sent `state=clear` and is still there; %2 is gone.
-  rows.splice(0, 2, vtmuxRow({ pane: "%1" }));
+  rows.splice(0, 2, vtmuxRow({ pane: "%1", command: "zsh" }));
   const read = await readLocal(store, mux, 2_000, { rex: false });
   expect(read.crashed).toEqual(["%2"]);
   expect(read.panes.map((pane) => pane.pane)).toEqual(["%2"]);
@@ -534,6 +534,18 @@ test("parsePaneRow keeps an OSC 7577 pane as idle after vtmux clears done on foc
   });
   // Without 7501, 7577, or @mu_agent, a plain shell is still omitted.
   expect(parse({ pane: "%1", command: "zsh", state: "" })).toBeNull();
+});
+
+test("parsePaneRow lists a fresh idle harness pane with no state, tag or resume", () => {
+  for (const command of ["pi", "claude", "codex"]) {
+    expect(parse({ pane: "%2", command, state: "" })).toMatchObject({
+      state: "idle",
+      driver: "human",
+      cli: command,
+      agent_name: null,
+    });
+  }
+  expect(parse({ pane: "%3", command: "zsh", state: "" })).toBeNull();
 });
 
 test("chosenPaneTitle strips pi's 'π - <name> - <dir>' wrapper", () => {

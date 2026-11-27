@@ -29,6 +29,7 @@ import {
   DELEGATES_RECORD,
   type Driver,
   FEED_APP,
+  isHarnessCli,
   type LocalPane,
   type PaneState,
   paneKey,
@@ -206,6 +207,8 @@ export function chosenPaneTitle(title: string, host = hostname()): string | null
  * resume record, nor a pane mu placed. Including OSC 7577 keeps an agent
  * visible as `idle` after vtmux clears `done`/`error` on pane focus; vtmux
  * prunes the resume record once the process exits, so a plain shell drops off.
+ * A foreground known harness (pi, claude, codex) is listed idle even before
+ * it reports anything.
  */
 export function parsePaneRow(fields: readonly string[], server: TmuxServer): ObservedPane | null {
   const [
@@ -238,7 +241,8 @@ export function parsePaneRow(fields: readonly string[], server: TmuxServer): Obs
     host = "",
   ] = fields;
   if (!pane || !session || !window) return null;
-  if (state === "" && agentName === "" && resumeCommand === "") return null;
+  if (state === "" && agentName === "" && resumeCommand === "" && !isHarnessCli(command))
+    return null;
   // `murmur rex-feed`'s own pane: reading it back would re-report the fleet.
   if (app === FEED_APP) return null;
   const isDead = dead === "1";

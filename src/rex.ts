@@ -16,7 +16,7 @@ import { execFile } from "node:child_process";
 import { findHelper } from "./helper-path.js";
 import { asPaneId, asSessionId, asWindowId } from "./ids.js";
 import { chosenPaneTitle, type ObservedPane, programState } from "./local.js";
-import { BLOCKED_KINDS, type BlockedKind, type Driver, FEED_APP } from "./types.js";
+import { BLOCKED_KINDS, type BlockedKind, type Driver, FEED_APP, isHarnessCli } from "./types.js";
 
 /** Rex's panes murmur lists, and every block id Rex holds. */
 export type RexRead = { server: { kind: "rex" }; panes: ObservedPane[]; live: Set<string> };
@@ -294,10 +294,12 @@ function blockPane(block: {
       : null;
   // Listed like a tmux pane: an OSC 7501 record, a mu agent, or a live OSC 7577
   // record. Rex prunes a resume record once its owner exits, so a plain shell drops off.
-  if (top === null && agentName === null && resume === null) return null;
+  const fg = isJson(proc.foreground) ? proc.foreground : isJson(proc.child) ? proc.child : {};
+  const cli = str(fg.argv0)?.split("/").pop() ?? str(fg.name);
+  // A foreground known harness is listed idle before it reports anything.
+  if (top === null && agentName === null && resume === null && !isHarnessCli(cli)) return null;
 
   const exit = isJson(proc.last_exit) ? proc.last_exit : null;
-  const fg = isJson(proc.foreground) ? proc.foreground : isJson(proc.child) ? proc.child : {};
   const code = exit && typeof exit.exit_code === "number" ? exit.exit_code : null;
   const dead = !isJson(proc.child) && code !== null && code !== 0;
   const state = programState({
@@ -329,7 +331,7 @@ function blockPane(block: {
     role: null,
     driver,
     harness: top ? (str(top.effective_app) ?? str(top.app)) : null,
-    cli: str(fg.argv0)?.split("/").pop() ?? str(fg.name),
+    cli,
     pane_title: chosenPaneTitle(shownLabel ?? block.title ?? ""),
     // Rex does not say which session an app shows; `true` would drop alerts.
     focused: false,

@@ -168,7 +168,7 @@ test("a pane with nothing to say is a pane nobody mentions, locally or on the wi
   // A shell with no OSC 7501 record and no crew tag is not an agent: it is not
   // listed, so the validator's rule 3 can never fire against our own output.
   const document = await built(store(), [
-    vtmuxRow({ pane: "%1" }),
+    vtmuxRow({ pane: "%1", command: "zsh" }),
     vtmuxRow({ pane: "%2", state: "idle" }),
   ]);
   expect(document.panes.map((pane) => pane.pane)).toEqual(["%2"]);

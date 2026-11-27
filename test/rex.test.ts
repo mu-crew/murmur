@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 import { readRex, shellCommand } from "../src/rex.js";
-import { rexWalk } from "./helpers/rex.js";
+import { type FakeBlock, rexWalk } from "./helpers/rex.js";
 
 /**
  * The Rex reader's full fidelity: one `rex do` walk read into window names,
@@ -98,6 +98,23 @@ test("a live OSC 7577 record lists an idle pane, quoted as vtmux quotes it", asy
     resume_cwd: "/work",
   });
   expect(read?.live).toEqual(new Set(["block:a", "block:b"]));
+});
+
+test("a fresh idle harness pane is listed idle; a plain shell is not", async () => {
+  const blocks: Record<string, FakeBlock> = {
+    zsh: { status: quiet, process: { foreground: { name: "zsh" } } },
+  };
+  for (const [id, fg] of [
+    ["pi", { name: "pi" }],
+    ["claude", { argv0: "/usr/local/bin/claude" }],
+    ["codex", { name: "codex" }],
+  ] as const) {
+    blocks[id] = { status: quiet, process: { foreground: fg } };
+  }
+  const { call } = rexWalk([{ session_id: "s-1", label: "work", blocks }]);
+  const panes = (await readRex(call))?.panes ?? [];
+  expect(panes.map((p) => p.pane).sort()).toEqual(["claude", "codex", "pi"]);
+  for (const p of panes) expect(p).toMatchObject({ state: "idle", driver: "human" });
 });
 
 test("without a chosen record, the latest one speaks", async () => {

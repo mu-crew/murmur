@@ -47,6 +47,14 @@ export const DELEGATES_RECORD = "mu/delegates";
  */
 export const FEED_APP = "murmur";
 
+/** Agent harnesses murmur lists as `idle` before they emit any OSC 7501. */
+const KNOWN_HARNESSES: ReadonlySet<string> = new Set(["pi", "claude", "codex"]);
+
+/** Whether a pane's foreground program (`cli`) is a known agent harness. */
+export function isHarnessCli(cli: string | null | undefined): boolean {
+  return !!cli && KNOWN_HARNESSES.has(cli.split("/").pop() ?? "");
+}
+
 /**
  * Who is waiting on this agent -- a human, or a supervisor that consumes the
  * result. Not "which harness"; that is `harness`.
