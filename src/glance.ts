@@ -160,8 +160,28 @@ const sshRunnerAsync: GlanceRunnerAsync = (target, argv) =>
 export type RexGlanceRunner = (args: string[]) => string;
 export type RexGlanceRunnerAsync = (args: string[]) => Promise<string>;
 
+/**
+ * How much of a Rex capture comes back: its trailing bytes. `rex capture` has
+ * no line limit and returns the whole scrollback, up to about 64 MiB, so an
+ * untrimmed capture of a long-lived pane passed every runner's 1 MiB cap and
+ * the glance went blank for good. Below the cap, leaving room for the newline.
+ */
+const REX_CAPTURE_TAIL_BYTES = STDOUT_MAX_BYTES - 1024;
+
+/**
+ * `sh -c` script running `"$@"` (the rex argv) and printing only the tail of
+ * its output. The capture is held in a variable rather than piped so a failed
+ * rex still fails the script: `cmd | tail` would exit 0 on tail's status.
+ */
+const REX_TAIL_SCRIPT = `out=$("$@") && printf '%s\\n' "$out" | tail -c ${REX_CAPTURE_TAIL_BYTES}`;
+
+/** The `sh` arguments running `rex <args>` through `REX_TAIL_SCRIPT`. */
+function rexTailArgs(rex: string, args: readonly string[]): string[] {
+  return ["-c", REX_TAIL_SCRIPT, "sh", rex, ...args];
+}
+
 const rexRunner: RexGlanceRunner = (args) =>
-  execFileSync(helperPath("rex"), args, {
+  execFileSync(helperPath("sh"), rexTailArgs(helperPath("rex"), args), {
     encoding: "utf8",
     timeout: 3000,
     stdio: ["ignore", "pipe", "ignore"],
@@ -170,8 +190,8 @@ const rexRunner: RexGlanceRunner = (args) =>
 const rexRunnerAsync: RexGlanceRunnerAsync = (args) =>
   new Promise((resolve, reject) => {
     execFile(
-      helperPath("rex"),
-      args,
+      helperPath("sh"),
+      rexTailArgs(helperPath("rex"), args),
       { encoding: "utf8", timeout: 3000, maxBuffer: STDOUT_MAX_BYTES },
       (error, stdout) => (error ? reject(error) : resolve(stdout)),
     );
@@ -225,7 +245,9 @@ function remoteGlance(
   if (peer.last_error !== null) return direct ? { rex: direct, ssh: null } : null;
   // A remote Rex pane over ssh: that node's own local `rex capture`.
   if (agent.server.kind === "rex") {
-    const argv = [["rex", ...rexCaptureArgs(agent, null)].map(shellQuote).join(" ")];
+    const argv = [
+      ["sh", ...rexTailArgs("rex", rexCaptureArgs(agent, null))].map(shellQuote).join(" "),
+    ];
     return { rex: direct, ssh: { target, argv } };
   }
   // ssh's remote side is a login shell. Build the tmux argv first, including

@@ -513,15 +513,16 @@ export function App({ dashStore, initial }: DashProps) {
   const glanceGateRef = useRef(createGlanceGate());
   const glanceShownKeyRef = useRef<string | null>(null);
 
-  // Local panes preview synchronously (a few ms). A remote pane is an ssh that
-  // can take 60 ms to 3 s, so it is awaited off the event loop, behind the
+  // Local tmux panes preview synchronously (a few ms). A remote pane is an ssh
+  // that can take 60 ms to 3 s, and a local Rex pane a `rex capture` of the
+  // whole scrollback, so both are awaited off the event loop, behind the
   // in-flight and stale-result guards of `createGlanceGate`.
   const loadGlance = useCallback(
     (current: PaneView, peers: Status["peers"], skipIfBusy: boolean) => {
       const gate = glanceGateRef.current;
       const options = { paneTailLines: PREVIEW_PANE_TAIL_LINES };
       const key = paneKey(current);
-      if (current.local) {
+      if (current.local && current.server.kind !== "rex") {
         gate.supersede();
         glanceShownKeyRef.current = key;
         setGlance(previewText(store, current, peers, undefined, options));

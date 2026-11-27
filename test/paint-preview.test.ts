@@ -777,10 +777,13 @@ test("a remote Rex glance falls back to the peer's own rex over ssh", async () =
     failing,
   );
   expect(out).toContain("VIA_SSH");
-  expect(argvs[0]).toEqual([
-    "bubba.example",
+  // The far side's rex, trimmed there to its tail (see the local runner test).
+  const [target, command] = argvs[0] ?? [];
+  expect(target).toBe("bubba.example");
+  expect(command).toMatch(/^'sh' '-c' '.*tail -c [0-9]+' 'sh' 'rex' /);
+  expect(command).toContain(
     ["rex", "--autostart=false", ...REX_CAPTURE].map((word) => `'${word}'`).join(" "),
-  ]);
+  );
   expect(
     await glanceAsync(
       store,
@@ -814,6 +817,31 @@ test("a remote Rex glance with no Rex host goes over ssh; a failed peer skips on
   store.setPeerRexHost("bubba", "me@bubba");
   expect(glance(store, agent, 40, ssh, rex)).toContain("REX");
   expect(dialled).toBe(false);
+});
+
+test("a real local Rex glance keeps the tail of a capture far over 1 MiB", async () => {
+  // `rex capture` returns the whole scrollback (up to ~64 MiB) and has no line
+  // limit; every runner caps stdout at 1 MiB, so a long-lived pane's glance was
+  // null for good. A fake `rex` on PATH printing 2 MB of scrollback first.
+  const bin = mkdtempSync(join(tmpdir(), "murmur-fake-rex-"));
+  const fake = join(bin, "rex");
+  writeFileSync(
+    fake,
+    "#!/bin/sh\nhead -c 2000000 /dev/zero | tr '\\0' x | fold -w 100\nprintf 'TAIL_OK\\n'\n",
+  );
+  chmodSync(fake, 0o755);
+  vi.stubEnv("PATH", `${bin}:${process.env.PATH ?? ""}`);
+  try {
+    const agent = { ...remoteRexAgent(null), local: true };
+    expect(glance(store, agent, 5)).toContain("TAIL_OK");
+    expect(await glanceAsync(store, agent, 5)).toContain("TAIL_OK");
+    // A failed rex is still a failed glance, not an empty one.
+    writeFileSync(fake, "#!/bin/sh\nexit 3\n");
+    expect(glance(store, agent, 5)).toBeNull();
+    expect(await glanceAsync(store, agent, 5)).toBeNull();
+  } finally {
+    rmSync(bin, { recursive: true, force: true });
+  }
 });
 
 test("a local Rex glance captures from the local server, with no -S", async () => {
