@@ -326,12 +326,16 @@ export function registerPeer(program: Command): void {
         // user@host, or a Tailscale name that appears in no config file, and
         // listing ssh hosts alone would silently omit it.
         const peers = store.peers();
-        const configured = new Map(peers.map((entry) => [entry.target, entry]));
+        // Every peer, even two sharing a target (a Map keyed on the target
+        // dropped the first); the targets only filter the ssh hosts.
+        const configured = new Set(peers.map((entry) => entry.target));
         const discovered = options.all ? sshHosts().filter((host) => !configured.has(host)) : [];
         const now = Date.now();
 
-        const rows = [...configured.keys(), ...discovered].map((target) => {
-          const entry = configured.get(target);
+        const rows = [
+          ...peers.map((entry) => ({ entry, target: entry.target })),
+          ...discovered.map((target) => ({ entry: undefined, target })),
+        ].map(({ entry, target }) => {
           return {
             // The handle other commands take: a peer's name, or for a host that
             // is not one yet, the ssh host `peer add` wants.

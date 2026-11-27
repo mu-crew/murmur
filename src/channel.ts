@@ -147,7 +147,13 @@ export const ssh: Channel = {
 
 export function hasWarmSocket(target: string): boolean {
   try {
-    execFileSync(helperPath("ssh"), [...SSH_OPTIONS, "-O", "check", target], { stdio: "ignore" });
+    // Bounded like `exec`: `-O check` is a local socket round trip, but a
+    // ControlMaster that hangs, or an ssh_config `Match exec` that stalls, would
+    // otherwise block the caller (a status read, `peer list`) forever.
+    execFileSync(helperPath("ssh"), [...SSH_OPTIONS, "-O", "check", target], {
+      stdio: "ignore",
+      timeout: EXEC_TIMEOUT_MS,
+    });
     return true;
   } catch {
     return false;

@@ -1,5 +1,8 @@
-import { expect, test } from "vitest";
-import { SSH_OPTIONS, warmSocketCommand } from "../src/channel.js";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { expect, test, vi } from "vitest";
+import { hasWarmSocket, SSH_OPTIONS, warmSocketCommand } from "../src/channel.js";
 
 test("the warm-socket remedy opens no session of its own", () => {
   const command = warmSocketCommand("dev");
@@ -60,3 +63,18 @@ test("SSH_OPTIONS disables a site ProxyCommand, which BatchMode cannot gag", () 
   // Paired with BatchMode: neither alone closes the prompt surface.
   expect(SSH_OPTIONS).toContain("BatchMode=yes");
 });
+
+test("hasWarmSocket gives up on a hung ssh -O check instead of blocking", () => {
+  const bin = mkdtempSync(join(tmpdir(), "murmur-fake-ssh-"));
+  writeFileSync(join(bin, "ssh"), "#!/bin/sh\nexec sleep 30\n");
+  chmodSync(join(bin, "ssh"), 0o755);
+  vi.stubEnv("PATH", `${bin}:${process.env.PATH ?? ""}`);
+  try {
+    const started = Date.now();
+    expect(hasWarmSocket("hung.example")).toBe(false);
+    expect(Date.now() - started).toBeLessThan(10_000);
+  } finally {
+    vi.unstubAllEnvs();
+    rmSync(bin, { recursive: true, force: true });
+  }
+}, 15_000);

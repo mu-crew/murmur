@@ -186,6 +186,17 @@ test("peer list stays exactly as narrow as today when nothing has been collected
   expect(out).not.toContain("incompatible");
 });
 
+test("peer list shows every peer, even two sharing one ssh target", () => {
+  const dir = process.env.MURMUR_STATE_DIR as string;
+  const store = openStore();
+  store.addPeer("first", "shared.example");
+  store.addPeer("second", "shared.example");
+  store.close();
+
+  const rows = JSON.parse(cli(dir, "peer", "list", "--json")) as { name: string }[];
+  expect(rows.map((row) => row.name).sort()).toEqual(["first", "second"]);
+});
+
 test("peer list shows a VERSION column once a peer has reported, and names a real mismatch", () => {
   const dir = process.env.MURMUR_STATE_DIR as string;
   const store = openStore();
