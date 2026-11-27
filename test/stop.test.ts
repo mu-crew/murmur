@@ -287,16 +287,22 @@ test("a remote Rex read with both legs hanging stays within probeMs per probe an
   // jitter or event-loop pause can change what each leg is given.
   vi.useFakeTimers();
   const started = Date.now();
+  let finishedAt: number | null = null;
   const pending = stopPane(store("me@dev"), rexBlock(false), {
     run,
     capture: hang,
     bounds: slow,
+  }).then((result) => {
+    finishedAt = Date.now();
+    return result;
   });
-  await vi.advanceTimersByTimeAsync(slow.totalMs + 100);
+  // Run every timer to completion; the clock stops where the work stops, and
+  // the completion time is taken inside the continuation, not after advancing.
+  await vi.runAllTimersAsync();
   const outcome = await pending;
-  const elapsed = Date.now() - started;
   vi.useRealTimers();
-  expect(elapsed).toBeLessThanOrEqual(slow.totalMs + 100);
+  expect(finishedAt).not.toBeNull();
+  expect((finishedAt ?? Number.POSITIVE_INFINITY) - started).toBeLessThanOrEqual(slow.totalMs + 20);
   expect(outcome).toMatchObject({ stopped: null, state: null });
   // The first probe's two legs share its 200ms: the ssh leg gets only the rest.
   expect(calls.slice(0, 2)).toEqual(["rex", "ssh"]);
@@ -440,10 +446,17 @@ test.each([
   ["malformed JSON", "{nope\n"],
   ["a reply that is not an object", "null\n"],
   ["a reply closed without a newline", JSON.stringify({ v: 1, ok: true })],
-  ["an oversized line", "x".repeat(70 * 1024)],
 ])("ctlRequest: %s is no answer", async (_name, body) => {
   const sock = await replyServer((conn) => conn.end(body));
   expect(await ctlRequest(sock, { op: "abort" }, 1_000)).toBeNull();
+});
+
+test("ctlRequest: an oversized line is refused at once, not at the timeout", async () => {
+  // The socket stays open and no newline ever arrives: only the size cap can end it.
+  const sock = await replyServer((conn) => conn.write("x".repeat(70 * 1024)));
+  const started = Date.now();
+  expect(await ctlRequest(sock, { op: "abort" }, 10_000)).toBeNull();
+  expect(Date.now() - started).toBeLessThan(5_000);
 });
 
 test("ctlRequest: a socket that never answers times out, and a missing one is no answer", async () => {

@@ -49,6 +49,7 @@ const CLEARED = [
   "REX_SESSION",
   "REX_BLOCK",
   "REX_CLIENT",
+  "REX_SERVER",
 ] as const;
 
 /**
