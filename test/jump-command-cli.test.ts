@@ -121,6 +121,19 @@ test("text output is one command that survives command substitution literally", 
   expect(readFileSync(log, "utf8")).toBe("--command\ntmux -L 'mule server' attach -t '%34'\n");
 });
 
+test("a Rex row is refused as a Rex pane, not with a {pane} remediation", () => {
+  // Even with {attach}: a Rex block has no tmux attach for any template.
+  addPeer("dev", "developer.example", [
+    { pane: "block:b1", agent: "rexy", server: { kind: "rex" } },
+  ]);
+  const refused = cliResult("jump-command", "--host", "dev", "--agent", "rexy");
+  expect(refused.status).toBe(2);
+  expect(refused.stdout).toBe("");
+  expect(refused.stderr).toContain("rexy on dev is a Rex pane (block:b1)");
+  expect(refused.stderr).toMatch(/murmur jump j1:\S+\n$/);
+  expect(refused.stderr).not.toContain("{pane}");
+});
+
 test("a {pane} template refuses a named-server row instead of printing a default-server attach", () => {
   // `{pane}` expands to a bare %N, and running the printed command lands on %N
   // of the remote DEFAULT server -- some other pane, or nothing. `murmur jump`

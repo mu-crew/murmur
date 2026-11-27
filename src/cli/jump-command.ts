@@ -5,6 +5,7 @@ import {
   supportsServer,
   unsupportedServerMessage,
 } from "../jump-command.js";
+import { jumpTarget } from "../jump-target.js";
 import { openStore, type Store } from "../store.js";
 import type { PeerRecord, SnapshotPane, TmuxServer } from "../types.js";
 
@@ -71,7 +72,20 @@ export function jumpCommand(store: Store, options: JumpCommandOptions): JumpComm
   // Refused, not rendered: the printed command would run and land on the same
   // pane id on the remote's default server.
   const server = pane.server;
-  if (server.kind === "rex" || !supportsServer(template, server)) {
+  // A Rex pane has no tmux to attach, whatever the template: no jump command
+  // can reach it, so the {pane} remediation would fix nothing. `murmur jump`
+  // goes through Rex's own API.
+  if (server.kind === "rex") {
+    const token = peer.host_id
+      ? ` with: murmur jump ${jumpTarget({ host_id: peer.host_id, server, pane: pane.pane })}`
+      : " with murmur jump";
+    process.stderr.write(
+      `murmur: ${pane.agent.agent_name} on ${peer.name} is a Rex pane (${pane.pane}), which has no tmux attach command; jump to it${token}\n`,
+    );
+    process.exitCode = 2;
+    throw new JumpCommandError();
+  }
+  if (!supportsServer(template, server)) {
     process.stderr.write(
       `${unsupportedServerMessage(peer, peer.target, pane.agent.agent_name, pane.pane)}\n`,
     );
