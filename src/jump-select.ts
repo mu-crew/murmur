@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { type JumpResult, jumpToAgent, outsideTmux, terminalText } from "./agents.js";
 import { findHelper } from "./helper-path.js";
 import type { NodeIdentity } from "./identity.js";
-import { renderJumpCommand } from "./jump-command.js";
+import { currentJumpCommand, renderJumpCommand } from "./jump-command.js";
 import type { LocalOptions } from "./local.js";
 import { type Mux, tmux } from "./mux.js";
 import { resolveAgent } from "./steer.js";
@@ -84,7 +84,7 @@ export async function runJump(
   const jumpTo =
     deps.jump ??
     ((jumpStore, target, client) =>
-      jumpToAgent(jumpStore, target, tmux, undefined, process.env, client));
+      jumpToAgent(jumpStore, target, mux, undefined, process.env, client));
   const out = reporter(token, options);
   const found = await resolveAgent(store, identity, token, { mux, warm: deps.warm, rex: deps.rex });
   // A miss means the pane went away between the collect and the keypress. Said
@@ -94,7 +94,10 @@ export async function runJump(
     return;
   }
   const { agent } = found;
-  if (agent.attached_pane) {
+  // The attachment is a pane on this machine's tmux: only a tmux client can be
+  // moved to it. Outside tmux, a bare `switch-client` failed or moved some other
+  // terminal's client, so the jump goes on to open the agent itself.
+  if (agent.attached_pane && (Boolean(process.env.TMUX) || options.client !== undefined)) {
     const focused =
       options.client === undefined
         ? mux.attach(agent.attached_pane)
@@ -129,7 +132,12 @@ export async function runJump(
     const peer = store.peers().find((candidate) => candidate.host_id === agent.host_id);
     const needsTap = latest.peers.find((candidate) => candidate.name === agent.host)?.needs_session;
     if (peer && needsTap && agent.server.kind !== "rex") {
-      const command = renderJumpCommand(peer.jump_command, {
+      // A script has no one to confirm the tap: say so instead of opening fzf.
+      if (options.json && !interactive()) {
+        out.fail("needs_session", `jumping to ${agent.host} may need a hardware token tap.`);
+        return;
+      }
+      const command = renderJumpCommand(currentJumpCommand(peer.jump_command, peer.target), {
         server: agent.server,
         pane: agent.pane,
       });
@@ -147,7 +155,11 @@ export async function runJump(
         "jump\tcontinue",
         process.env,
       );
-      if (confirmed.trim().split("\t")[0] !== "jump") return;
+      if (confirmed.trim().split("\t")[0] !== "jump") {
+        // JSON promises one object for success or failure; text stays silent.
+        if (options.json) out.fail("cancelled", "jump cancelled at the hardware-tap confirmation.");
+        return;
+      }
     }
   }
 

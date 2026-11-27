@@ -1,9 +1,10 @@
-import { mkdtempSync } from "node:fs";
+import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { createIdentity, loadIdentity, type NodeIdentity } from "../src/identity.js";
 import { asPaneId, asSessionId, asWindowId } from "../src/ids.js";
+import { shellQuote } from "../src/jump-command.js";
 import { runJump } from "../src/jump-select.js";
 import { jumpTarget } from "../src/jump-target.js";
 import type { Mux } from "../src/mux.js";
@@ -158,6 +159,7 @@ test("enter focuses an attached local pane instead of opening another remote ses
     attach: vi.fn(() => true),
   });
   let jumped = false;
+  vi.stubEnv("TMUX", "/tmp/tmux-501/default,1,0");
 
   await runJump(store, identity(), key("REMOTE", "%9"), {
     fzf: () => "",
@@ -174,6 +176,164 @@ test("enter focuses an attached local pane instead of opening another remote ses
 
   expect(mux.attach).toHaveBeenCalledTimes(1);
   expect(jumped).toBe(false);
+});
+
+/** A remote agent `%9` on peer `dev` whose ssh needs a fresh session (a tap). */
+function coldRemote(jumpCommand?: string): void {
+  agent("%1");
+  store.addPeer("dev", "dev.example", jumpCommand);
+  store.replacePeerSnapshot("dev", {
+    ok: true,
+    at: Date.now(),
+    snapshot: {
+      murmur_snapshot: 8,
+      host_id: "REMOTE",
+      display_name: "dev",
+      murmur_version: "0.2.0",
+      generated_at: 1,
+      panes: [remotePane("%9")],
+    },
+  });
+  store.replacePeerSnapshot("dev", {
+    ok: false,
+    at: Date.now(),
+    error: "Permission denied (keyboard-interactive).",
+  });
+}
+
+test("outside tmux an attached local pane is not switch-client'ed to; the jump opens the agent", async () => {
+  // From Rex or a plain terminal there is no tmux client to move: the bare
+  // `switch-client` failed, or moved another terminal's client.
+  agent("%1", "human", "worker-1");
+  store.addPeer("dev", "dev.example", "et dev -c 'tmux attach -t {pane}'");
+  store.replacePeerSnapshot("dev", {
+    ok: true,
+    at: Date.now(),
+    snapshot: {
+      murmur_snapshot: 8,
+      host_id: "REMOTE",
+      display_name: "dev",
+      murmur_version: "0.2.0",
+      generated_at: 1,
+      panes: [
+        { ...remotePane("%9"), agent: { ...remotePane("%9").agent, agent_name: "worker-1" } },
+      ],
+    },
+  });
+  const mux = localMux({
+    localPaneProcesses: () => [
+      {
+        pane: asPaneId("%12"),
+        current_command: "et",
+        arguments: "et dev -c tmux attach -t mu-worker-1",
+      },
+    ],
+    attach: vi.fn(() => true),
+  });
+  vi.stubEnv("TMUX", "");
+  let jumped = false;
+  await runJump(store, identity(), key("REMOTE", "%9"), {
+    fzf: () => "jump",
+    jump: () => {
+      jumped = true;
+      return { ok: true };
+    },
+    mux,
+    warm: () => true,
+    rex: false,
+  });
+  expect(mux.attach).not.toHaveBeenCalled();
+  expect(jumped).toBe(true);
+});
+
+test("the default jump uses the injected mux, not the real tmux", async () => {
+  // A fake tmux on PATH that fails, so the real one is never reached either way.
+  const bin = mkdtempSync(join(tmpdir(), "murmur-fake-tmux-"));
+  writeFileSync(join(bin, "tmux"), "#!/bin/sh\nexit 1\n");
+  chmodSync(join(bin, "tmux"), 0o755);
+  vi.stubEnv("PATH", `${bin}:${process.env.PATH ?? ""}`);
+  vi.stubEnv("TMUX", "/tmp/tmux-501/default,1,0");
+  agent("%7");
+  const attach = vi.fn(() => true);
+  await runJump(
+    store,
+    identity(),
+    jumpTarget({ host_id: here(), server: { kind: "default" }, pane: asPaneId("%7") }),
+    {
+      fzf: () => "",
+      mux: localMux({ attach, livePanes: () => new Set([asPaneId("%7")]) }),
+      rex: false,
+    },
+  );
+  expect(attach).toHaveBeenCalledWith("%7", { kind: "default" }, undefined);
+  expect(process.exitCode ?? 0).toBe(0);
+});
+
+test("the tap confirmation shows the command the jump runs, legacy default upgraded", async () => {
+  const legacy = `ssh -t ${shellQuote("dev.example")} tmux attach -t ${shellQuote(shellQuote("{pane}"))}`;
+  coldRemote(legacy);
+  const headers: string[] = [];
+  await runJump(store, identity(), key("REMOTE", "%9"), {
+    fzf: (args) => {
+      headers.push(args[args.indexOf("--header") + 1] ?? "");
+      return "";
+    },
+    jump: () => ({ ok: true }),
+    warm: () => false,
+    mux: localMux(),
+    rex: false,
+  });
+  expect(headers).toHaveLength(1);
+  expect(headers[0]).toContain("env LC_CTYPE=C.UTF-8 'tmux attach -t '");
+});
+
+test("--json says why a tap-gated jump did not happen, never exit 0 with no output", async () => {
+  const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+  try {
+    coldRemote();
+    let opened = false;
+    const deps = {
+      fzf: () => {
+        opened = true;
+        return "";
+      },
+      jump: () => ({ ok: true }) as const,
+      warm: () => false,
+      mux: localMux(),
+      rex: false as const,
+    };
+    // No terminal: no fzf, a JSON failure.
+    await runJump(
+      store,
+      identity(),
+      key("REMOTE", "%9"),
+      { ...deps, interactive: () => false },
+      { json: true, client: "/dev/ttys001" },
+    );
+    expect(opened).toBe(false);
+    expect(JSON.parse(String(write.mock.calls.at(-1)?.[0]))).toMatchObject({
+      ok: false,
+      reason: "needs_session",
+    });
+    expect(process.exitCode).toBe(1);
+    // A terminal, and the confirmation is cancelled.
+    process.exitCode = 0;
+    await runJump(
+      store,
+      identity(),
+      key("REMOTE", "%9"),
+      { ...deps, interactive: () => true },
+      { json: true, client: "/dev/ttys001" },
+    );
+    expect(opened).toBe(true);
+    expect(JSON.parse(String(write.mock.calls.at(-1)?.[0]))).toMatchObject({
+      ok: false,
+      reason: "cancelled",
+    });
+    expect(process.exitCode).toBe(1);
+  } finally {
+    write.mockRestore();
+  }
 });
 
 test("a cold remote jump warns and still proceeds when confirmed", async () => {
