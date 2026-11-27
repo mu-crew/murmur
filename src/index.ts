@@ -70,6 +70,7 @@ export {
   type Status,
   type StatusJson,
   type StatusJsonPane,
+  type StatusOptions,
   status,
   statusJson,
   statusWithCollect,

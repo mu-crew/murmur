@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, test } from "vitest";
 import type { NodeIdentity } from "../src/identity.js";
+import { buildSnapshot } from "../src/local.js";
 import type { Mux } from "../src/mux.js";
 import { dbPath } from "../src/paths.js";
 import { readRex } from "../src/rex.js";
@@ -156,4 +157,28 @@ test("a recorded crash a live pane reoccupies is gone from the read, as a sync w
   expect(read.panes).toEqual([
     expect.objectContaining({ pane: "%1", render_state: "done", recorded: false }),
   ]);
+});
+
+test("readStatus probes nothing by default, as status --json --cached does not", async () => {
+  const writer = open();
+  writer.addPeer("dev", "dev.example");
+  const snapshot = buildSnapshot({ host_id: "FAR", display_name: "far" }, [], 1_000);
+  writer.replacePeerSnapshot("dev", { ok: true, at: 1_000, snapshot });
+  writer.replacePeerSnapshot("dev", {
+    ok: false,
+    at: 2_000,
+    error: "Permission denied (publickey).",
+  });
+  let probes = 0;
+  const warm = () => {
+    probes += 1;
+    return true;
+  };
+  const read = await readStatus(open(true), IDENTITY, 3_000, {
+    mux: vtmuxMux([]),
+    rex: false,
+    warm,
+  });
+  expect(probes).toBe(0);
+  expect(read.peers[0]).toMatchObject({ name: "dev", needs_session: true });
 });

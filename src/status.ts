@@ -25,8 +25,12 @@ import {
 
 type Counts = StateCounts;
 
-type StatusOptions = {
+export type StatusOptions = {
   mux?: Mux;
+  /**
+   * Skip the live probes: the local attachment read (`tmux`, `ps`, `ssh -G`)
+   * and the warm-socket check (`ssh -O check`). `readStatus` defaults it on.
+   */
   cached?: boolean;
   resolveSsh?: SshResolver;
   /** Whether a peer has a warm ControlMaster socket; see `status`'s `warm`. */
@@ -368,7 +372,8 @@ export type ReadStatus = Omit<StatusJson, "panes"> & {
  * `murmur status --json --cached` as a pure read, for an SDK consumer holding
  * a `openStore({ readonly: true })` store: the same tmux and Rex collectors
  * and the recorded ages and crash rows, with nothing synced, cached or
- * migrated. The CLI stays the one writer.
+ * migrated. The CLI stays the one writer. Like `--cached` it runs no probe
+ * (`cached` defaults to true); pass `cached: false` for the live ones.
  */
 export async function readStatus(
   store: Store,
@@ -384,7 +389,12 @@ export async function readStatus(
   } catch {
     // As in `localStatus`: the cache alone is still a view.
   }
-  const view = statusJson(status(store, identity, local, now, options.warm, undefined, options));
+  const view = statusJson(
+    status(store, identity, local, now, options.warm, undefined, {
+      ...options,
+      cached: options.cached ?? true,
+    }),
+  );
   return {
     ...view,
     panes: view.panes.map((pane) => ({
