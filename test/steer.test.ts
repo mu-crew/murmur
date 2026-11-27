@@ -251,10 +251,12 @@ test("prompt and stop reach a remote Rex pane: rex -S with a Rex host, its ssh w
     action: "prompt",
     jump_target: token,
   });
-  expect(log[0]?.command).toBe("sh");
-  expect(log[0]?.args.slice(3, 6)).toEqual(["me@far", "session:s1", "block:b1"]);
-  expect(log[0]?.args).toContain("far.example");
+  expect(log[0]?.command).toBe("rex");
+  expect(log[0]?.args.slice(0, 2)).toEqual(["-S", "me@far"]);
+  expect(log[0]?.args.slice(-5)).toEqual(["send", "-s", "session:s1", "-b", "block:b1"]);
   expect(log[0]?.input).toBe("go on");
+  expect(log[0]?.fallback?.args).toContain("far.example");
+  expect(log[0]?.fallback?.input).toBe("go on");
 
   store.setPeerRexHost("far", null);
   expect(await stopAgent(store, identity(), token, deps(log))).toMatchObject({ ok: true });

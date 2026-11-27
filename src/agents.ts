@@ -317,7 +317,7 @@ function jumpToRex(store: Store, agent: PaneView, run: Runner, env: NodeJS.Proce
     return {
       ok: false,
       reason: "attach_failed",
-      message: `could not focus ${label} in Rex on ${agent.host} (session.focus_block failed).`,
+      message: `could not focus ${label} in Rex on ${agent.host} (session.focus_block failed).${hint}`,
     };
   }
   const client = env.REX_CLIENT;

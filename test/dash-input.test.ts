@@ -13,7 +13,9 @@ import {
   editComposer,
   emptyComposer,
   emptyFilter,
+  type InputBounds,
   type InputDelivery,
+  makeInputRunner,
   sendEscape,
   sendPrompt,
 } from "../src/dash-input.js";
@@ -416,61 +418,143 @@ test("remote Rex steer is no longer refused: the peer's route is used", async ()
   };
   expect(await sendPrompt(rexStore("me@dev"), rexPane(false), "go", run)).toEqual({ ok: true });
   expect(await sendEscape(rexStore(null), rexPane(false), run)).toEqual({ ok: true });
-  expect(seen[0]?.command).toBe("sh");
-  expect(seen[0]?.args.slice(3, 6)).toEqual(["me@dev", "session:s1", "block:b1"]);
+  expect(seen[0]?.command).toBe("rex");
+  expect(seen[0]?.args.slice(0, 4)).toEqual(["-S", "me@dev", "--timeout", "3s"]);
+  expect(seen[0]?.fallback?.command).toBe("ssh");
   expect(seen[1]?.command).toBe("ssh");
   expect(seen[1]?.args.at(-1)).toContain("'escape'");
 });
 
+// Short, but long enough for a stub to start on a loaded machine.
+const QUICK: InputBounds = { rexMs: 1_500, sshMs: 1_500, totalMs: 6_000 };
+
 /**
- * Run a delivery for real against stub `rex` and `ssh` that log their argv and
- * stdin; `rex -S` fails when `failDirect` is set. Exercises the fallback shell.
+ * Run a delivery for real, through the real runner, against stub `rex` and
+ * `ssh` that log their argv and stdin, then run `rex` / `ssh` (a shell
+ * fragment: fail, hang, or print an error) after logging.
  */
-function runStubbed(delivery: InputDelivery, failDirect: boolean): string[] {
+async function runStubbed(
+  delivery: InputDelivery,
+  behave: { rex?: string; ssh?: string } = {},
+  bounds: InputBounds = QUICK,
+): Promise<{ log: string[]; error: string | null; ms: number }> {
   const bin = mkdtempSync(join(tmpdir(), "murmur-rex-bin-"));
   const log = join(bin, "log");
-  const stub = (name: string, fail: string) =>
+  const stub = (name: string, then = "") =>
     writeFileSync(
       join(bin, name),
-      `#!/bin/sh\nprintf '%s|%s|%s\\036' "${name}" "$*" "$(cat)" >> "${log}"\n${fail}\nexit 0\n`,
+      `#!/bin/sh\nprintf '%s|%s|%s\\036' "${name}" "$*" "$(cat)" >> "${log}"\n${then}\nexit 0\n`,
       { mode: 0o755 },
     );
-  stub("rex", failDirect ? `[ "$1" = "-S" ] && exit 1` : "");
-  stub("ssh", "");
+  stub("rex", behave.rex);
+  stub("ssh", behave.ssh);
+  const path = process.env.PATH;
+  process.env.PATH = `${bin}:${path}`;
+  const started = Date.now();
+  let error: string | null = null;
   try {
-    execFileSync("sh", delivery.args, {
-      input: delivery.input,
-      env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
-    });
-    return readFileSync(log, "utf8").split("\x1e").slice(0, -1);
+    await makeInputRunner(bounds)(delivery);
+  } catch (cause) {
+    error = cause instanceof Error ? cause.message : String(cause);
+  } finally {
+    process.env.PATH = path;
+  }
+  const ms = Date.now() - started;
+  try {
+    return { log: readFileSync(log, "utf8").split("\x1e").slice(0, -1), error, ms };
   } finally {
     rmSync(bin, { recursive: true, force: true });
   }
 }
 
-test("a remote Rex prompt goes through rex -S when it answers, and never touches ssh", () => {
+const FAIL_DIRECT = `[ "$1" = "-S" ] && exit 1`;
+const DIRECT = "rex|-S me@dev --timeout 3s --autostart=false";
+
+test("a remote Rex prompt goes through rex -S when it answers, and never touches ssh", async () => {
   const text = "multi\nline 'quoted' $HOME\n";
-  const log = runStubbed(buildPromptDelivery(rexPane(false), text, "dev", "b", "me@dev"), false);
+  const { log, error } = await runStubbed(
+    buildPromptDelivery(rexPane(false), text, "dev", "b", "me@dev"),
+  );
+  expect(error).toBeNull();
   expect(log).toEqual([
-    `rex|-S me@dev --autostart=false send -s session:s1 -b block:b1|${text.trimEnd()}`,
-    "rex|-S me@dev --autostart=false send-key -s session:s1 -b block:b1 enter|",
+    `${DIRECT} send -s session:s1 -b block:b1|${text.trimEnd()}`,
+    `${DIRECT} send-key -s session:s1 -b block:b1 enter|`,
   ]);
 });
 
-test("a remote Rex prompt whose rex -S fails is sent once more over ssh, the same text", () => {
+test("a remote Rex prompt whose rex -S fails is sent once more over ssh, the same text", async () => {
   const text = "hello there";
-  const log = runStubbed(buildPromptDelivery(rexPane(false), text, "dev", "b", "me@dev"), true);
+  const { log, error } = await runStubbed(
+    buildPromptDelivery(rexPane(false), text, "dev", "b", "me@dev"),
+    { rex: FAIL_DIRECT },
+  );
+  expect(error).toBeNull();
   expect(log).toHaveLength(2);
-  expect(log[0]).toBe(`rex|-S me@dev --autostart=false send -s session:s1 -b block:b1|${text}`);
+  expect(log[0]).toBe(`${DIRECT} send -s session:s1 -b block:b1|${text}`);
   expect(log[1]).toMatch(/^ssh\|.* dev 'rex' '--autostart=false' 'send' .*'enter'\|hello there$/);
 });
 
-test("a remote Rex Escape falls back to ssh only when rex -S fails", () => {
+test("a remote Rex Escape falls back to ssh only when rex -S fails", async () => {
   const delivery = buildEscapeDelivery(rexPane(false), "dev", "me@dev");
-  expect(runStubbed(delivery, false)).toEqual([
-    "rex|-S me@dev --autostart=false send-key -s session:s1 -b block:b1 escape|",
+  expect((await runStubbed(delivery)).log).toEqual([
+    `${DIRECT} send-key -s session:s1 -b block:b1 escape|`,
   ]);
-  const log = runStubbed(delivery, true);
+  const { log } = await runStubbed(delivery, { rex: FAIL_DIRECT });
   expect(log[0]).toMatch(/^rex\|-S me@dev/);
   expect(log[1]).toMatch(/^ssh\|.* dev 'rex' '--autostart=false' 'send-key' .*'escape'\|$/);
+});
+
+test("a rex -S that cannot connect in time delivered nothing: the prompt goes over ssh", async () => {
+  const { log, error } = await runStubbed(
+    buildPromptDelivery(rexPane(false), "hi", "dev", "b", "me@dev"),
+    {
+      rex: `echo "Error: connecting to Rex server https://dev timed out after 3s" >&2; exit 4`,
+    },
+  );
+  expect(error).toBeNull();
+  expect(log.map((line) => line.split("|")[0])).toEqual(["rex", "ssh"]);
+});
+
+test("a hung rex -S is killed at its bound and reported as an unknown delivery, never retried", async () => {
+  const { log, error, ms } = await runStubbed(
+    buildPromptDelivery(rexPane(false), "hi", "dev", "b", "me@dev"),
+    { rex: "exec sleep 30" },
+  );
+  expect(ms).toBeLessThan(4_000);
+  expect(error).toMatch(/^unknown delivery: rex timed out after 1\.5s/);
+  // It may have typed the prompt before it hung: the ssh never types it again.
+  expect(log.map((line) => line.split("|")[0])).toEqual(["rex"]);
+});
+
+test("a rex -S request that timed out after connecting is an unknown delivery too", async () => {
+  const { log, error } = await runStubbed(
+    buildPromptDelivery(rexPane(false), "hi", "dev", "b", "me@dev"),
+    { rex: `echo "Error: send: context deadline exceeded" >&2; exit 1` },
+  );
+  expect(error).toMatch(/^unknown delivery: .*deadline exceeded/);
+  expect(log).toHaveLength(1);
+});
+
+test("a hung ssh is killed at its bound with an error, its child group and all", async () => {
+  const hang = { ssh: "sleep 30 & wait" };
+  const viaSsh = await runStubbed(buildPromptDelivery(rexPane(false), "hi", "dev"), hang);
+  expect(viaSsh.ms).toBeLessThan(4_000);
+  expect(viaSsh.error).toBe("ssh timed out after 1.5s");
+  const fallback = await runStubbed(
+    buildPromptDelivery(rexPane(false), "hi", "dev", "b", "me@dev"),
+    { ...hang, rex: FAIL_DIRECT },
+  );
+  expect(fallback.ms).toBeLessThan(4_000);
+  expect(fallback.error).toBe("ssh timed out after 1.5s");
+  expect(fallback.log.map((line) => line.split("|")[0])).toEqual(["rex", "ssh"]);
+});
+
+test("the total deadline bounds the whole delivery, whatever each step's own bound", async () => {
+  const { error, ms } = await runStubbed(
+    buildPromptDelivery(rexPane(false), "hi", "dev"),
+    { ssh: "exec sleep 30" },
+    { rexMs: 9_000, sshMs: 9_000, totalMs: 1_500 },
+  );
+  expect(ms).toBeLessThan(4_000);
+  expect(error).toBe("ssh timed out after 1.5s");
 });

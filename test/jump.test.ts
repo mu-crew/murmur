@@ -1662,6 +1662,16 @@ test("a remote Rex jump with no Rex host goes straight to ssh, and says how to s
   expect(result.ok ? "" : result.message).toMatch(/murmur peer set p --rex-host <label>/);
 });
 
+test("a remote Rex jump whose ssh focus fails, with no Rex host, still says how to set one", () => {
+  peer("p", "remote-host");
+  const { calls, run } = recorder(() => ({ status: 255, stdout: "", failed: false }));
+  const result = jumpToAgent(store, rexView(), fakeMux(), run, {});
+  expect(calls.map(([file]) => file)).toEqual(["ssh"]);
+  expect(result).toMatchObject({ ok: false, reason: "attach_failed" });
+  expect(result.ok ? "" : result.message).toMatch(/session\.focus_block failed/);
+  expect(result.ok ? "" : result.message).toMatch(/murmur peer set p --rex-host <label>/);
+});
+
 test("a Rex jump names the missing app client when session.select exits 3", () => {
   const { run } = recorder((_file, args) =>
     args.includes("session.select") ? { status: 3, stdout: "", failed: false } : ok(),

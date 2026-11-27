@@ -85,9 +85,17 @@ export function dashFilter(state: DashFilter, action: DashFilterAction): DashFil
 }
 
 export type InputDelivery = {
-  command: "tmux" | "ssh" | "sh";
+  command: "tmux" | "ssh" | "sh" | "rex";
   args: string[];
   input: string;
+  /** Run once this step succeeded: a `rex -S send`'s Enter. Never retried elsewhere. */
+  next?: InputDelivery;
+  /**
+   * Tried only when this step failed AND certainly delivered nothing: the warm
+   * ssh behind a `rex -S`. A step that timed out after it may have delivered
+   * is reported as an unknown delivery instead, so nothing is typed twice.
+   */
+  fallback?: InputDelivery;
 };
 
 export type InputResult = { ok: true } | { ok: false; message: string };
@@ -138,24 +146,6 @@ function rexDelivery(pane: PaneView, text: string | null): InputDelivery {
 }
 
 /**
- * `rex -S` first, the warm ssh second. The text is read once into the shell, so
- * the fallback can send it again; a `send` that failed delivered nothing, and
- * once it succeeded the Enter is never retried elsewhere, so nothing is typed
- * twice. `$1` is the Rex host, `$2`/`$3` session and block, the rest the ssh argv.
- */
-export const REX_PROMPT_SCRIPT = `text=$(cat; printf x); text=\${text%x}
-if printf %s "$text" | rex -S "$1" --autostart=false send -s "$2" -b "$3"; then
-  exec rex -S "$1" --autostart=false send-key -s "$2" -b "$3" enter
-fi
-shift 3
-printf %s "$text" | ssh "$@"`;
-
-/** {@link REX_PROMPT_SCRIPT}'s Escape: no text, so the fallback is a plain retry. */
-export const REX_ESCAPE_SCRIPT = `rex -S "$1" --autostart=false send-key -s "$2" -b "$3" escape && exit 0
-shift 3
-exec ssh "$@"`;
-
-/**
  * A remote Rex block's input. Over the peer's ssh, the remote shell runs its
  * own local `rex`; with a `rex_host` configured here, `rex -S <rex_host>` is
  * tried first and the ssh is the fallback.
@@ -172,20 +162,24 @@ function remoteRexDelivery(
     text === null
       ? remote(["send-key", ...block, "escape"])
       : `${remote(["send", ...block])} && ${remote(["send-key", ...block, "enter"])}`;
-  const ssh = [...SSH_OPTIONS, target, command];
-  if (rexHost === null) return { command: "ssh", args: ssh, input: text ?? "" };
-  return {
-    command: "sh",
-    args: [
-      "-c",
-      text === null ? REX_ESCAPE_SCRIPT : REX_PROMPT_SCRIPT,
-      "sh",
-      rexHost,
-      pane.session,
-      pane.pane,
-      ...ssh,
-    ],
+  const ssh: InputDelivery = {
+    command: "ssh",
+    args: [...SSH_OPTIONS, target, command],
     input: text ?? "",
+  };
+  if (rexHost === null) return ssh;
+  // `--timeout` bounds rex's own connect and request; the runner's per-step
+  // deadline bounds a rex that hangs past it, so a dead host reaches the ssh.
+  const direct = (args: string[], input: string): InputDelivery => ({
+    command: "rex",
+    args: ["-S", rexHost, "--timeout", REX_TIMEOUT, ...rexArgv(null, args)],
+    input,
+  });
+  if (text === null) return { ...direct(["send-key", ...block, "escape"], ""), fallback: ssh };
+  return {
+    ...direct(["send", ...block], text),
+    next: direct(["send-key", ...block, "enter"], ""),
+    fallback: ssh,
   };
 }
 
@@ -249,24 +243,115 @@ export function buildEscapeDelivery(
   };
 }
 
-const runInput: InputRunner = (delivery) =>
-  new Promise((resolve, reject) => {
-    const child = spawn(helperPath(delivery.command), delivery.args, {
-      stdio: ["pipe", "ignore", "pipe"],
-    });
+/** `rex -S`'s own bound on connecting and on each request. */
+const REX_TIMEOUT = "3s";
+
+/** Per-step and total deadlines; the total matches the jump probe's 10s. */
+export type InputBounds = { rexMs: number; sshMs: number; totalMs: number };
+export const INPUT_BOUNDS: InputBounds = { rexMs: 4_000, sshMs: 6_000, totalMs: 10_000 };
+
+/** A failed step; `maybeDelivered` when it may have reached the pane first. */
+class StepError extends Error {
+  constructor(
+    message: string,
+    readonly maybeDelivered: boolean,
+  ) {
+    super(message);
+  }
+}
+
+/**
+ * A rex error that came after the connection was up, on a request that timed
+ * out: the server may have acted on it. A connect timeout delivered nothing.
+ */
+function rexTimedOutAfterConnect(stderr: string): boolean {
+  return /timed out|deadline exceeded/i.test(stderr) && !/connecting to Rex server/.test(stderr);
+}
+
+/**
+ * One step, killed at `ms` with its whole process group, so a hung child (or a
+ * grandchild of `sh -c`) can neither stall the steer nor hold its pipes open.
+ */
+function runStep(step: InputDelivery, ms: number): Promise<void> {
+  return new Promise((resolve, reject) => {
+    let file: string;
+    try {
+      file = helperPath(step.command);
+    } catch (cause) {
+      // Not found (no `rex` here, say): nothing was delivered.
+      reject(new StepError(cause instanceof Error ? cause.message : String(cause), false));
+      return;
+    }
+    // Its own process group, so the deadline can kill all of it.
+    const child = spawn(file, step.args, { stdio: ["pipe", "ignore", "pipe"], detached: true });
     let error = "";
+    let settled = false;
+    const settle = (fail: StepError | null) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (fail) reject(fail);
+      else resolve();
+    };
+    const timer = setTimeout(() => {
+      try {
+        if (child.pid !== undefined) process.kill(-child.pid, "SIGKILL");
+      } catch {
+        child.kill("SIGKILL");
+      }
+      settle(new StepError(`${step.command} timed out after ${ms / 1000}s`, true));
+    }, ms);
     child.stderr.setEncoding("utf8");
     child.stderr.on("data", (chunk: string) => {
       error += chunk;
     });
-    child.on("error", reject);
+    child.on("error", (cause) => settle(new StepError(cause.message, false)));
     child.on("close", (code) => {
-      if (code === 0) resolve();
-      else
-        reject(new Error(error.trim() || `${delivery.command} exited ${code ?? "without status"}`));
+      if (code === 0) return settle(null);
+      const message = error.trim() || `${step.command} exited ${code ?? "without status"}`;
+      const maybe = step.command === "rex" ? rexTimedOutAfterConnect(error) : true;
+      settle(new StepError(message, maybe));
     });
-    child.stdin.end(delivery.input);
+    child.stdin.on("error", () => {});
+    child.stdin.end(step.input);
   });
+}
+
+/**
+ * Run a delivery under one total deadline: each step bounded on its own, a
+ * fallback only after a failure that certainly delivered nothing, and a step
+ * that may have delivered reported as an unknown delivery, never retried.
+ */
+export function makeInputRunner(bounds: InputBounds = INPUT_BOUNDS): InputRunner {
+  return async (delivery) => {
+    const deadline = Date.now() + bounds.totalMs;
+    let step: InputDelivery | undefined = delivery;
+    while (step) {
+      const left = deadline - Date.now();
+      if (left <= 0) throw new Error(`timed out after ${bounds.totalMs / 1000}s`);
+      const own = step.command === "rex" ? bounds.rexMs : bounds.sshMs;
+      const ms = step.command === "rex" || step.command === "ssh" ? Math.min(own, left) : left;
+      try {
+        await runStep(step, ms);
+      } catch (error) {
+        if (!(error instanceof StepError)) throw error;
+        if (step.fallback && !error.maybeDelivered) {
+          step = step.fallback;
+          continue;
+        }
+        if (step.fallback) {
+          throw new Error(
+            `unknown delivery: ${error.message}; not retried over ssh, check the pane`,
+          );
+        }
+        throw new Error(error.message);
+      }
+      step = step.next;
+    }
+  };
+}
+
+const runInput: InputRunner = makeInputRunner();
 
 /** How a delivery reaches the pane's node: the ssh target, and its Rex host if set here. */
 type InputRoute = { target: string | null; rexHost: string | null };
