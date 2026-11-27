@@ -332,11 +332,22 @@ test("a slow peer occupies one slot, it does not stall the queue behind it", asy
   for (const name of names) store.addPeer(name, name);
   let slowDone = false;
   const startedAfterSlowFinished: string[] = [];
+  // p0 holds its slot until the peers queued behind the first batch have
+  // started: a fixed-batch chunker could never start them, and this hangs.
+  const queued = new Set(names.slice(MAX_CONCURRENT_PEERS));
+  let release = () => {};
+  const behindStarted = new Promise<void>((resolve) => {
+    release = resolve;
+  });
   const channel: Channel = {
     exec: async (target) => {
       if (slowDone) startedAfterSlowFinished.push(target);
-      await new Promise((resolve) => setTimeout(resolve, target === "p0" ? 60 : 1));
-      if (target === "p0") slowDone = true;
+      queued.delete(target);
+      if (queued.size === 0) release();
+      if (target === "p0") {
+        await behindStarted;
+        slowDone = true;
+      }
       return snapshot([pane("%1")]);
     },
   };

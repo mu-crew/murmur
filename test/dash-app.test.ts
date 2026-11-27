@@ -45,7 +45,9 @@ class KeyStdin extends EventEmitter {
 class FrameStdout extends EventEmitter {
   columns = 120;
   rows = 30;
-  write() {
+  frames: string[] = [];
+  write(chunk?: unknown) {
+    this.frames.push(String(chunk));
     return true;
   }
 }
@@ -88,6 +90,12 @@ afterEach(() => {
   rmSync(root, { recursive: true, force: true });
 });
 
+/** Poll until `done()`; the deadline only bounds a hang, it is not a pacing delay. */
+async function until(done: () => boolean, ms = 5_000): Promise<void> {
+  const deadline = Date.now() + ms;
+  while (!done() && Date.now() < deadline) await sleep(10);
+}
+
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 test("opening the composer on the second of two %0s acknowledges that server's %0 only", async () => {
@@ -126,9 +134,10 @@ test("opening the composer on the second of two %0s acknowledges that server's %
   ]);
 
   const stdin = new KeyStdin();
+  const stdout = new FrameStdout();
   const instance = render(createElement(App, { dashStore, initial }), {
     stdin: stdin as unknown as NodeJS.ReadStream,
-    stdout: new FrameStdout() as unknown as NodeJS.WriteStream,
+    stdout: stdout as unknown as NodeJS.WriteStream,
     stderr: new FrameStdout() as unknown as NodeJS.WriteStream,
     exitOnCtrlC: false,
     patchConsole: false,
@@ -139,9 +148,11 @@ test("opening the composer on the second of two %0s acknowledges that server's %
     );
   let left: Record<string, string[]> = {};
   try {
-    await sleep(200);
+    // First frame drawn, then the key's redraw, before the next key.
+    await until(() => stdout.frames.some((frame) => frame.includes("crashed")));
+    const drawn = stdout.frames.length;
     stdin.press("j");
-    await sleep(200);
+    await until(() => stdout.frames.length > drawn);
     stdin.press("i");
     const deadline = Date.now() + 5_000;
     const total = () => Object.values(attention()).flat().length;
@@ -149,7 +160,8 @@ test("opening the composer on the second of two %0s acknowledges that server's %
       await sleep(50);
     }
     // Let the composer's follow-up redraw land before reading and closing.
-    await sleep(300);
+    const settled = stdout.frames.length;
+    await until(() => stdout.frames.length > settled, 1_000);
     left = attention();
   } finally {
     instance.unmount();

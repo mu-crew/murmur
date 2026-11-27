@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, expect, test } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
 import type { InputDelivery } from "../src/dash-input.js";
 import { asPaneId, asSessionId, asWindowId } from "../src/ids.js";
 import { readPaneCtlSocket } from "../src/pane-process.js";
@@ -108,6 +108,7 @@ async function walkReply(state: string): Promise<string> {
 
 const servers: Server[] = [];
 afterEach(() => {
+  vi.useRealTimers();
   for (const server of servers.splice(0)) server.close();
 });
 
@@ -275,13 +276,20 @@ test("a remote Rex read with both legs hanging stays within probeMs per probe an
     return new Promise((_, reject) => setTimeout(() => reject(new Error("timed out")), after));
   };
   const slow: StopBounds = { totalMs: 300, intervalMs: 20, probeMs: 200, ctlMs: 100 };
+  // A fake clock: Date.now and setTimeout advance together, so no real-time
+  // jitter or event-loop pause can change what each leg is given.
+  vi.useFakeTimers();
   const started = Date.now();
-  const outcome = await stopPane(store("me@dev"), rexBlock(false), {
+  const pending = stopPane(store("me@dev"), rexBlock(false), {
     run,
     capture: hang,
     bounds: slow,
   });
-  expect(Date.now() - started).toBeLessThan(slow.totalMs + 150);
+  await vi.advanceTimersByTimeAsync(slow.totalMs + 100);
+  const outcome = await pending;
+  const elapsed = Date.now() - started;
+  vi.useRealTimers();
+  expect(elapsed).toBeLessThanOrEqual(slow.totalMs + 100);
   expect(outcome).toMatchObject({ stopped: null, state: null });
   // The first probe's two legs share its 200ms: the ssh leg gets only the rest.
   expect(calls.slice(0, 2)).toEqual(["rex", "ssh"]);

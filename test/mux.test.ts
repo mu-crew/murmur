@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test, vi } from "vitest";
@@ -385,11 +385,12 @@ test("servers lists every socket in tmux's directory, and the one $TMUX names", 
   mkdirSync(directory, { recursive: true });
   const listeners = ["default", "mule", join(root, "elsewhere.sock")].map((name) => {
     const server = createServer();
+    const listening = new Promise<void>((resolve) => server.once("listening", resolve));
     server.listen(name.startsWith("/") ? name : join(directory, name));
-    return server;
+    return { server, listening };
   });
   try {
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await Promise.all(listeners.map((listener) => listener.listening));
     writeFileSync(join(directory, "notes"), "");
     vi.stubEnv("TMUX", `${join(root, "elsewhere.sock")},123,0`);
     expect(tmux.servers()).toEqual([
@@ -398,7 +399,8 @@ test("servers lists every socket in tmux's directory, and the one $TMUX names", 
       { kind: "path", value: join(root, "elsewhere.sock") },
     ]);
   } finally {
-    for (const listener of listeners) listener.close();
+    for (const listener of listeners) listener.server.close();
     vi.unstubAllEnvs();
+    rmSync(root, { recursive: true, force: true });
   }
 });
