@@ -5,6 +5,19 @@ so it says what changed for a user rather than listing every commit.
 
 ## Unreleased
 
+- **Collection fixes.** A tmux or Rex pane kept after its program exited
+  non-zero (`remain-on-exit`, Rex's keep-on-exit) now records a crash when it
+  vanished from the list mid-work; it used to read as cleared. The Rex reader
+  always reads this machine's Rex (it ignores `$REX_SERVER`), treats a failed
+  `process` call as no evidence rather than an empty process, lets the root
+  record speak on a state tie (an agent with delegates out reads `running`,
+  not `waiting`), and drops progress or times a snapshot would reject. A live
+  pane is never also listed as a crash a concurrent collect recorded.
+- **SDK `readStatus` probes nothing by default.** It now matches
+  `murmur status --json --cached`: no `ssh -O check`, `tmux`, `ps` or
+  `ssh -G`. Pass `cached: false` for the live probes. `StatusOptions` is
+  exported.
+
 - **Untagged mu panes read as crew.** A tmux pane mu placed but failed to tag
   (`@mu_agent` empty, mu before 5.6.1) showed as a person's own. murmur now
   reads mu's identity from the pane's root process environment
