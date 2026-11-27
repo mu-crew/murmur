@@ -784,7 +784,7 @@ test("a remote Rex glance falls back to the peer's own rex over ssh", async () =
   // The far side's rex, trimmed there to its tail (see the local runner test).
   const [target, command] = argvs[0] ?? [];
   expect(target).toBe("bubba.example");
-  expect(command).toMatch(/^'sh' '-c' '.*tail -c [0-9]+' 'sh' 'rex' /);
+  expect(command).toMatch(/^'sh' '-c' '.*\| tail -c [0-9]+ .*' 'sh' 'rex' /);
   expect(command).toContain(
     ["rex", "--autostart=false", ...REX_CAPTURE].map((word) => `'${word}'`).join(" "),
   );
@@ -843,6 +843,50 @@ test("a real local Rex glance keeps the tail of a capture far over 1 MiB", async
     writeFileSync(fake, "#!/bin/sh\nexit 3\n");
     expect(glance(store, agent, 5)).toBeNull();
     expect(await glanceAsync(store, agent, 5)).toBeNull();
+  } finally {
+    rmSync(bin, { recursive: true, force: true });
+  }
+});
+
+test("a 64 MiB Rex capture comes back as its last 1 MiB, quickly, local and over ssh", async () => {
+  // `rex capture`'s ceiling. Held in a shell variable first, this took the
+  // whole 3 s timeout and the glance came back null.
+  const bin = mkdtempSync(join(tmpdir(), "murmur-fake-rex-"));
+  const scrollback = join(bin, "scrollback");
+  const line = `${"x".repeat(99)}\n`;
+  const body = Buffer.from(line.repeat(Math.ceil((64 * 1024 * 1024) / line.length)));
+  writeFileSync(
+    scrollback,
+    Buffer.concat([Buffer.from("HEAD_GONE\n"), body, Buffer.from("TAIL_OK\n")]),
+  );
+  const fake = join(bin, "rex");
+  writeFileSync(fake, `#!/bin/sh\nexec cat '${scrollback}'\n`);
+  chmodSync(fake, 0o755);
+  vi.stubEnv("PATH", `${bin}:${process.env.PATH ?? ""}`);
+  try {
+    const agent = { ...remoteRexAgent(null), local: true };
+    let started = Date.now();
+    const out = await glanceAsync(store, agent, 5);
+    expect(Date.now() - started).toBeLessThan(1500);
+    expect(out).toContain("TAIL_OK");
+    // The sync runner streams through `tail -c`: null here means it timed out.
+    expect(glance(store, agent, 5)).toContain("TAIL_OK");
+    // The remote command, run here as the far side's login shell would: its
+    // output is the tail only, and rex's failure is still the command's.
+    let command = "";
+    glance(store, { ...remoteRexAgent(null) }, 5, (_target, argv) => {
+      command = argv.join(" ");
+      return "";
+    });
+    started = Date.now();
+    const remote = execFileSync("sh", ["-c", command], {
+      encoding: "utf8",
+      maxBuffer: 128 * 1024 * 1024,
+    });
+    expect(Date.now() - started).toBeLessThan(3000);
+    expect(remote.length).toBeLessThanOrEqual(1024 * 1024);
+    expect(remote.endsWith("TAIL_OK\n")).toBe(true);
+    expect(remote).not.toContain("HEAD_GONE");
   } finally {
     rmSync(bin, { recursive: true, force: true });
   }

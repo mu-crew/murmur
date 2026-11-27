@@ -1,4 +1,4 @@
-import { execFile, execFileSync, spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { peerForHost, rexArgv, shellQuote } from "./agents.js";
 import { endLinesWithReset, scan, sgrOnly } from "./ansi.js";
 import { SSH_OPTIONS } from "./channel.js";
@@ -170,10 +170,20 @@ const REX_CAPTURE_TAIL_BYTES = STDOUT_MAX_BYTES - 1024;
 
 /**
  * `sh -c` script running `"$@"` (the rex argv) and printing only the tail of
- * its output. The capture is held in a variable rather than piped so a failed
- * rex still fails the script: `cmd | tail` would exit 0 on tail's status.
+ * its output, for the sync runner and a remote node's capture over ssh (where
+ * the trim must happen on the far side), streamed: rex's stdout is piped straight into `tail -c`, which
+ * holds at most the tail, so a 64 MiB scrollback costs neither 64 MiB of shell
+ * memory nor the seconds a shell variable took to fill (it timed out). The
+ * script's status is rex's, carried out on fd 3, since `cmd | tail` alone
+ * would exit with tail's; fd 4 is the real stdout for tail. rex gets neither,
+ * so nothing it leaves running holds the status pipe open.
  */
-const REX_TAIL_SCRIPT = `out=$("$@") && printf '%s\\n' "$out" | tail -c ${REX_CAPTURE_TAIL_BYTES}`;
+const REX_TAIL_SCRIPT = [
+  "exec 4>&1",
+  `rc=$({ { "$@" 3>&- 4>&-; echo $? >&3; } | tail -c ${REX_CAPTURE_TAIL_BYTES} >&4 3>&-; } 3>&1)`,
+  '[ -n "$rc" ] || rc=1',
+  'exit "$rc"',
+].join("; ");
 
 /** The `sh` arguments running `rex <args>` through `REX_TAIL_SCRIPT`. */
 function rexTailArgs(rex: string, args: readonly string[]): string[] {
@@ -187,14 +197,45 @@ const rexRunner: RexGlanceRunner = (args) =>
     stdio: ["ignore", "pipe", "ignore"],
   });
 
+/**
+ * The async local runner reads rex's stdout itself, keeping a rolling tail of
+ * `REX_CAPTURE_TAIL_BYTES`: memory stays at the tail and the time is the
+ * capture's own, with no shell or `tail` in between (BSD `tail -c` on a pipe
+ * took most of a second over 64 MiB). A non-zero exit, a signal or the 3 s
+ * timeout rejects, as the sync runner's do.
+ */
 const rexRunnerAsync: RexGlanceRunnerAsync = (args) =>
   new Promise((resolve, reject) => {
-    execFile(
-      helperPath("sh"),
-      rexTailArgs(helperPath("rex"), args),
-      { encoding: "utf8", timeout: 3000, maxBuffer: STDOUT_MAX_BYTES },
-      (error, stdout) => (error ? reject(error) : resolve(stdout)),
-    );
+    const child = spawn(helperPath("rex"), args, { stdio: ["ignore", "pipe", "ignore"] });
+    const chunks: Buffer[] = [];
+    let size = 0;
+    let failed = false;
+    const timer = setTimeout(() => {
+      if (failed) return;
+      failed = true;
+      child.kill();
+      reject(new Error("rex timed out"));
+    }, 3000);
+    child.stdout.on("data", (chunk: Buffer) => {
+      chunks.push(chunk);
+      size += chunk.length;
+      // Drop whole chunks from the front while the rest still covers the tail.
+      while (chunks.length > 1 && size - (chunks[0]?.length ?? 0) >= REX_CAPTURE_TAIL_BYTES) {
+        size -= chunks.shift()?.length ?? 0;
+      }
+    });
+    child.on("error", (error) => {
+      clearTimeout(timer);
+      if (failed) return;
+      failed = true;
+      reject(error);
+    });
+    child.on("close", (code, signal) => {
+      clearTimeout(timer);
+      if (failed) return;
+      if (code !== 0) reject(new Error(`rex exited ${code ?? signal}`));
+      else resolve(Buffer.concat(chunks).subarray(-REX_CAPTURE_TAIL_BYTES).toString("utf8"));
+    });
   });
 
 /** The `rex capture` of one block, against the local server or `-S <host>`. */
