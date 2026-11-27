@@ -552,3 +552,11 @@ test("parsePaneRow keeps an OSC 7577 pane as idle after vtmux clears done on foc
   // Without 7501, 7577, or @mu_agent, a plain shell is still omitted.
   expect(parse({ pane: "%1", command: "zsh", state: "" })).toBeNull();
 });
+
+test("chosenPaneTitle strips pi's 'π - <name> - <dir>' wrapper", () => {
+  expect(chosenPaneTitle("π - OSC 7501 Rollout - crew", "macbook")).toBe("OSC 7501 Rollout");
+  expect(chosenPaneTitle("π - crew", "macbook")).toBe("crew");
+  expect(chosenPaneTitle("macbook.local", "macbook.local")).toBeNull();
+  expect(chosenPaneTitle("macbook", "macbook.local")).toBeNull();
+  expect(chosenPaneTitle("plain title", "macbook")).toBe("plain title");
+});

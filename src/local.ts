@@ -191,7 +191,13 @@ function delegates(message: string | null): number {
 export function chosenPaneTitle(title: string, host = hostname()): string | null {
   if (!title) return null;
   const short = host.split(".")[0];
-  return title === host || title === short ? null : title;
+  if (title === host || title === short) return null;
+  // pi titles its pane `π - <session name> - <dir>` (or `π - <dir>` when unnamed).
+  const piNamed = /^π - (.+) - [^ ]+$/.exec(title);
+  if (piNamed?.[1]) return piNamed[1];
+  const piPlain = /^π - (.+)$/.exec(title);
+  if (piPlain?.[1]) return piPlain[1];
+  return title;
 }
 
 /**
