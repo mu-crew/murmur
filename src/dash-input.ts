@@ -260,12 +260,26 @@ class StepError extends Error {
   }
 }
 
+/** rex's own pre-connect failures: no request was sent, so nothing was delivered. */
+const REX_PRE_CONNECT = [
+  /no Rex server is running/,
+  /connecting to (the )?Rex server .*timed out/,
+  /connecting to (the )?Rex server \S+: .*connection refused/,
+  /connecting to (the )?Rex server \S+: ssh could not connect/,
+  /connecting to the server timed out/,
+  /connecting to the home at .* timed out/,
+  /permission denied connecting to/,
+  /unsupported server endpoint scheme/,
+];
+
 /**
- * A rex error that came after the connection was up, on a request that timed
- * out: the server may have acted on it. A connect timeout delivered nothing.
+ * Fail closed: a rex exit certainly delivered nothing only when it is exit 4
+ * (rex's connect failure) with a recognised pre-connect message. Anything else
+ * (a mid-request drop, a request timeout, a signal, empty stderr) may have
+ * reached the pane.
  */
-function rexTimedOutAfterConnect(stderr: string): boolean {
-  return /timed out|deadline exceeded/i.test(stderr) && !/connecting to Rex server/.test(stderr);
+function rexFailedBeforeConnect(code: number | null, stderr: string): boolean {
+  return code === 4 && REX_PRE_CONNECT.some((pattern) => pattern.test(stderr));
 }
 
 /**
@@ -309,7 +323,7 @@ function runStep(step: InputDelivery, ms: number): Promise<void> {
     child.on("close", (code) => {
       if (code === 0) return settle(null);
       const message = error.trim() || `${step.command} exited ${code ?? "without status"}`;
-      const maybe = step.command === "rex" ? rexTimedOutAfterConnect(error) : true;
+      const maybe = step.command === "rex" ? !rexFailedBeforeConnect(code, error) : true;
       settle(new StepError(message, maybe));
     });
     child.stdin.on("error", () => {});

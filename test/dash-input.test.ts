@@ -467,7 +467,7 @@ async function runStubbed(
   }
 }
 
-const FAIL_DIRECT = `[ "$1" = "-S" ] && exit 1`;
+const FAIL_DIRECT = `[ "$1" = "-S" ] && { echo "Error: no Rex server is running at /x.sock, and autostart is disabled" >&2; exit 4; }`;
 const DIRECT = "rex|-S me@dev --timeout 3s --autostart=false";
 
 test("a remote Rex prompt goes through rex -S when it answers, and never touches ssh", async () => {
@@ -532,6 +532,49 @@ test("a rex -S request that timed out after connecting is an unknown delivery to
     { rex: `echo "Error: send: context deadline exceeded" >&2; exit 1` },
   );
   expect(error).toMatch(/^unknown delivery: .*deadline exceeded/);
+  expect(log).toHaveLength(1);
+});
+
+test.each([
+  ["a mid-request drop", `echo "Error: send: api control closed" >&2; exit 4`],
+  ["a reset connection", `echo "Error: reading API control: connection reset by peer" >&2; exit 1`],
+  ["an i/o timeout", `echo "Error: read tcp: i/o timeout" >&2; exit 1`],
+  ["a bare exit 1", "exit 1"],
+  ["an exit 4 with empty stderr", "exit 4"],
+  ["a signal kill", "kill -9 $$"],
+])("%s from rex -S is an unknown delivery, never retried over ssh", async (_, rex) => {
+  const { log, error } = await runStubbed(
+    buildPromptDelivery(rexPane(false), "hi", "dev", "b", "me@dev"),
+    { rex },
+  );
+  expect(error).toMatch(/^unknown delivery: /);
+  expect(log.map((line) => line.split("|")[0])).toEqual(["rex"]);
+});
+
+test.each([
+  "Error: no Rex server is running at /nonexistent.sock, and autostart is disabled",
+  "Error: connecting to Rex server http://192.0.2.1:1 timed out after 1s; increase --timeout: context deadline exceeded",
+  "Error: connecting to Rex server http://127.0.0.1:1: dial tcp 127.0.0.1:1: connect: connection refused",
+  "Error: connecting to Rex server ssh://nonexistent.invalid: ssh could not connect to nonexistent.invalid",
+  "Error: connecting to the server timed out after 3s",
+  "Error: connecting to the home at dev timed out after 3s",
+  "Error: permission denied connecting to /x.sock",
+  "Error: unsupported server endpoint scheme ftp",
+])("rex -S exit 4 %j delivered nothing: the prompt goes over ssh", async (message) => {
+  const { log, error } = await runStubbed(
+    buildPromptDelivery(rexPane(false), "hi", "dev", "b", "me@dev"),
+    { rex: `echo "${message}" >&2; exit 4` },
+  );
+  expect(error).toBeNull();
+  expect(log.map((line) => line.split("|")[0])).toEqual(["rex", "ssh"]);
+});
+
+test("a pre-connect message with an exit other than 4 is still an unknown delivery", async () => {
+  const { log, error } = await runStubbed(
+    buildPromptDelivery(rexPane(false), "hi", "dev", "b", "me@dev"),
+    { rex: `echo "Error: no Rex server is running at /x.sock" >&2; exit 1` },
+  );
+  expect(error).toMatch(/^unknown delivery: /);
   expect(log).toHaveLength(1);
 });
 
