@@ -231,9 +231,16 @@ function parsePane(value: unknown, path: string): SnapshotPane {
   if (agent === null && attention.length === 0) {
     fail(path, "a pane with no agent and no attention must not be emitted");
   }
+  const server = parseServer(row.server, `${path}.server`);
+  const pane = text(row.pane, `${path}.pane`);
+  // A tmux pane id is `%N`, nothing else. A peer's `jump_command` substitutes
+  // `{pane}` into a shell command unquoted, so a pane id is never free text.
+  if (server.kind !== "rex" && !/^%\d+$/.test(pane)) {
+    fail(`${path}.pane`, "expected a tmux pane id (%N)");
+  }
   return {
-    server: parseServer(row.server, `${path}.server`),
-    pane: asPaneId(text(row.pane, `${path}.pane`)),
+    server,
+    pane: asPaneId(pane),
     session: asSessionId(text(row.session, `${path}.session`)),
     window: asWindowId(text(row.window, `${path}.window`)),
     session_name: textOrNull(row.session_name, `${path}.session_name`),

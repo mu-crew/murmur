@@ -612,7 +612,7 @@ test("statusWithCollect awaits the collect before reading", async () => {
   const channel: Channel = {
     exec: async () => {
       await held;
-      return JSON.stringify(remoteSnapshot([remotePane("%far")]));
+      return JSON.stringify(remoteSnapshot([remotePane("%77")]));
     },
   };
 
@@ -634,7 +634,7 @@ test("statusWithCollect awaits the collect before reading", async () => {
   const view = await pending;
 
   // And the returned view reflects the sync that just ran, not the one before.
-  expect(view.panes.map((pane) => pane.pane)).toEqual(expect.arrayContaining(["%far", "%1"]));
+  expect(view.panes.map((pane) => pane.pane)).toEqual(expect.arrayContaining(["%77", "%1"]));
   expect(view.peers[0]?.fetched_at).not.toBeNull();
   expect(() => store.close()).not.toThrow();
 });

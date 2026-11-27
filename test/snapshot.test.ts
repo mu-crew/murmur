@@ -297,6 +297,40 @@ test("a pane missing its server tag is rejected at the pane path", () => {
   expect(() => parseSnapshot(JSON.stringify(document))).toThrow("panes[0]: missing key server");
 });
 
+test("a tmux pane id that is not %N is rejected: {pane} reaches a shell unquoted", () => {
+  const pane = (server: unknown, id: string) => ({
+    murmur_snapshot: 8,
+    host_id: "H",
+    display_name: "d",
+    murmur_version: "0.5.0",
+    generated_at: 1,
+    panes: [
+      {
+        server,
+        pane: id,
+        session: "$0",
+        window: "@1",
+        session_name: null,
+        window_name: null,
+        agent: null,
+        attention: [{ kind: "done", message: "", source: "pi", driver: "human", requested_at: 1 }],
+      },
+    ],
+  });
+  for (const id of ["%1; touch /tmp/pwned", "$(id)", "1", "%"]) {
+    expect(() => parseSnapshot(JSON.stringify(pane({ kind: "default" }, id)))).toThrow(
+      "panes[0].pane: expected a tmux pane id",
+    );
+  }
+  expect(parseSnapshot(JSON.stringify(pane({ kind: "default" }, "%12"))).panes[0]?.pane).toBe(
+    "%12",
+  );
+  // A Rex block id is not a tmux pane and never reaches a `{pane}` template.
+  expect(parseSnapshot(JSON.stringify(pane({ kind: "rex" }, "block:b1"))).panes[0]?.pane).toBe(
+    "block:b1",
+  );
+});
+
 test("the same pane id is valid on different tmux servers", () => {
   const pane = {
     server: { kind: "default" },

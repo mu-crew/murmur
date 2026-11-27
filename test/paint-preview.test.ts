@@ -260,29 +260,33 @@ test.each([
   },
 );
 
-test("a hostile pane id is inert in the remote command", () => {
-  const hostile = "%1';touch /tmp/murmur-pwned;'";
+test("a hostile server label is inert in the remote command", () => {
+  // A pane id can no longer carry one (the snapshot reader admits only `%N`),
+  // so the hostile word rides in the server label, which is free text.
+  const hostile = "x';touch /tmp/murmur-pwned;'";
   store.addPeer("bubba", "bubba.example");
   store.replacePeerSnapshot("bubba", {
     ok: true,
     at: Date.now(),
-    snapshot: remoteSnapshot([remotePane(hostile)]),
+    snapshot: remoteSnapshot([remotePane("%1", { kind: "label", value: hostile })]),
   });
 
-  expect(preview(hostile, "REMOTE").argv).toEqual([
+  expect(preview("%1", "REMOTE").argv).toEqual([
     [
-      "'tmux' '-L' 'default' 'capture-pane' '-p' '-e' '-t' '%1'\\'';touch /tmp/murmur-pwned;'\\''' '-S' '-40'",
+      "'tmux' '-L' 'x'\\'';touch /tmp/murmur-pwned;'\\''' 'capture-pane' '-p' '-e' '-t' '%1' '-S' '-40'",
     ],
   ]);
 });
 
 test("the async glance runs the same quoted ssh and matches the sync preview", async () => {
-  const hostile = "%1';touch /tmp/murmur-pwned;'";
+  const hostile = "%1";
   store.addPeer("bubba", "bubba.example");
   store.replacePeerSnapshot("bubba", {
     ok: true,
     at: Date.now(),
-    snapshot: remoteSnapshot([remotePane(hostile)]),
+    snapshot: remoteSnapshot([
+      remotePane(hostile, { kind: "label", value: "x';touch /tmp/murmur-pwned;'" }),
+    ]),
   });
   const identity = loadIdentity();
   if (!identity) throw new Error("no identity");
