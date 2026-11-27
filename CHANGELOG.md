@@ -5,6 +5,13 @@ so it says what changed for a user rather than listing every commit.
 
 ## Unreleased
 
+- **Jump to Rex agents.** `murmur jump`, `prompt` and `stop` rejected every
+  Rex agent's `jump_target` as "not a valid jump target": the token parser
+  accepted only tmux servers. Rex tokens now resolve like tmux ones.
+- **`murmur clear --target <jump_target>`.** Dismiss a crash by the token
+  `status --json` publishes, so a consumer such as tsesh needs no socket or
+  `--rex` flag of its own. A token for another host clears nothing.
+
 ## 3.0.2
 
 - **Clean pi session labels.** `chosenPaneTitle` strips pi's `π - <name> - <dir>`

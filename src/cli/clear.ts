@@ -1,5 +1,7 @@
 import type { Command } from "commander";
+import { loadIdentity, type NodeIdentity } from "../identity.js";
 import { asPaneId } from "../ids.js";
+import { parseJumpTarget } from "../jump-target.js";
 import { deriveTmuxServer } from "../mux.js";
 import { openStore, type Store } from "../store.js";
 import type { TmuxServer } from "../types.js";
@@ -31,6 +33,17 @@ export function clearPane(raw: string, server: TmuxServer): number {
       // Silent and total.
     }
   }
+}
+
+/**
+ * Dismiss the crash a `status --json` `jump_target` names: the address a
+ * consumer such as tsesh already holds, Rex included. Only this host's crashes:
+ * a peer's pane id means nothing here, so another host's token clears nothing.
+ */
+export function clearTarget(token: string, identity: NodeIdentity | null = loadIdentity()): number {
+  const address = parseJumpTarget(token);
+  if (!address || !identity || address.host_id !== identity.host_id) return 0;
+  return clearPane(address.pane, address.server);
 }
 
 /**
@@ -67,8 +80,19 @@ export function registerClear(program: Command): void {
     .option("-L, --socket-name <name>", "tmux server socket name of the pane")
     .option("-S, --socket-path <path>", "tmux server socket path of the pane")
     .option("--rex", "the pane is a Rex block")
+    .option("--target <jump-target>", "a status --json jump_target on this host, instead of --pane")
     .action(
-      (options: { pane?: string; socketName?: string; socketPath?: string; rex?: boolean }) => {
+      (options: {
+        pane?: string;
+        socketName?: string;
+        socketPath?: string;
+        rex?: boolean;
+        target?: string;
+      }) => {
+        if (options.target !== undefined) {
+          clearTarget(options.target);
+          return;
+        }
         clearPane(options.pane ?? "", paneServer(options));
       },
     );

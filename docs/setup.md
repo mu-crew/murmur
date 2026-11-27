@@ -91,7 +91,9 @@ hook bridge that writes the sequence to the pane's tty.
 
 A `crashed` row murmur recorded stays until you dismiss it, in the dash or with
 `murmur clear --pane %N` (`-L <name>` / `-S <path>` for another tmux server,
-`--rex` for a Rex block). Everything else on a pane is its program's, and goes
+`--rex` for a Rex block), or `murmur clear --target <jump_target>` with the
+token `status --json` gives each pane (this host's panes only; tsesh's
+`ctrl-x` on a crashed agent uses it). Everything else on a pane is its program's, and goes
 when the program says so.
 
 ## Side panel

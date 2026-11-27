@@ -2,8 +2,9 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeEach, expect, test } from "vitest";
-import { clearPane, paneServer } from "../src/cli/clear.js";
+import { clearPane, clearTarget, paneServer } from "../src/cli/clear.js";
 import { asPaneId, asSessionId, asWindowId } from "../src/ids.js";
+import { jumpTarget } from "../src/jump-target.js";
 import { openStore } from "../src/store.js";
 import type { Location, TmuxServer } from "../src/types.js";
 
@@ -95,4 +96,25 @@ test("a Rex block's crash is cleared by its block id", () => {
   store.close();
   expect(clearPane("block:1f2e", paneServer({ rex: true }))).toBe(1);
   expect(crashes()).toEqual([]);
+});
+
+test("clear --target dismisses the crash its jump_target names, Rex included", () => {
+  const REX: TmuxServer = { kind: "rex" };
+  const store = openStore();
+  store.recordCrash(at(MULE, "%1"));
+  store.recordCrash(at(REX, "block:01a2"));
+  store.recordCrash(at(DEFAULT, "%1"));
+  store.close();
+  const here = { host_id: "here", display_name: "here" };
+  const token = (server: TmuxServer, pane: string, host_id = "here") =>
+    jumpTarget({ host_id, server, pane: asPaneId(pane) });
+
+  expect(clearTarget(token(MULE, "%1"), here)).toBe(1);
+  expect(clearTarget(token(REX, "block:01a2"), here)).toBe(1);
+  expect(crashes()).toEqual(["default::%1"]);
+  // Another host's %1 is not this host's %1: a peer's crash is the peer's.
+  expect(clearTarget(token(DEFAULT, "%1", "peer"), here)).toBe(0);
+  expect(clearTarget(token(DEFAULT, "%1"), null)).toBe(0);
+  expect(clearTarget("not-a-token", here)).toBe(0);
+  expect(crashes()).toEqual(["default::%1"]);
 });
