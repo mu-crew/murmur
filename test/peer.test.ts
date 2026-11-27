@@ -3,7 +3,13 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeEach, expect, test } from "vitest";
-import { formatTable, lastSeen, parseSshHosts, peerAddDecision } from "../src/cli/peer.js";
+import {
+  formatTable,
+  lastSeen,
+  parseSshHosts,
+  peerAddDecision,
+  rexHostValue,
+} from "../src/cli/peer.js";
 import { openStore } from "../src/store.js";
 import type { PeerRecord, Snapshot } from "../src/types.js";
 import { builtArtifact, runBuiltCli } from "./helpers/built.js";
@@ -216,4 +222,10 @@ test("lastSeen separates never-answered from merely stale", () => {
   expect(lastSeen(now - 1_000, now)).toBe("just now");
   expect(lastSeen(now - 12 * 3_600_000, now)).toBe("12h ago");
   expect(lastSeen(now - 3 * 86_400_000, now)).toBe("3d ago");
+});
+
+test("a --rex-host value is trimmed, and blank (or only whitespace) clears it", () => {
+  expect(rexHostValue("  me@dev \n")).toBe("me@dev");
+  expect(rexHostValue("")).toBeNull();
+  expect(rexHostValue("   ")).toBeNull();
 });

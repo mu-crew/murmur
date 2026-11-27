@@ -1,12 +1,19 @@
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
-import { createServer, type Server } from "node:net";
+import { createServer, type Server, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, test, vi } from "vitest";
 import type { InputDelivery } from "../src/dash-input.js";
 import { asPaneId, asSessionId, asWindowId } from "../src/ids.js";
 import { readPaneCtlSocket } from "../src/pane-process.js";
-import { type Capture, parseStateLine, type StopBounds, stopPane } from "../src/stop.js";
+import {
+  type Capture,
+  ctlRequest,
+  paneCtlSocket,
+  parseStateLine,
+  type StopBounds,
+  stopPane,
+} from "../src/stop.js";
 import type { Store } from "../src/store.js";
 import type { PaneView } from "../src/view.js";
 import { rexWalk } from "./helpers/rex.js";
@@ -402,4 +409,57 @@ test("MU_CTL_SOCK is read from the pane process's environment", () => {
   writeFileSync(join(proc, "42", "environ"), "SECRET=x\0");
   expect(readPaneCtlSocket("42", "linux", proc)).toBeNull();
   expect(readPaneCtlSocket("4; rm", "linux", proc)).toBeNull();
+});
+
+/** A unix socket answering every connection with `write(conn)`. */
+async function replyServer(write: (conn: Socket) => void): Promise<string> {
+  const sock = join(mkdtempSync(join(tmpdir(), "murmur-ctl-")), "ctl.sock");
+  const server = createServer((conn) => {
+    conn.on("error", () => {});
+    conn.once("data", () => write(conn));
+  });
+  servers.push(server);
+  await new Promise<void>((resolve) => server.listen(sock, resolve));
+  return sock;
+}
+
+test("ctlRequest answers only a v1 ok reply, whole or in chunks", async () => {
+  const reply = JSON.stringify({ v: 1, ok: true, agent: "a" });
+  const whole = await replyServer((conn) => conn.end(`${reply}\n`));
+  expect(await ctlRequest(whole, { op: "hello" }, 1_000)).toMatchObject({ agent: "a" });
+  const chunked = await replyServer((conn) => {
+    conn.write(reply.slice(0, 5));
+    setTimeout(() => conn.end(`${reply.slice(5)}\n`), 10);
+  });
+  expect(await ctlRequest(chunked, { op: "hello" }, 1_000)).toMatchObject({ agent: "a" });
+});
+
+test.each([
+  ["ok:false", `${JSON.stringify({ v: 1, ok: false })}\n`],
+  ["a wrong protocol version", `${JSON.stringify({ v: 2, ok: true })}\n`],
+  ["malformed JSON", "{nope\n"],
+  ["a reply that is not an object", "null\n"],
+  ["a reply closed without a newline", JSON.stringify({ v: 1, ok: true })],
+  ["an oversized line", "x".repeat(70 * 1024)],
+])("ctlRequest: %s is no answer", async (_name, body) => {
+  const sock = await replyServer((conn) => conn.end(body));
+  expect(await ctlRequest(sock, { op: "abort" }, 1_000)).toBeNull();
+});
+
+test("ctlRequest: a socket that never answers times out, and a missing one is no answer", async () => {
+  const hung = await replyServer(() => {});
+  expect(await ctlRequest(hung, { op: "hello" }, 50)).toBeNull();
+  expect(await ctlRequest(join(tmpdir(), "murmur-no-such.sock"), { op: "hello" }, 50)).toBeNull();
+});
+
+test("paneCtlSocket asks only a local tmux pane, and a failed read is no socket", async () => {
+  const { calls, capture } = recorder(() => "not-a-pid\n");
+  expect(await paneCtlSocket(pane(false), capture, 100)).toBeNull();
+  expect(await paneCtlSocket(rexBlock(true), capture, 100)).toBeNull();
+  expect(calls).toEqual([]);
+  expect(await paneCtlSocket(pane(true), capture, 100)).toBeNull();
+  expect(calls).toHaveLength(1);
+  expect(calls[0]?.args).toContain("#{pane_pid}");
+  const failing = recorder(() => new Error("no server"));
+  expect(await paneCtlSocket(pane(true), failing.capture, 100)).toBeNull();
 });

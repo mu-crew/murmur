@@ -182,3 +182,18 @@ test("readStatus probes nothing by default, as status --json --cached does not",
   expect(probes).toBe(0);
   expect(read.peers[0]).toMatchObject({ name: "dev", needs_session: true });
 });
+
+test("a recorded pane that changed state is still recorded, with a fresh updated_at", async () => {
+  const writer = open();
+  const at = (state: string) => fixture([vtmuxRow({ pane: "%1", state, app: "pi" })], {});
+  await localStatus(writer, IDENTITY, 1_000, at("working"));
+  const read = await readStatus(open(true), IDENTITY, 2_000, at("blocked"));
+  expect(read.panes).toEqual([
+    expect.objectContaining({
+      pane: "%1",
+      render_state: "blocked",
+      recorded: true,
+      updated_at: 2_000,
+    }),
+  ]);
+});
