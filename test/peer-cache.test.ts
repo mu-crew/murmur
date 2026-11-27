@@ -367,7 +367,8 @@ test("the store exposes no reader-side mutation of remote state", () => {
   // `syncLocal` and `recordCrash` are LOCAL writers, not reader-side ones:
   // they record what this node's own collect saw of its own panes, and a crash
   // only that collect can conclude. `knownServers` and `localPanes` are their
-  // reads. None of them touches a peer's snapshot.
+  // reads, and `peekLocal` is `syncLocal`'s read-only twin, writing nothing.
+  // None of them touches a peer's snapshot.
   //
   // `claimAlerts` writes only its own dedup table: which events the
   // on-attention hook has run for. It says nothing about any pane.
@@ -382,6 +383,7 @@ test("the store exposes no reader-side mutation of remote state", () => {
     "knownServers",
     "localPanes",
     "paneProcesses",
+    "peekLocal",
     "peers",
     "recordCrash",
     "recordPaneProcess",

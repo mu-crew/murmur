@@ -5,7 +5,9 @@
 // Deliberately NOT here: anything from the forbidden-shapes list (no append, no
 // log read, no partial-row update) and no raw database handle under any name.
 // `syncLocal` is reachable only as a `Store` method, which keeps src/store.ts
-// the sole owner of SQL; `readLocal` is the one way to read local panes.
+// the sole owner of SQL; `readLocal` is the one way to read and record local
+// panes, and `readStatus` (through `peekLocal`) the one way to read them on a
+// read-only store without writing.
 //
 // The version comes from src/version.ts, the one module that can find
 // package.json from any bundle depth.
@@ -49,9 +51,11 @@ export {
 } from "./jump-command.js";
 export {
   buildSnapshot,
+  type LocalPeekRead,
   type LocalRead,
   PANE_FIELDS,
   parsePaneRow,
+  peekLocal,
   programState,
   readLocal,
 } from "./local.js";
@@ -59,7 +63,18 @@ export { type Mux, pidAlive, tmux } from "./mux.js";
 export { configDir, dbPath, stateDir } from "./paths.js";
 export { readRex } from "./rex.js";
 export { parseSnapshot, SnapshotInvalidError } from "./snapshot.js";
-export { localStatus, type Status, status, statusWithCollect, tmuxStatus } from "./status.js";
+export {
+  localStatus,
+  type ReadStatus,
+  readStatus,
+  type Status,
+  type StatusJson,
+  type StatusJsonPane,
+  status,
+  statusJson,
+  statusWithCollect,
+  tmuxStatus,
+} from "./status.js";
 export {
   promptAgent,
   type ResolveResult,
@@ -68,7 +83,7 @@ export {
   type SteerResult,
   stopAgent,
 } from "./steer.js";
-export { openStore, type Store, StoreTooNewError } from "./store.js";
+export { type LocalPeek, openStore, type Store, StoreTooNewError } from "./store.js";
 export type {
   Activity,
   AttentionKind,

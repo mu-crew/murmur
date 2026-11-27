@@ -453,6 +453,8 @@ export function cachedProcesses(
   store: Store,
   mux: Mux,
   clock: () => number = Date.now,
+  // False for a read-only store: a miss is read, never cached.
+  record = true,
 ): (server: TmuxServer) => ProcessLookup {
   const deadline = clock() + PROCESS_READ_BUDGET_MS;
   return (server) => {
@@ -464,7 +466,7 @@ export function cachedProcesses(
       if (clock() >= deadline) return null;
       const process = mux.paneProcess(pid);
       if (process === null) return null;
-      store.recordPaneProcess(server, pane, pid, process);
+      if (record) store.recordPaneProcess(server, pane, pid, process);
       cache.set(pane, { pid, process });
       return process;
     };
@@ -486,10 +488,30 @@ export type LocalOptions = {
   rex?: (() => Promise<RexRead | null>) | false;
 };
 
+type CollectedRead = { server: TmuxServer; panes: ObservedPane[] | null; live: Set<string> };
+
+/** The tmux servers in one pass each, then Rex when it runs: the collectors, no store write. */
+async function collectLocal(
+  store: Store,
+  mux: Mux,
+  options: LocalOptions,
+  record: boolean,
+): Promise<{ tmux: TmuxRead[]; reads: CollectedRead[] }> {
+  const processes = cachedProcesses(store, mux, Date.now, record);
+  const tmux = readTmux(mux, store.knownServers(), processes);
+  const rex = options.rex === false ? null : await (options.rex ?? readRex)().catch(() => null);
+  return { tmux, reads: [...tmux, ...(rex ? [rex] : [])] };
+}
+
+function serverReads(reads: readonly CollectedRead[]): ServerRead[] {
+  return reads.map((read) => ({ server: read.server, panes: read.panes, live: read.live }));
+}
+
 /**
  * Read every local pane: the tmux servers in one pass each, Rex when it runs,
  * then let the store fold in what only it knows. The one way local state is
- * read; `status`, `export`, the dash and the side panel all come through here.
+ * read and recorded; `status`, `export`, the dash and the side panel all come
+ * through here. `peekLocal` is its read-only twin.
  */
 export async function readLocal(
   store: Store,
@@ -497,16 +519,8 @@ export async function readLocal(
   now = Date.now(),
   options: LocalOptions = {},
 ): Promise<LocalRead> {
-  const tmux = readTmux(mux, store.knownServers(), cachedProcesses(store, mux));
-  const rex = options.rex === false ? null : await (options.rex ?? readRex)().catch(() => null);
-  const reads: { server: TmuxServer; panes: ObservedPane[] | null; live: Set<string> }[] = [
-    ...tmux,
-    ...(rex ? [rex] : []),
-  ];
-  const sync = store.syncLocal(
-    reads.map((read): ServerRead => ({ server: read.server, panes: read.panes, live: read.live })),
-    now,
-  );
+  const { tmux, reads } = await collectLocal(store, mux, options, true);
+  const sync = store.syncLocal(serverReads(reads), now);
   const live = reads.flatMap((read) =>
     (read.panes ?? []).map((pane) => localPane(pane, sync.since.get(paneKey(pane)) ?? now)),
   );
@@ -514,6 +528,42 @@ export async function readLocal(
     .localPanes()
     .map((pane): LocalPane => ({ ...pane, focused: false, runs_on: null }));
   return { panes: [...live, ...recorded], tmux, crashed: sync.crashed };
+}
+
+/** What a read-only local read produced. */
+export type LocalPeekRead = {
+  /** The panes `readLocal` would answer now, in its order. */
+  panes: LocalPane[];
+  /** The live panes, by `paneKey`, the store had no sighting of: aged from `now`. */
+  unrecorded: Set<string>;
+};
+
+/**
+ * `readLocal` without the write: the same collectors (tmux, the Rex walk) and
+ * the store's memory read through `Store.peekLocal`, so it runs on a
+ * `{ readonly: true }` store and never syncs, migrates or caches. A live pane
+ * the store has not seen yet is aged from `now`.
+ */
+export async function peekLocal(
+  store: Store,
+  mux: Mux,
+  now = Date.now(),
+  options: LocalOptions = {},
+): Promise<LocalPeekRead> {
+  const { reads } = await collectLocal(store, mux, options, false);
+  const peek = store.peekLocal(serverReads(reads), now);
+  const unrecorded = new Set<string>();
+  const live = reads.flatMap((read) =>
+    (read.panes ?? []).map((pane) => {
+      const key = paneKey(pane);
+      if (!peek.recorded.has(key)) unrecorded.add(key);
+      return localPane(pane, peek.since.get(key) ?? now);
+    }),
+  );
+  const crashes = peek.crashes.map(
+    (pane): LocalPane => ({ ...pane, focused: false, runs_on: null }),
+  );
+  return { panes: [...live, ...crashes], unrecorded };
 }
 
 /** A local pane as the wire carries it: the local-only fields dropped. */

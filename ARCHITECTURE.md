@@ -282,6 +282,13 @@ facts (`focused`, `runs_on`) that never reach the wire. So `paneViews` maps one
 type to `PaneView` exactly once, and a local pane and a remote pane travel the
 same code path.
 
+Its one twin is `peekLocal`, behind the SDK's `readStatus`: the same
+collectors, with the store's memory read through `Store.peekLocal` instead of
+written through `syncLocal`, so a consumer holding a `{ readonly: true }` store
+(mural) reads exactly what `status --json --cached` prints without ever
+writing, caching a process read or migrating. A live pane the store has not
+recorded yet carries `recorded: false` and is aged from the read's `now`.
+
 No pid is in that shape, and none is read: a remote node's processes are not
 this node's to probe, and a local pane's liveness is the multiplexer's answer.
 

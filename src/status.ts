@@ -4,11 +4,11 @@ import { type Channel, hasWarmSocket, ssh } from "./channel.js";
 import { type CollectOptions, collectAll, needsInteractiveAuth } from "./collector.js";
 import type { NodeIdentity } from "./identity.js";
 import { jumpTarget } from "./jump-target.js";
-import { type LocalOptions, readLocal } from "./local.js";
+import { type LocalOptions, peekLocal, readLocal } from "./local.js";
 import { type Mux, tmux } from "./mux.js";
 import { argvAddressesServer } from "./routing.js";
 import type { Store } from "./store.js";
-import type { LocalPane, PeerRecord, TmuxServer } from "./types.js";
+import { type LocalPane, type PeerRecord, paneKey, type TmuxServer } from "./types.js";
 import {
   emptyCounts,
   freshness,
@@ -350,4 +350,46 @@ export async function localStatus(
     // As above: the cache alone is still a view.
   }
   return status(store, identity, local, now, options.warm, undefined, options);
+}
+
+/** `murmur status --json`'s document, each pane saying whether murmur has recorded it. */
+export type ReadStatus = Omit<StatusJson, "panes"> & {
+  panes: (StatusJsonPane & {
+    /**
+     * False for a live local pane the store has no sighting of yet: its age
+     * (`updated_at`, `requested_at`) is the multiplexer's clock or the read's
+     * `now`, not a remembered one. True for every other pane.
+     */
+    recorded: boolean;
+  })[];
+};
+
+/**
+ * `murmur status --json --cached` as a pure read, for an SDK consumer holding
+ * a `openStore({ readonly: true })` store: the same tmux and Rex collectors
+ * and the recorded ages and crash rows, with nothing synced, cached or
+ * migrated. The CLI stays the one writer.
+ */
+export async function readStatus(
+  store: Store,
+  identity: NodeIdentity,
+  now = Date.now(),
+  options: StatusOptions & LocalOptions = {},
+): Promise<ReadStatus> {
+  const mux = options.mux ?? tmux;
+  let local: LocalPane[] = [];
+  let unrecorded = new Set<string>();
+  try {
+    ({ panes: local, unrecorded } = await peekLocal(store, mux, now, { rex: options.rex }));
+  } catch {
+    // As in `localStatus`: the cache alone is still a view.
+  }
+  const view = statusJson(status(store, identity, local, now, options.warm, undefined, options));
+  return {
+    ...view,
+    panes: view.panes.map((pane) => ({
+      ...pane,
+      recorded: !(pane.local && unrecorded.has(paneKey(pane))),
+    })),
+  };
 }

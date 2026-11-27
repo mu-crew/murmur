@@ -17,6 +17,7 @@ import type {
   PaneState,
   PeerFetch,
   PeerRecord,
+  SeenPane,
   ServerRead,
   Snapshot,
   SnapshotPane,
@@ -255,6 +256,14 @@ export interface Store {
    * row). A server read as null is no evidence and changes nothing.
    */
   syncLocal(reads: readonly ServerRead[], now?: number): LocalSync;
+  /**
+   * What `syncLocal` would conclude from these reads, read-only: no write, so
+   * it works on a `{ readonly: true }` store. Live panes keep the age the store
+   * remembers (the multiplexer's clock first, as `syncLocal` dates them); the
+   * crash rows are the recorded ones a live pane has not reoccupied, plus the
+   * panes these reads show vanished mid-work, as `syncLocal` would record them.
+   */
+  peekLocal(reads: readonly ServerRead[], now?: number): LocalPeek;
   /** Every server a previous collect saw, so a server whose socket vanished is still asked. */
   knownServers(): TmuxServer[];
   /** The crashes murmur recorded, as attention-only snapshot panes. */
@@ -305,8 +314,47 @@ export interface Store {
   close(): void;
 }
 
+/** What `Store.peekLocal` read: `syncLocal`'s answer, nothing written. */
+export type LocalPeek = {
+  /** When each live pane entered its current state, by `paneKey`. */
+  since: Map<string, number>;
+  /** The live panes, by `paneKey`, the store already holds a sighting of. */
+  recorded: Set<string>;
+  /** The crashes a sync now would leave recorded, in `localPanes` order. */
+  crashes: SnapshotPane[];
+};
+
 /** The states a pane can vanish in that mean its program died mid-work. */
 const MID_WORK: readonly PaneState[] = ["running", "waiting", "blocked"];
+
+/**
+ * Since when a live pane has held its state, given its last sighting.
+ *
+ * The multiplexer's clock when it has one; else carried while the state
+ * holds, so an unchanged state keeps its age and a changed one is news now.
+ * A crash is news when murmur first sees it: the program's last record (an
+ * `error` an hour old, say) says nothing about when the process died, and
+ * inheriting its time would age the crash past every alert window before it
+ * was ever reported.
+ */
+function sinceFor(before: SeenDbRow | undefined, pane: SeenPane, now: number): number {
+  const held = before && before.state === pane.state ? before.since : null;
+  return pane.state === "crashed" ? (held ?? now) : (pane.state_time ?? held ?? now);
+}
+
+/**
+ * Whether a pane gone since the last collect died mid-work, a crash murmur
+ * must remember (the multiplexer has nothing left to say about the pane). At
+ * rest it simply finished; a pane still on the server cleared its record (or
+ * stopped being listed). mu owns its crew's lifecycles: it closes workers and
+ * delegates while they still report working, and reports a worker that died
+ * itself. Only an orchestrator, which nobody above it watches, crashes here.
+ */
+function vanishedMidWork(gone: SeenDbRow, live: ReadonlySet<string> | undefined): boolean {
+  if (live?.has(gone.pane)) return false;
+  if (!MID_WORK.includes(gone.state)) return false;
+  return !(gone.driver === "orchestrated" && gone.role !== "orchestrator");
+}
 
 type PaneProcessDbRow = {
   pane: string;
@@ -841,15 +889,7 @@ function buildStore(database: Database): Store {
       for (const pane of read.panes) {
         const before = previous.get(pane.pane);
         previous.delete(pane.pane);
-        // The multiplexer's clock when it has one; else carried while the
-        // state holds, so an unchanged state keeps its age and a changed one
-        // is news at this collect.
-        // A crash is news when murmur first sees it: the program's last
-        // record (an `error` an hour old, say) says nothing about when the
-        // process died, and inheriting its time would age the crash past
-        // every alert window before it was ever reported.
-        const held = before && before.state === pane.state ? before.since : null;
-        const since = pane.state === "crashed" ? (held ?? now) : (pane.state_time ?? held ?? now);
+        const since = sinceFor(before, pane, now);
         result.since.set(paneKey(pane), since);
         // A live pane at the address is a new occupant: any crash recorded
         // there describes a process that is gone.
@@ -873,23 +913,66 @@ function buildStore(database: Database): Store {
           pane_title: pane.pane_title,
         });
       }
-      // Gone since the last collect. Mid-work is a crash murmur must remember
-      // (the multiplexer has nothing left to say about the pane); at rest it
-      // simply finished.
-      // A pane still on the server cleared its record (or stopped being
-      // listed); only one the server no longer holds vanished.
+      // Gone since the last collect.
       for (const gone of previous.values()) {
         deleteSeen.run(kind, value, gone.pane);
-        if (read.live?.has(gone.pane)) continue;
-        if (!MID_WORK.includes(gone.state)) continue;
-        // mu owns its crew's lifecycles: it closes workers and delegates while
-        // they still report working, and reports a worker that died itself.
-        // Only an orchestrator, which nobody above it watches, crashes here.
-        if (gone.driver === "orchestrated" && gone.role !== "orchestrator") continue;
+        if (!vanishedMidWork(gone, read.live)) continue;
         insertCrash.run({ ...gone, last_state: gone.state, requested_at: now });
         result.crashed.push(asPaneId(gone.pane));
       }
     }
+    return result;
+  });
+
+  const selectCrashes = database.prepare(
+    "SELECT * FROM crashed ORDER BY server_kind, server_value, pane",
+  );
+
+  /**
+   * `syncLocal`'s conclusions with every write left out. Deferred: it only
+   * reads, so it never takes the write lock and works on a read-only handle.
+   */
+  const peekLocal = database.transaction((reads: readonly ServerRead[], now: number): LocalPeek => {
+    const result: LocalPeek = { since: new Map(), recorded: new Set(), crashes: [] };
+    const occupied = new Set<string>();
+    const vanished = new Map<string, CrashedDbRow>();
+    for (const read of reads) {
+      if (read.panes === null) continue;
+      const kind = read.server.kind;
+      const value = serverValue(read.server);
+      const previous = new Map(
+        (selectSeen.all(kind, value) as SeenDbRow[]).map((row) => [row.pane, row]),
+      );
+      for (const pane of read.panes) {
+        const key = paneKey(pane);
+        const before = previous.get(pane.pane);
+        previous.delete(pane.pane);
+        if (before) result.recorded.add(key);
+        result.since.set(key, sinceFor(before, pane, now));
+        occupied.add(key);
+      }
+      for (const gone of previous.values()) {
+        if (!vanishedMidWork(gone, read.live)) continue;
+        vanished.set(paneKey({ server: read.server, pane: gone.pane }), {
+          ...gone,
+          last_state: gone.state,
+          requested_at: now,
+        });
+      }
+    }
+    const rows: CrashedDbRow[] = [];
+    for (const row of selectCrashes.all() as CrashedDbRow[]) {
+      const key = paneKey({ server: serverFromRow(row), pane: row.pane });
+      if (occupied.has(key)) continue;
+      // A crash already recorded keeps its `requested_at`, as the insert does.
+      vanished.delete(key);
+      rows.push(row);
+    }
+    rows.push(...vanished.values());
+    // SQLite's ORDER BY, as `localPanes` answers: binary, field by field.
+    const order = (row: CrashedDbRow) => `${row.server_kind}\0${row.server_value}\0${row.pane}`;
+    rows.sort((left, right) => (order(left) < order(right) ? -1 : 1));
+    result.crashes = rows.map(crashedPane);
     return result;
   });
 
@@ -936,6 +1019,10 @@ function buildStore(database: Database): Store {
   return {
     syncLocal(reads, now = Date.now()) {
       return syncLocal.immediate(reads, now);
+    },
+
+    peekLocal(reads, now = Date.now()) {
+      return peekLocal.deferred(reads, now);
     },
 
     paneProcesses(server) {
@@ -993,10 +1080,7 @@ function buildStore(database: Database): Store {
     },
 
     localPanes() {
-      const rows = database
-        .prepare("SELECT * FROM crashed ORDER BY server_kind, server_value, pane")
-        .all() as CrashedDbRow[];
-      return rows.map(crashedPane);
+      return (selectCrashes.all() as CrashedDbRow[]).map(crashedPane);
     },
 
     recordCrash(location, now = Date.now()) {
