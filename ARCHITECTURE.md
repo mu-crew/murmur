@@ -136,7 +136,11 @@ Identity and address are separated:
   [State directory](#state-directory)).
 - **agent identity** — who the agent is, as mu names it in the pane options
   `@mu_agent`, `@mu_workstream` and `@mu_role`. A pane without `@mu_agent` is
-  a person's own. murmur mints no agent ids: a pane's program is whatever its
+  a person's own, unless its root process's environment says mu placed it
+  (`MU_MANAGED_AGENT=1`, `MU_AGENT_NAME`, `MU_WORKSTREAM`, `MU_ORCHESTRATOR`):
+  mu before 5.6.1 could fail to tag. The tag always wins; the environment is
+  read once per (pane, pid), cached in the store's `pane_process` table, and
+  never for Rex or a remote pane. `doctor` warns about such a pane. murmur mints no agent ids: a pane's program is whatever its
   multiplexer says is there now.
 - **pane address** — the server tag plus pane id. Pane ids are scoped to a
   server, so `%34` on the default server and `%34` on `tmux -L mule` are
@@ -517,7 +521,9 @@ only thing that writes what it concluded:
    `program_status` and `process` per block, never starting a server. Any
    failure is "no Rex", never an error and never a crash.
 3. A pane is listed when it has a program record or an `@mu_agent`, so a crew
-   pane whose program died is never missed. Its word:
+   pane whose program died is never missed, or when its foreground program is
+   a known harness (`pi`, `claude`, `codex`), directly or run by `node`/`bun`
+   (told from the root process's argv, in the same cached read). Its word:
 
 | Pane | Word |
 | --- | --- |

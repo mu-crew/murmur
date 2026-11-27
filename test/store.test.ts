@@ -422,14 +422,15 @@ test("a peer's Rex host is set, survives a retarget, and clears", () => {
 });
 
 test("a 3.0 store (schema 13) upgrades in place: every row kept, compat stamp kept", () => {
-  // Additive schema rule: 14 only adds the nullable peers.rex_host, so a 3.0.x
-  // store is ALTERed, never rebuilt, and a 3.0.x build can still open it.
+  // Additive schema rule: 14 only adds the nullable peers.rex_host and 15 the
+  // pane_process cache, so a 3.0.x store is upgraded, never rebuilt, and a
+  // 3.0.x build can still open it.
   const s = store();
   s.addPeer("dev", "dev.example");
   s.recordCrash(location());
   s.close();
   const database = new Database(dbPath());
-  database.exec("ALTER TABLE peers DROP COLUMN rex_host");
+  database.exec("ALTER TABLE peers DROP COLUMN rex_host; DROP TABLE pane_process");
   database.pragma("user_version = 13");
   database.close();
 
@@ -439,7 +440,39 @@ test("a 3.0 store (schema 13) upgrades in place: every row kept, compat stamp ke
   expect(reopened.peers()[0]?.rex_host).toBe("me@dev");
   reopened.close();
   const after = new Database(dbPath(), { readonly: true });
-  expect(after.pragma("user_version", { simple: true })).toBe(14);
+  expect(after.pragma("user_version", { simple: true })).toBe(15);
+  expect(after.prepare("SELECT compatible_since FROM compat").all()).toEqual([
+    { compatible_since: 13 },
+  ]);
+  after.close();
+});
+
+test("a 3.1 store (schema 14) gains the pane_process cache in place", () => {
+  const s = store();
+  s.addPeer("dev", "dev.example");
+  s.close();
+  const database = new Database(dbPath());
+  database.exec("DROP TABLE pane_process");
+  database.pragma("user_version = 14");
+  database.close();
+
+  const reopened = store();
+  expect(reopened.peers().map((peer) => peer.name)).toEqual(["dev"]);
+  const worker = {
+    managed: true,
+    agent_name: "x",
+    workstream: null,
+    orchestrator: false,
+    harness: null,
+  };
+  reopened.recordPaneProcess({ kind: "default" }, "%1", "41", worker);
+  expect(reopened.paneProcesses({ kind: "default" }).get("%1")).toEqual({
+    pid: "41",
+    process: worker,
+  });
+  reopened.close();
+  const after = new Database(dbPath(), { readonly: true });
+  expect(after.pragma("user_version", { simple: true })).toBe(15);
   expect(after.prepare("SELECT compatible_since FROM compat").all()).toEqual([
     { compatible_since: 13 },
   ]);
@@ -699,13 +732,13 @@ test("a 2.x store (schema 12) is rebuilt as 3.0's, keeping only the peers", () =
   expect(reopened.peers().map((peer) => peer.name)).toEqual(["dev"]);
   reopened.close();
   const after = new Database(dbPath(), { readonly: true });
-  expect(after.pragma("user_version", { simple: true })).toBe(14);
+  expect(after.pragma("user_version", { simple: true })).toBe(15);
   const tables = (
     after.prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name").all() as {
       name: string;
     }[]
   ).map((row) => row.name);
-  expect(tables).toEqual(["alerted", "compat", "crashed", "peers", "seen"]);
+  expect(tables).toEqual(["alerted", "compat", "crashed", "pane_process", "peers", "seen"]);
   after.close();
 });
 

@@ -50,11 +50,16 @@ export const FEED_APP = "murmur";
 /** Agent harnesses murmur lists as `idle` before they emit any OSC 7501. */
 const KNOWN_HARNESSES: ReadonlySet<string> = new Set(["pi", "claude", "codex"]);
 
+/** The known harness a program name or path names (`pi`, `/x/claude.js`), else null. */
+export function harnessName(cli: string | null | undefined): string | null {
+  if (!cli) return null;
+  const name = (cli.split("/").pop() ?? "").replace(/\.(?:real|js|mjs|cjs)$/, "");
+  return KNOWN_HARNESSES.has(name) ? name : null;
+}
+
 /** Whether a pane's foreground program (`cli`) is a known agent harness. */
 export function isHarnessCli(cli: string | null | undefined): boolean {
-  return (
-    !!cli && KNOWN_HARNESSES.has((cli.split("/").pop() ?? "").replace(/\.(?:real|js|mjs|cjs)$/, ""))
-  );
+  return harnessName(cli) !== null;
 }
 
 /**

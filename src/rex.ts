@@ -357,5 +357,6 @@ function blockPane(block: {
     resume_command: command ? shellCommand(command) : null,
     resume_cwd: resume ? str(resume.cwd) : null,
     cwd: str(fg.cwd),
+    untagged_mu: false,
   };
 }

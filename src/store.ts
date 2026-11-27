@@ -6,6 +6,7 @@ import { ensureDir } from "./dirs.js";
 import { asPaneId, asSessionId, asWindowId } from "./ids.js";
 import { currentJumpCommand, defaultJumpCommand } from "./jump-command.js";
 import { migrateLegacyIdentity, withLegacyStoreCopy } from "./legacy-state.js";
+import type { PaneProcess } from "./pane-process.js";
 import { dbPath, legacyStateDir, stateDir } from "./paths.js";
 import { parseSnapshot } from "./snapshot.js";
 import type {
@@ -31,8 +32,11 @@ import { paneKey, serverValue } from "./types.js";
  * incompatible files are rebuilt with just the configured peers.
  *
  * 14 adds the nullable `peers.rex_host`, upgraded in place (see `UPGRADES`).
+ *
+ * 15 adds the `pane_process` cache, upgraded in place: a 13 or 14 build never
+ * reads it, so the compat stamp stays.
  */
-const SCHEMA_USER_VERSION = 14;
+const SCHEMA_USER_VERSION = 15;
 
 /**
  * The oldest schema whose build can read and write a store this build creates,
@@ -44,12 +48,34 @@ const SCHEMA_USER_VERSION = 14;
 const COMPATIBLE_SINCE = 13;
 
 /**
+ * What a tmux pane's root process said about itself (`readPaneProcess`), keyed
+ * by the pane and stamped with its pid: one environment read per pane process,
+ * never one per collect. A new pid at the address is a new process and reads
+ * again; a pane its server no longer holds is forgotten by `syncLocal`.
+ */
+const PANE_PROCESS_TABLE = `
+  CREATE TABLE pane_process (
+    server_kind  TEXT    NOT NULL CHECK (server_kind IN ('default', 'label', 'path')),
+    server_value TEXT    NOT NULL,
+    pane         TEXT    NOT NULL,
+    pid          TEXT    NOT NULL,
+    managed      INTEGER NOT NULL,
+    agent_name   TEXT,
+    workstream   TEXT,
+    orchestrator INTEGER NOT NULL,
+    harness      TEXT,
+    PRIMARY KEY (server_kind, server_value, pane)
+  ) STRICT;
+`;
+
+/**
  * In-place upgrades, keyed by the schema they upgrade FROM. Only additive,
  * nullable columns belong here: a store at a key is upgraded step by step to
  * `SCHEMA_USER_VERSION` and keeps every row, where anything older is rebuilt.
  */
 const UPGRADES: Readonly<Record<number, string>> = {
   13: "ALTER TABLE peers ADD COLUMN rex_host TEXT",
+  14: PANE_PROCESS_TABLE,
 };
 
 /** Whether a store at `version` upgrades in place rather than being rebuilt. */
@@ -207,7 +233,7 @@ const SCHEMA = `
     snapshot_version INTEGER,
     rex_host         TEXT
   ) STRICT;
-`;
+${PANE_PROCESS_TABLE}`;
 
 /**
  * The store, and the only place in murmur that holds a database handle or
@@ -239,6 +265,13 @@ export interface Store {
    * row are the honest use.
    */
   recordCrash(location: Location, now?: number): void;
+  /**
+   * The cached root-process facts for a tmux server's panes, by pane id, each
+   * with the pid it was read from. See `PANE_PROCESS_TABLE`.
+   */
+  paneProcesses(server: TmuxServer): Map<string, { pid: string; process: PaneProcess }>;
+  /** Cache one pane's root-process facts, replacing any read from another pid. */
+  recordPaneProcess(server: TmuxServer, pane: string, pid: string, process: PaneProcess): void;
   /** Dismiss murmur's own attention for a pane (its \`crashed\` row). Returns rows removed. */
   acknowledgePane(address: PaneIdentity): number;
 
@@ -274,6 +307,16 @@ export interface Store {
 
 /** The states a pane can vanish in that mean its program died mid-work. */
 const MID_WORK: readonly PaneState[] = ["running", "waiting", "blocked"];
+
+type PaneProcessDbRow = {
+  pane: string;
+  pid: string;
+  managed: number;
+  agent_name: string | null;
+  workstream: string | null;
+  orchestrator: number;
+  harness: string | null;
+};
 
 type SeenDbRow = {
   server_kind: TmuxServer["kind"];
@@ -752,6 +795,12 @@ function buildStore(database: Database): Store {
       workstream = excluded.workstream, role = excluded.role, driver = excluded.driver,
       harness = excluded.harness, cli = excluded.cli, pane_title = excluded.pane_title
   `);
+  const selectProcessPanes = database.prepare(
+    "SELECT pane FROM pane_process WHERE server_kind = ? AND server_value = ?",
+  );
+  const deleteProcess = database.prepare(
+    "DELETE FROM pane_process WHERE server_kind = ? AND server_value = ? AND pane = ?",
+  );
   const deleteSeen = database.prepare(
     "DELETE FROM seen WHERE server_kind = ? AND server_value = ? AND pane = ?",
   );
@@ -781,6 +830,11 @@ function buildStore(database: Database): Store {
       if (read.panes === null) continue;
       const kind = read.server.kind;
       const value = serverValue(read.server);
+      // A pane the server no longer holds takes its cached process with it.
+      const holds = read.live ?? new Set(read.panes.map((pane) => pane.pane as string));
+      for (const { pane } of selectProcessPanes.all(kind, value) as { pane: string }[]) {
+        if (!holds.has(pane)) deleteProcess.run(kind, value, pane);
+      }
       const previous = new Map(
         (selectSeen.all(kind, value) as SeenDbRow[]).map((row) => [row.pane, row]),
       );
@@ -882,6 +936,53 @@ function buildStore(database: Database): Store {
   return {
     syncLocal(reads, now = Date.now()) {
       return syncLocal.immediate(reads, now);
+    },
+
+    paneProcesses(server) {
+      const rows = database
+        .prepare(
+          "SELECT pane, pid, managed, agent_name, workstream, orchestrator, harness FROM pane_process WHERE server_kind = ? AND server_value = ?",
+        )
+        .all(server.kind, serverValue(server)) as PaneProcessDbRow[];
+      return new Map(
+        rows.map((row) => [
+          row.pane,
+          {
+            pid: row.pid,
+            process: {
+              managed: row.managed === 1,
+              agent_name: row.agent_name,
+              workstream: row.workstream,
+              orchestrator: row.orchestrator === 1,
+              harness: row.harness,
+            },
+          },
+        ]),
+      );
+    },
+
+    recordPaneProcess(server, pane, pid, process) {
+      database
+        .prepare(
+          `INSERT INTO pane_process (server_kind, server_value, pane, pid, managed, agent_name,
+                                     workstream, orchestrator, harness)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT (server_kind, server_value, pane) DO UPDATE SET
+             pid = excluded.pid, managed = excluded.managed, agent_name = excluded.agent_name,
+             workstream = excluded.workstream, orchestrator = excluded.orchestrator,
+             harness = excluded.harness`,
+        )
+        .run(
+          server.kind,
+          serverValue(server),
+          pane,
+          pid,
+          process.managed ? 1 : 0,
+          process.agent_name,
+          process.workstream,
+          process.orchestrator ? 1 : 0,
+          process.harness,
+        );
     },
 
     knownServers() {

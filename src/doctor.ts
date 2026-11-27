@@ -226,7 +226,8 @@ export type FindingKind =
   | "program-status-off"
   | "program-resume-off"
   | "no-local-mux"
-  | "stale-2x-wiring";
+  | "stale-2x-wiring"
+  | "untagged-mu-pane";
 
 export type Finding = {
   kind: FindingKind;
@@ -439,6 +440,12 @@ function staleWiringFindings(stale: readonly StaleWiring[]): Finding[] {
 export type MuxCheck = {
   tmux: readonly { server: string; info: ServerInfo | null }[];
   rex: boolean;
+  /**
+   * Panes whose root process says mu placed it (`MU_MANAGED_AGENT=1`) but that
+   * carry no `@mu_agent` tag. murmur lists them from the environment; mu's
+   * own surfaces that read the tag do not.
+   */
+  untagged?: readonly { server: string; pane: string; agent_name: string | null }[];
 };
 
 /** The flag that names a tmux server on a command line, for a remedy. */
@@ -490,6 +497,17 @@ function muxFindings(subject: string, mux: MuxCheck): Finding[] {
         remedy: `tmux${serverFlag(server)} set -s vtmux-program-resume on`,
       });
     }
+  }
+  for (const { server, pane, agent_name } of mux.untagged ?? []) {
+    const who = agent_name ? ` (${agent_name})` : "";
+    findings.push({
+      kind: "untagged-mu-pane",
+      severity: "observation",
+      subject: server,
+      message: `pane ${pane}${who} on tmux server ${server} has MU_MANAGED_AGENT=1 but no @mu_agent tag: mu did not tag this pane; is mu older than 5.6.1? run mu agent retag`,
+      detail: `pane ${pane}${who}: mu did not tag this pane; is mu older than 5.6.1? run mu agent retag`,
+      remedy: "mu agent retag",
+    });
   }
   if (answered.length === 0 && !mux.rex) {
     findings.push({

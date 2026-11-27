@@ -34,6 +34,10 @@ const CLEARED = [
   // A mu worker's identity: inherited when a crew agent runs the suite.
   "MU_AGENT_NAME",
   "MU_WORKSTREAM",
+  // The rest of the identity `readPaneProcess` parses from a pane's root
+  // process (never this one's environment).
+  "MU_MANAGED_AGENT",
+  "MU_ORCHESTRATOR",
   "TMUX",
   "TMUX_PANE",
   // A suite run from a Rex pane would otherwise take the Rex jump path and

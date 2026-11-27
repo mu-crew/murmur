@@ -502,6 +502,7 @@ test("doctor asks every tmux server and Rex, and names a server as a person type
       { server: "-S /tmp/x.sock", info: null },
     ],
     rex: false,
+    untagged: [],
   });
   // And diagnosed: stock tmux on mule is a problem with a remedy.
   const findings = diagnose({ host_id: "H", display_name: "here", peers: [], mux: check }, []);
@@ -514,7 +515,7 @@ test("doctor asks every tmux server and Rex, and names a server as a person type
     panes: [],
     live: new Set<string>(),
   }));
-  expect(withRex).toEqual({ tmux: [], rex: true });
+  expect(withRex).toEqual({ tmux: [], rex: true, untagged: [] });
 });
 
 test("parsePaneRow keeps an OSC 7577 pane as idle after vtmux clears done on focus", () => {

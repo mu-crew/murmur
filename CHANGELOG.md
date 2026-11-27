@@ -5,6 +5,15 @@ so it says what changed for a user rather than listing every commit.
 
 ## Unreleased
 
+- **Untagged mu panes read as crew.** A tmux pane mu placed but failed to tag
+  (`@mu_agent` empty, mu before 5.6.1) showed as a person's own. murmur now
+  reads mu's identity from the pane's root process environment
+  (`MU_MANAGED_AGENT=1`, `MU_AGENT_NAME`, ...), once per pane process, and
+  `murmur doctor` warns about each such pane (`mu agent retag`). The tag
+  always wins. An idle pi, claude or codex run by `node`/`bun` is listed idle
+  too. The store gains a `pane_process` cache table, upgraded in place; 3.0.x
+  can still open it.
+
 - **Jump to Rex agents.** `murmur jump`, `prompt` and `stop` rejected every
   Rex agent's `jump_target` as "not a valid jump target": the token parser
   accepted only tmux servers. Rex tokens now resolve like tmux ones.

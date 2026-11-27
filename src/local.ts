@@ -19,6 +19,7 @@ import { hostname } from "node:os";
 import type { NodeIdentity } from "./identity.js";
 import { asPaneId, asSessionId, asWindowId } from "./ids.js";
 import type { Mux } from "./mux.js";
+import { HARNESS_HOSTS, type PaneProcess } from "./pane-process.js";
 import { type RexRead, readRex } from "./rex.js";
 import type { Store } from "./store.js";
 import { tmuxText } from "./tmux-format.js";
@@ -119,7 +120,19 @@ export type ObservedPane = SeenPane & {
   resume_command: string | null;
   resume_cwd: string | null;
   cwd: string | null;
+  /**
+   * mu's identity came from the pane process's environment, not `@mu_agent`:
+   * mu placed the pane and did not tag it. What `doctor` warns about.
+   */
+  untagged_mu: boolean;
 };
+
+/**
+ * A pane's root-process facts by its pid, or null when unknown. Asked only for
+ * a pane with no `@mu_agent` that would be listed anyway, or whose command is a
+ * runtime (`node`, `bun`) that may host a harness.
+ */
+export type ProcessLookup = (pane: string, pid: string) => PaneProcess | null;
 
 /**
  * The window name worth recording: null while tmux renames the window after
@@ -208,9 +221,18 @@ export function chosenPaneTitle(title: string, host = hostname()): string | null
  * visible as `idle` after vtmux clears `done`/`error` on pane focus; vtmux
  * prunes the resume record once the process exits, so a plain shell drops off.
  * A foreground known harness (pi, claude, codex) is listed idle even before
- * it reports anything.
+ * it reports anything, and so is one a runtime hosts (`node .../pi`), told
+ * from the root process's argv (`processOf`).
+ *
+ * The `@mu_*` tags win. With no `@mu_agent`, mu's identity comes from the root
+ * process's environment (`MU_MANAGED_AGENT=1`, `MU_AGENT_NAME`, ...), for a
+ * pane mu placed but failed to tag.
  */
-export function parsePaneRow(fields: readonly string[], server: TmuxServer): ObservedPane | null {
+export function parsePaneRow(
+  fields: readonly string[],
+  server: TmuxServer,
+  processOf?: ProcessLookup,
+): ObservedPane | null {
   const [
     pane = "",
     session = "",
@@ -218,7 +240,7 @@ export function parsePaneRow(fields: readonly string[], server: TmuxServer): Obs
     sessionName = "",
     windowName = "",
     autoRename = "",
-    ,
+    pid = "",
     dead = "",
     deadStatus = "",
     command = "",
@@ -241,10 +263,19 @@ export function parsePaneRow(fields: readonly string[], server: TmuxServer): Obs
     host = "",
   ] = fields;
   if (!pane || !session || !window) return null;
-  if (state === "" && agentName === "" && resumeCommand === "" && !isHarnessCli(command))
-    return null;
   // `murmur rex-feed`'s own pane: reading it back would re-report the fleet.
   if (app === FEED_APP) return null;
+  const listed = state !== "" || agentName !== "" || resumeCommand !== "" || isHarnessCli(command);
+  const hostedCommand = HARNESS_HOSTS.has(command);
+  const facts =
+    agentName === "" && (listed || hostedCommand) && processOf ? processOf(pane, pid) : null;
+  const hosted = hostedCommand ? (facts?.harness ?? null) : null;
+  if (!listed && hosted === null) return null;
+  // The tag is mu's word; the environment stands in only where it is missing.
+  const fromEnv = facts?.managed === true;
+  const name = agentName || (fromEnv ? (facts.agent_name ?? "") : "");
+  const stream = workstream || (fromEnv ? (facts.workstream ?? "") : "");
+  const paneRole = role || (fromEnv ? (facts.orchestrator ? "orchestrator" : "worker") : "");
   const isDead = dead === "1";
   const paneState = programState({
     dead: isDead,
@@ -252,7 +283,7 @@ export function parsePaneRow(fields: readonly string[], server: TmuxServer): Obs
     state,
     id: id || null,
   });
-  const driver: Driver = agentName ? "orchestrated" : "human";
+  const driver: Driver = agentName || fromEnv ? "orchestrated" : "human";
   return {
     server,
     pane: asPaneId(pane),
@@ -262,12 +293,12 @@ export function parsePaneRow(fields: readonly string[], server: TmuxServer): Obs
     window_name: chosenWindowName(windowName, autoRename),
     state: paneState,
     state_time: stateTime(rawTime),
-    agent_name: agentName || null,
-    workstream: workstream || null,
-    role: role || null,
+    agent_name: name || null,
+    workstream: stream || null,
+    role: paneRole || null,
     driver,
     harness: app || null,
-    cli: command || null,
+    cli: hosted ?? (command || null),
     pane_title: chosenPaneTitle(paneTitle),
     focused: focused === "1",
     runs_on: host || null,
@@ -280,6 +311,7 @@ export function parsePaneRow(fields: readonly string[], server: TmuxServer): Obs
     resume_command: resumeCommand || null,
     resume_cwd: resumeCwd || null,
     cwd: path || null,
+    untagged_mu: fromEnv,
   };
 }
 
@@ -357,10 +389,14 @@ export type TmuxRead = {
  * into several sessions once per session; the pane is focused if any of its
  * sessions shows it.
  */
-function uniquePanes(rows: readonly string[][], server: TmuxServer): ObservedPane[] {
+function uniquePanes(
+  rows: readonly string[][],
+  server: TmuxServer,
+  processOf?: ProcessLookup,
+): ObservedPane[] {
   const panes = new Map<string, ObservedPane>();
   for (const row of rows) {
-    const next = parsePaneRow(row, server);
+    const next = parsePaneRow(row, server, processOf);
     if (next === null) continue;
     const existing = panes.get(next.pane);
     panes.set(
@@ -371,8 +407,16 @@ function uniquePanes(rows: readonly string[][], server: TmuxServer): ObservedPan
   return [...panes.values()];
 }
 
-/** One `list-panes` per tmux server: every server tmux's directory names, and every one seen before. */
-export function readTmux(mux: Mux, known: readonly TmuxServer[] = []): TmuxRead[] {
+/**
+ * One `list-panes` per tmux server: every server tmux's directory names, and
+ * every one seen before. `processes` answers a server's pane root processes;
+ * absent, no process is read.
+ */
+export function readTmux(
+  mux: Mux,
+  known: readonly TmuxServer[] = [],
+  processes?: (server: TmuxServer) => ProcessLookup,
+): TmuxRead[] {
   const servers = new Map<string, TmuxSocket>();
   for (const server of mux.servers()) servers.set(serverKey(server), server);
   // A server seen before is asked again even when its socket is gone: that
@@ -385,10 +429,41 @@ export function readTmux(mux: Mux, known: readonly TmuxServer[] = []): TmuxRead[
     return {
       server,
       rows: rows ?? [],
-      panes: rows === null ? null : uniquePanes(rows, server),
+      panes: rows === null ? null : uniquePanes(rows, server, processes?.(server)),
       live: new Set((rows ?? []).flatMap(([pane]) => (pane ? [pane] : []))),
     };
   });
+}
+
+/** Total time one read may spend reading pane processes it has not cached. */
+export const PROCESS_READ_BUDGET_MS = 2_000;
+
+/**
+ * Pane processes through the store's cache: a (pane, pid) read once is never
+ * read again. A failed read is not cached, so a pane that timed out is asked
+ * again next collect, and the reads one collect makes stop at
+ * `PROCESS_READ_BUDGET_MS`.
+ */
+export function cachedProcesses(
+  store: Store,
+  mux: Mux,
+  clock: () => number = Date.now,
+): (server: TmuxServer) => ProcessLookup {
+  const deadline = clock() + PROCESS_READ_BUDGET_MS;
+  return (server) => {
+    let cache: ReturnType<Store["paneProcesses"]> | undefined;
+    return (pane, pid) => {
+      cache ??= store.paneProcesses(server);
+      const hit = cache.get(pane);
+      if (hit && hit.pid === pid) return hit.process;
+      if (clock() >= deadline) return null;
+      const process = mux.paneProcess(pid);
+      if (process === null) return null;
+      store.recordPaneProcess(server, pane, pid, process);
+      cache.set(pane, { pid, process });
+      return process;
+    };
+  };
 }
 
 /** Everything one local read produced. */
@@ -417,7 +492,7 @@ export async function readLocal(
   now = Date.now(),
   options: LocalOptions = {},
 ): Promise<LocalRead> {
-  const tmux = readTmux(mux, store.knownServers());
+  const tmux = readTmux(mux, store.knownServers(), cachedProcesses(store, mux));
   const rex = options.rex === false ? null : await (options.rex ?? readRex)().catch(() => null);
   const reads: { server: TmuxServer; panes: ObservedPane[] | null; live: Set<string> }[] = [
     ...tmux,

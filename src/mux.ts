@@ -4,6 +4,7 @@ import { basename, dirname, join } from "node:path";
 import { DASH_PANE_OPTION, JUMP_CLIENT_OPTION } from "./goto.js";
 import { helperPath } from "./helper-path.js";
 import { asPaneId, asWindowId, type PaneId, type WindowId } from "./ids.js";
+import { type PaneProcess, readPaneProcess } from "./pane-process.js";
 import { CLIENT_IDENTITY_FORMAT } from "./routing.js";
 import { splitTmuxFields, tmuxFormat, tmuxText } from "./tmux-format.js";
 import { serverKey, type TmuxSocket } from "./types.js";
@@ -74,6 +75,12 @@ export interface Mux {
    * cannot match; an empty set reads nothing.
    */
   localPaneProcesses(commands?: ReadonlySet<string>): LocalPaneProcess[];
+  /**
+   * One pane root process's mu identity and harness (`readPaneProcess`), or
+   * null when it cannot be read. Bounded; never throws. Callers cache it per
+   * (pane, pid): see `Store.paneProcesses`.
+   */
+  paneProcess(pid: string): PaneProcess | null;
   /**
    * Every tmux server this user runs on this host, as far as a socket in the
    * conventional directory (or `$TMUX`) says. A stale socket is listed too:
@@ -272,9 +279,9 @@ export function exactPaneTarget(session: string): string {
  * spaces, or null when the pid is gone, unreadable, or has an empty cmdline (a
  * zombie or kernel thread). The caller has already checked `pid` is all digits.
  *
- * argv ONLY: never read `/proc/<pid>/environ`. The environment carries every
- * API key in the pane, and the matcher needs none of it -- see the `ps ww`
- * note in `localPaneProcesses`.
+ * argv ONLY: the environment carries every API key in the pane, and the
+ * matcher needs none of it -- see the `ps ww` note in `localPaneProcesses`.
+ * The one environment read is `readPaneProcess`, which keeps only mu's keys.
  */
 export function procArgv(pid: string, procRoot = "/proc"): string | null {
   let raw: string;
@@ -288,6 +295,8 @@ export function procArgv(pid: string, procRoot = "/proc"): string | null {
 }
 
 export const tmux: Mux = {
+  paneProcess: (pid) => readPaneProcess(pid),
+
   // Which of this host's PANES still exist: the only liveness question tmux is
   // asked, and the one matching how an agent is addressed, since a pane keeps its
   // id across windows while a recorded window id can be gone with the agent

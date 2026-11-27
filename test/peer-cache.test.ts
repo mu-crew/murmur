@@ -371,6 +371,9 @@ test("the store exposes no reader-side mutation of remote state", () => {
   //
   // `claimAlerts` writes only its own dedup table: which events the
   // on-attention hook has run for. It says nothing about any pane.
+  //
+  // `paneProcesses` and `recordPaneProcess` are a local cache of this node's
+  // own pane processes (mu's identity from their environment).
   expect(Object.keys(store()).sort()).toEqual([
     "acknowledgePane",
     "addPeer",
@@ -378,8 +381,10 @@ test("the store exposes no reader-side mutation of remote state", () => {
     "close",
     "knownServers",
     "localPanes",
+    "paneProcesses",
     "peers",
     "recordCrash",
+    "recordPaneProcess",
     "removePeer",
     "replacePeerSnapshot",
     "setPeerJumpCommand",

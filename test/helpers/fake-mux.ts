@@ -14,6 +14,7 @@ export function fakeMux(over: Partial<Mux> = {}): Mux {
   return {
     livePanes: () => new Set<PaneId>(),
     localPaneProcesses: () => [],
+    paneProcess: () => null,
     servers: () => [],
     listPanes: () => [],
     serverInfo: () => null,

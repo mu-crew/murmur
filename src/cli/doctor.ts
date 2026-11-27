@@ -20,6 +20,7 @@ import {
   type Topology,
   type TopologyNode,
 } from "../doctor.js";
+import { readTmux } from "../local.js";
 import { type Mux, tmux } from "../mux.js";
 import { readRex } from "../rex.js";
 import { openStore } from "../store.js";
@@ -165,6 +166,11 @@ const GROUP: Record<FindingKind, { heading: string; because: string | null }> = 
   "no-local-mux": {
     heading: "No local multiplexer",
     because: "Nothing here for murmur to read; peers still work.",
+  },
+  "untagged-mu-pane": {
+    heading: "Untagged mu panes",
+    because:
+      "mu placed these panes but did not tag them; murmur reads their identity from the environment.",
   },
   "stale-2x-wiring": {
     heading: "Stale murmur 2.x wiring",
@@ -419,7 +425,17 @@ export async function checkMux(mux: Mux = tmux, rex = readRex): Promise<MuxCheck
     info: mux.serverInfo(server),
   }));
   const rexRead = await rex().catch(() => null);
-  return { tmux: tmuxServers, rex: rexRead !== null };
+  // A fresh read, uncached: doctor writes nothing.
+  const untagged = readTmux(mux, [], () => (_pane, pid) => mux.paneProcess(pid)).flatMap((read) =>
+    (read.panes ?? [])
+      .filter((pane) => pane.untagged_mu)
+      .map((pane) => ({
+        server: serverName(read.server),
+        pane: pane.pane as string,
+        agent_name: pane.agent_name,
+      })),
+  );
+  return { tmux: tmuxServers, rex: rexRead !== null, untagged };
 }
 
 export function registerDoctor(program: Command): void {
