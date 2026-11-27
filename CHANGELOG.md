@@ -5,6 +5,17 @@ so it says what changed for a user rather than listing every commit.
 
 ## Unreleased
 
+- **Glance:** a Rex pane's preview streams only the last 1 MiB of its capture, so a full 64 MiB scrollback previews in well under the 3 s timeout instead of going blank; a remote Rex capture over ssh is trimmed on the far side the same way. The dash previews local Rex panes without blocking.
+- **Jump:** a local jump compares tmux servers by their resolved socket path and refuses one across servers with a clear message, instead of moving another terminal's client; a `-S` socket merely named `default` or `<label>` is no longer mistaken for the default or `-L` server, and `/tmp` vs `/private/tmp` spellings of one socket no longer refuse a same-server jump.
+- `murmur jump` outside tmux no longer runs `switch-client` to a local ssh attachment; it opens the agent instead.
+- Jump in a Rex pane: a pane title starting with `-` is no longer parsed as a `rex window new` flag; the tab never autostarts a Rex server.
+- Snapshots: a tmux pane id must be `%N`; a peer can no longer smuggle shell syntax into a `{pane}` jump command.
+- `murmur doctor --topology` quotes the inner ssh target, so a display name with spaces or quotes probes correctly.
+- Steer: a refused `rex -S host:port` (scheme-less) counts as pre-connect, so the prompt falls back to ssh.
+- `murmur jump-command` on a Rex agent says it is a Rex pane and prints the `murmur jump` target, instead of a `{pane}` remediation that fixes nothing.
+- `--json`: `jump`, `prompt` and `stop` print one JSON object on an uninitialised node. A tap-gated jump reports `needs_session` or `cancelled` instead of exiting 0 with no output.
+- `peer list` shows every peer even when two share a target; the warm-socket check is bounded at 3 s.
+
 - **Collection fixes.** A tmux or Rex pane kept after its program exited
   non-zero (`remain-on-exit`, Rex's keep-on-exit) now records a crash when it
   vanished from the list mid-work; it used to read as cleared. The Rex reader
