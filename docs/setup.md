@@ -267,25 +267,51 @@ switches to the remote host's own dash instead of coming home.
 ## Rex
 
 [Rex](https://www.superlogical.com/rex/) keeps OSC 7501 records per block
-itself, so murmur lists Rex panes beside tmux ones: each collect asks the local
-Rex server (`rex api call`, `program_status` and `process` per block, never
-starting a server) and reads the answer into the same shape. A Rex pane's
-address is its block id; `murmur clear --rex --pane block:<id>` dismisses its
-crash. No Rex, or a Rex that does not answer, is simply no Rex panes.
+itself, so murmur lists Rex panes beside tmux ones. Each collect makes one
+`rex do` call against the local Rex server (never starting one) and reads
+window names, pane titles, OSC 7577 resume records and mu labels into the same
+shape as a tmux pane. A Rex pane's address is its block id;
+`murmur clear --rex --pane block:<id>` dismisses its crash. No Rex, or a Rex
+that does not answer, is simply no Rex panes. A crew pane that mu closes
+mid-work is not reported as a crash.
 
-`murmur rex-feed` goes the other way: run it in a tab of its own and that tab
-carries one record per agent the status pill counts (local and remote), with
-the most urgent state on its root record.
+Remote Rex servers: `murmur peer add|set --rex-host <label>` tells murmur which
+Rex server (`rex -S <label>`) owns a peer's panes, so jump, prompt, stop and
+glance work on remote Rex panes as on local ones.
+
+### rex-feed: why it exists, and when you need it
+
+Rex.app already shows native OSC 7501 chrome for panes whose program reports
+status to Rex directly. `murmur rex-feed` is a bridge for what Rex cannot see
+or badges badly:
+
+- **tmux inside Rex tabs, and remote vtmux peers.** A tmux pane keeps the
+  record itself rather than pass it to the outer terminal, so Rex.app shows
+  nothing for it. `rex-feed` is the only way those agents (local or on another
+  machine) reach Rex.app's chrome.
+- **Attention filtering.** Rex.app badges every pane equally, including `done`
+  crew workers a supervisor owns. `rex-feed` applies the same filter as the
+  status pill: human-driven agents plus crew agents only when `blocked`,
+  `error` or `crashed`.
+- **`crashed` rollup.** A pane that vanished mid-work surfaces as an error.
+
+You do **not** need it in a pure-Rex fleet: local Rex panes and remote Rex
+servers connected in Rex.app already report to their own tabs. Hybrid users who
+want only tmux-hosted agents bridged, without duplicating native Rex tabs,
+pass `--exclude-rex`.
+
+Run it in a tab of its own; that tab carries one record per agent the pill
+counts, with the most urgent state on its root record.
 
 ```sh
 rex window new crew -- murmur rex-feed
+rex window new crew -- murmur rex-feed --exclude-rex
 ```
 
-- Which agents: human-driven agents that are not idle, and crew agents only
-  when `blocked`, `error` or `crashed`, as in the pill.
 - States map onto the protocol's five: `crashed` and `error` are `error`,
-  `blocked` is `blocked` (kind `question`), `done` is `done`, `running` and
-  `waiting` are `working`. Idle agents get no record.
+  `blocked` is `blocked` (with the agent's own blocked kind, `question` by
+  default), `done` is `done`, `running` and `waiting` are `working`. Idle
+  agents get no record.
 - Each record's title is the agent's label, prefixed with its host for a
   remote agent; its message is the dash card's one-liner.
 - It re-reads every 2 s and fetches peers on the collect floor, as
@@ -302,7 +328,7 @@ tab, or detaching, ends the attach.
 
 That tab shows no program status of its own: the agent runs inside tmux, which
 keeps the record rather than pass it to the outer terminal. Keep `rex-feed`
-running for the fleet's state. An agent started directly in a Rex pane, not in
+running for the fleet's state (see above). An agent started directly in a Rex pane, not in
 tmux, reports its own, and murmur lists it as a Rex pane.
 
 The dash's glance and prompt input (`i`) work as in tmux: both address the

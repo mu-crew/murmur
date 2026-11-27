@@ -23,7 +23,7 @@ agent over ssh without leaving it.
 | `murmur jump <target>` | Jump to the agent a `status --json` pane's `jump_target` names; what an external picker calls after selection |
 | `murmur dash` | Full-screen dashboard: watch, prompt, and stop local or remote agents |
 | `murmur sidepanel` | Compact agent list in a full-height pane beside the current tmux window |
-| `murmur rex-feed` | The status pill's agents as terminal program status (OSC 7501), for Rex |
+| `murmur rex-feed` | The status pill's agents as terminal program status (OSC 7501), for Rex; bridges tmux-hosted agents into Rex.app, see [setup](docs/setup.md#rex) |
 
 They all read the same list. Local jump is a window switch; remote jump opens
 over ssh (or your `--jump-command`). Orchestrated (`crew`) agents stay hidden
@@ -78,7 +78,6 @@ from and what each tool owns.
 They combine. murmur sees any agent that reports OSC 7501 in a vtmux pane or a
 Rex block (pi, Claude Code, Codex natively), including the panes workmux
 creates and the agents mu spawns; mu marks its agents as crew with `@mu_agent`.
-Agents inside herdr's own panes are not visible to it.
 
 ## Install
 
@@ -89,7 +88,7 @@ Needs [vtmux](https://github.com/martintrojer/vtmux) **>= 3.8-rc3** (or Rex),
 sees no live state on untagged local panes (`@mu_agent`-tagged crew panes still
 appear as `idle`, or `crashed` on a retained nonzero exit). Remote peers
 running vtmux or Rex still appear, and jumping works to remote tmux/vtmux panes
-(remote Rex panes are visible only). If you stay on stock tmux, use murmur 2.x,
+(remote Rex panes too, with `murmur peer add|set --rex-host <label>`). If you stay on stock tmux, use murmur 2.x,
 which is maintained on the `release/2.x` branch (`npm i -g @mu-crew/murmur@2`).
 It is the clean way out.
 
