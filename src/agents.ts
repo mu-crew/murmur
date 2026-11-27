@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { basename } from "node:path";
+import { realpathSync } from "node:fs";
+import { basename, dirname, join, resolve } from "node:path";
 import { SSH_OPTIONS } from "./channel.js";
 import { JUMP_CLIENT_OPTION } from "./goto.js";
 import { findHelper } from "./helper-path.js";
@@ -13,7 +14,7 @@ import {
   tmuxAttachCommand,
   unsupportedServerMessage,
 } from "./jump-command.js";
-import { type Mux, tmux } from "./mux.js";
+import { conventionalTmuxDirectory, type Mux, tmux } from "./mux.js";
 import { CLIENT_IDENTITY_FORMAT, WRAPPER_ROUTE_OPTION, wrapperRoute } from "./routing.js";
 import type { Store } from "./store.js";
 import { DEFAULT_TMUX_SERVER, type PeerRecord, type TmuxServer } from "./types.js";
@@ -439,20 +440,47 @@ function wrapperSlot(
 }
 
 /**
+ * A socket path as the kernel resolves it: realpath of its deepest existing
+ * ancestor, the rest appended as spelled, so `/tmp/...` and `/private/tmp/...`
+ * on macOS compare equal whether or not the socket exists yet.
+ */
+function canonicalSocket(path: string): string {
+  const rest: string[] = [];
+  let at = resolve(path);
+  for (;;) {
+    try {
+      return join(realpathSync(at), ...rest);
+    } catch {
+      const parent = dirname(at);
+      if (parent === at) return resolve(path);
+      rest.unshift(basename(at));
+      at = parent;
+    }
+  }
+}
+
+/** The socket path tmux itself would use for `server`. */
+function tmuxSocketPath(server: Exclude<TmuxServer, { kind: "rex" }>): string {
+  if (server.kind === "path") return server.value;
+  return join(conventionalTmuxDirectory(), server.kind === "label" ? server.value : "default");
+}
+
+/**
  * Whether `$TMUX` (the server this process runs inside) is definitely NOT the
  * tmux server `server`. A tmux client lives on one server, so `switch-client`
  * sent to another one cannot move it: it failed with `no current client`, or
  * moved some other terminal's client attached there and reported ok.
  *
- * Lenient where it cannot tell: `default` and `-L` servers are matched on the
- * socket's name, since `$TMUX` holds a resolved path (`/private/tmp/...` on
- * macOS) that may not equal the conventional directory as spelled here.
+ * Both sides are compared as canonical socket paths: `default` and `-L` resolve
+ * to tmux's conventional directory (`$TMUX_TMPDIR` or `/tmp`, then
+ * `tmux-<uid>`), and every path through realpath. A socket name alone is not a
+ * server: `-S /elsewhere/default` is not the default server, and `-S` spelled
+ * through `/tmp` is the same server as through `/private/tmp`.
  */
 export function onOtherTmuxServer(env: NodeJS.ProcessEnv, server: TmuxServer): boolean {
   const own = env.TMUX?.split(",")[0];
   if (!own || server.kind === "rex") return false;
-  if (server.kind === "path") return own !== server.value;
-  return basename(own) !== (server.kind === "label" ? server.value : "default");
+  return canonicalSocket(own) !== canonicalSocket(tmuxSocketPath(server));
 }
 
 function tmuxServerName(server: TmuxServer): string {

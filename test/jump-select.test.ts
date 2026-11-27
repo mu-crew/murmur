@@ -7,7 +7,7 @@ import { asPaneId, asSessionId, asWindowId } from "../src/ids.js";
 import { shellQuote } from "../src/jump-command.js";
 import { runJump } from "../src/jump-select.js";
 import { jumpTarget } from "../src/jump-target.js";
-import type { Mux } from "../src/mux.js";
+import { conventionalTmuxDirectory, type Mux } from "../src/mux.js";
 import { openStore, type Store } from "../src/store.js";
 import type { Driver } from "../src/types.js";
 import { isVisible, type PaneView } from "../src/view.js";
@@ -159,7 +159,7 @@ test("enter focuses an attached local pane instead of opening another remote ses
     attach: vi.fn(() => true),
   });
   let jumped = false;
-  vi.stubEnv("TMUX", "/tmp/tmux-501/default,1,0");
+  vi.stubEnv("TMUX", `${conventionalTmuxDirectory()}/default,1,0`);
 
   await runJump(store, identity(), key("REMOTE", "%9"), {
     fzf: () => "",
@@ -252,7 +252,7 @@ test("the default jump uses the injected mux, not the real tmux", async () => {
   writeFileSync(join(bin, "tmux"), "#!/bin/sh\nexit 1\n");
   chmodSync(join(bin, "tmux"), 0o755);
   vi.stubEnv("PATH", `${bin}:${process.env.PATH ?? ""}`);
-  vi.stubEnv("TMUX", "/tmp/tmux-501/default,1,0");
+  vi.stubEnv("TMUX", `${conventionalTmuxDirectory()}/default,1,0`);
   agent("%7");
   const attach = vi.fn(() => true);
   await runJump(

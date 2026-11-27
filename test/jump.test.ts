@@ -6,6 +6,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -15,6 +16,7 @@ import {
   agentLabel,
   agentLocation,
   jumpToAgent,
+  onOtherTmuxServer,
   type Runner,
   remoteSessionName,
   WRAPPER_CLIENT_OPTION,
@@ -24,7 +26,7 @@ import { JUMP_CLIENT_OPTION } from "../src/goto.js";
 import { asPaneId, asSessionId, asWindowId } from "../src/ids.js";
 import { shellQuote } from "../src/jump-command.js";
 import { reportJumpFailure } from "../src/jump-select.js";
-import { tmux } from "../src/mux.js";
+import { conventionalTmuxDirectory, tmux } from "../src/mux.js";
 import { WRAPPER_ROUTE_OPTION, wrapperRoute } from "../src/routing.js";
 import { openStore, type Store } from "../src/store.js";
 import type { PaneView } from "../src/view.js";
@@ -742,7 +744,7 @@ test("outside tmux, a failed ssh attach is reported", () => {
 });
 
 test("a local jump reports a failed select-window instead of claiming success", () => {
-  vi.stubEnv("TMUX", "/tmp/tmux-501/default,1,0");
+  vi.stubEnv("TMUX", `${conventionalTmuxDirectory()}/default,1,0`);
   // A select-window that fails is the local twin of the remote symptom: the
   // picker closes, nothing moves, and nothing says why.
   const result = jumpToAgent(
@@ -755,7 +757,7 @@ test("a local jump reports a failed select-window instead of claiming success", 
 });
 
 test("a local jump to a live pane succeeds", () => {
-  vi.stubEnv("TMUX", "/private/tmp/tmux-501/mule,1,0");
+  vi.stubEnv("TMUX", `${conventionalTmuxDirectory()}/mule,1,0`);
   const servers: unknown[] = [];
   const result = jumpToAgent(
     store,
@@ -783,7 +785,7 @@ test("a local jump from another tmux server fails instead of switching a client 
   // Inside the default server, an agent on `-L mule`: `tmux -L mule
   // switch-client` cannot move this client, and with another terminal attached
   // to mule it moved THAT one and reported ok.
-  vi.stubEnv("TMUX", "/private/tmp/tmux-501/default,1,0");
+  vi.stubEnv("TMUX", `${conventionalTmuxDirectory()}/default,1,0`);
   let attached = false;
   const mux = fakeMux({
     livePanes: () => new Set([asPaneId("%9")]),
@@ -805,8 +807,49 @@ test("a local jump from another tmux server fails instead of switching a client 
   expect(jumpToAgent(store, socket, mux)).toEqual({ ok: true });
 });
 
+test("onOtherTmuxServer compares canonical socket paths, not socket names", () => {
+  const other = mkdtempSync(join(tmpdir(), "murmur-sock-"));
+  try {
+    // A `-S` socket named `default` (or `mule`) elsewhere is not the conventional
+    // server of that name.
+    const env = (path: string) => ({ TMUX: `${path},1,0` });
+    expect(onOtherTmuxServer(env(join(other, "default")), { kind: "default" })).toBe(true);
+    expect(onOtherTmuxServer(env(join(other, "mule")), { kind: "label", value: "mule" })).toBe(
+      true,
+    );
+    // The conventional sockets themselves are the same server either way round.
+    const mule = join(conventionalTmuxDirectory(), "mule");
+    expect(onOtherTmuxServer(env(mule), { kind: "label", value: "mule" })).toBe(false);
+    expect(onOtherTmuxServer(env(mule), { kind: "path", value: mule })).toBe(false);
+    expect(onOtherTmuxServer(env(mule), { kind: "default" })).toBe(true);
+    // A symlinked directory (`/tmp` -> `/private/tmp` on macOS) is one server.
+    const link = `${other}-link`;
+    symlinkSync(other, link);
+    try {
+      expect(
+        onOtherTmuxServer(env(join(link, "s2")), { kind: "path", value: join(other, "s2") }),
+      ).toBe(false);
+      expect(
+        onOtherTmuxServer(env(join(other, "s2")), { kind: "path", value: join(link, "s2") }),
+      ).toBe(false);
+    } finally {
+      rmSync(link, { force: true });
+    }
+    if (process.platform === "darwin") {
+      expect(
+        onOtherTmuxServer(env("/tmp/mm-review/s2"), {
+          kind: "path",
+          value: "/private/tmp/mm-review/s2",
+        }),
+      ).toBe(false);
+    }
+  } finally {
+    rmSync(other, { recursive: true, force: true });
+  }
+});
+
 test("a local pane that MOVED window is still jumped to, and nothing is written", () => {
-  vi.stubEnv("TMUX", "/tmp/tmux-501/default,1,0");
+  vi.stubEnv("TMUX", `${conventionalTmuxDirectory()}/default,1,0`);
   // The regression this rule exists for, and the reproduction that filed it:
   // `move-pane -s %0 -t @1` leaves %0 alive in its new window and removes @0
   // from list-windows entirely. Judging the pane by its recorded WINDOW
@@ -848,7 +891,7 @@ test("a local pane that MOVED window is still jumped to, and nothing is written"
 });
 
 test("a local pane that is really gone is pane_gone, and still writes nothing", () => {
-  vi.stubEnv("TMUX", "/tmp/tmux-501/default,1,0");
+  vi.stubEnv("TMUX", `${conventionalTmuxDirectory()}/default,1,0`);
   // Reported, not cleared. A collect retires state -- it is the one path that
   // reads every pane in one pass -- and a jump has no business doing half of
   // that job from a keypress.
@@ -875,7 +918,7 @@ test("a local pane that is really gone is pane_gone, and still writes nothing", 
 });
 
 test("a local jump proceeds when tmux cannot answer at all", () => {
-  vi.stubEnv("TMUX", "/tmp/tmux-501/default,1,0");
+  vi.stubEnv("TMUX", `${conventionalTmuxDirectory()}/default,1,0`);
   // null is "could not tell", not "no panes". Conflating them deleted every
   // agent on the host the moment tmux was briefly unreachable.
   const result = jumpToAgent(store, localView(), fakeMux({ livePanes: () => null }));
