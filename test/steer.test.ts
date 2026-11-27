@@ -5,14 +5,14 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { jumpToAgent } from "../src/agents.js";
 import type { InputDelivery } from "../src/dash-input.js";
 import { createIdentity, loadIdentity, type NodeIdentity } from "../src/identity.js";
-import { asPaneId } from "../src/ids.js";
+import { asPaneId, asSessionId, asWindowId } from "../src/ids.js";
 import { runJump } from "../src/jump-select.js";
 import { jumpTarget } from "../src/jump-target.js";
 import type { Mux } from "../src/mux.js";
 import { promptAgent, stopAgent } from "../src/steer.js";
 import { openStore, type Store } from "../src/store.js";
 import type { PaneView } from "../src/view.js";
-import { vtmuxMux, vtmuxRow } from "./helpers/panes.js";
+import { localPane, vtmuxMux, vtmuxRow } from "./helpers/panes.js";
 
 let store: Store;
 
@@ -210,4 +210,73 @@ test("a rex j1 token is a valid target: absent is not_found, not invalid_target"
     reason: "not_found",
   });
   expect(log).toEqual([]);
+});
+
+/** A Rex block as a peer's snapshot carries it: the local-only keys dropped. */
+const {
+  focused: _focused,
+  runs_on: _runsOn,
+  ...wirePane
+} = localPane({
+  server: { kind: "rex" },
+  pane: asPaneId("block:b1"),
+  session: asSessionId("session:s1"),
+  window: asWindowId("window:w1"),
+});
+
+/** A peer `far` whose cached snapshot holds one Rex block, `{ kind: "rex" }` on the wire. */
+function remoteRexToken(rexHost: string | null): string {
+  store.addPeer("far", "far.example");
+  if (rexHost !== null) store.setPeerRexHost("far", rexHost);
+  store.replacePeerSnapshot("far", {
+    ok: true,
+    at: Date.now(),
+    snapshot: {
+      murmur_snapshot: 8,
+      host_id: "FAR",
+      display_name: "far",
+      murmur_version: "3.0.2",
+      generated_at: Date.now(),
+      panes: [wirePane],
+    },
+  });
+  return jumpTarget({ host_id: "FAR", server: { kind: "rex" }, pane: asPaneId("block:b1") });
+}
+
+test("prompt and stop reach a remote Rex pane: rex -S with a Rex host, its ssh without", async () => {
+  const log: InputDelivery[] = [];
+  const token = remoteRexToken("me@far");
+  expect(await promptAgent(store, identity(), token, "go on", deps(log))).toEqual({
+    ok: true,
+    action: "prompt",
+    jump_target: token,
+  });
+  expect(log[0]?.command).toBe("sh");
+  expect(log[0]?.args.slice(3, 6)).toEqual(["me@far", "session:s1", "block:b1"]);
+  expect(log[0]?.args).toContain("far.example");
+  expect(log[0]?.input).toBe("go on");
+
+  store.setPeerRexHost("far", null);
+  expect(await stopAgent(store, identity(), token, deps(log))).toMatchObject({ ok: true });
+  expect(log[1]?.command).toBe("ssh");
+  expect(log[1]?.args.slice(-2)).toEqual([
+    "far.example",
+    "'rex' '--autostart=false' 'send-key' '-s' 'session:s1' '-b' 'block:b1' 'escape'",
+  ]);
+});
+
+test("jump --json to a Rex pane needs no terminal: it runs the Rex jump", async () => {
+  vi.stubEnv("TMUX", "");
+  vi.stubEnv("TERM_PROGRAM", "");
+  const write = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+  const jump = vi.fn(() => ({ ok: true as const }));
+  await runJump(
+    store,
+    identity(),
+    remoteRexToken("me@far"),
+    { fzf: () => "", mux: live(), rex: false, jump, interactive: () => false },
+    { json: true },
+  );
+  expect(jump).toHaveBeenCalledTimes(1);
+  expect(JSON.parse(String(write.mock.calls[0]?.[0]))).toMatchObject({ ok: true });
 });

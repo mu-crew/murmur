@@ -29,8 +29,10 @@ import { paneKey, serverValue } from "./types.js";
  * 13 is murmur 3.0, in its own state directory (`murmur3`): no agent rows, no
  * inbox, only what the multiplexer cannot remember for murmur. Older
  * incompatible files are rebuilt with just the configured peers.
+ *
+ * 14 adds the nullable `peers.rex_host`, upgraded in place (see `UPGRADES`).
  */
-const SCHEMA_USER_VERSION = 13;
+const SCHEMA_USER_VERSION = 14;
 
 /**
  * The oldest schema whose build can read and write a store this build creates,
@@ -40,6 +42,23 @@ const SCHEMA_USER_VERSION = 13;
  * refusing it: every INSERT here names its columns.
  */
 const COMPATIBLE_SINCE = 13;
+
+/**
+ * In-place upgrades, keyed by the schema they upgrade FROM. Only additive,
+ * nullable columns belong here: a store at a key is upgraded step by step to
+ * `SCHEMA_USER_VERSION` and keeps every row, where anything older is rebuilt.
+ */
+const UPGRADES: Readonly<Record<number, string>> = {
+  13: "ALTER TABLE peers ADD COLUMN rex_host TEXT",
+};
+
+/** Whether a store at `version` upgrades in place rather than being rebuilt. */
+function upgradable(version: number): boolean {
+  for (let step = version; step < SCHEMA_USER_VERSION; step += 1) {
+    if (UPGRADES[step] === undefined) return false;
+  }
+  return version < SCHEMA_USER_VERSION;
+}
 
 type Database = BetterSqlite3.Database;
 type OpenOptions = { fileMustExist?: boolean; readonly?: boolean };
@@ -185,7 +204,8 @@ const SCHEMA = `
     last_attempt_at  INTEGER,
     last_error       TEXT,
     murmur_version   TEXT,
-    snapshot_version INTEGER
+    snapshot_version INTEGER,
+    rex_host         TEXT
   ) STRICT;
 `;
 
@@ -240,6 +260,8 @@ export interface Store {
   peers(): PeerRecord[];
   addPeer(name: string, target: string, jumpCommand?: string): void;
   setPeerJumpCommand(name: string, jumpCommand: string): boolean;
+  /** The `rex -S` label reaching this peer's Rex server; null clears it. */
+  setPeerRexHost(name: string, rexHost: string | null): boolean;
   removePeer(name: string): boolean;
   /**
    * \`target\` is the target the fetch was made against: a write for a peer
@@ -336,6 +358,7 @@ type PeerDbRow = {
   last_error: string | null;
   murmur_version: string | null;
   snapshot_version: number | null;
+  rex_host: string | null;
 };
 
 /**
@@ -386,13 +409,21 @@ function withResetLock<T>(path: string, work: () => T): T {
   }
 }
 
-type SalvagedPeer = { name: string; target: string; jump_command?: string };
+type SalvagedPeer = {
+  name: string;
+  target: string;
+  jump_command?: string;
+  rex_host?: string | null;
+};
 
 /** The human-authored fields of every peer in `database`, whatever its schema. */
 function peerRows(database: Database): SalvagedPeer[] {
   const columns = database.prepare("PRAGMA table_info(peers)").all() as { name: string }[];
-  const jump = columns.some((column) => column.name === "jump_command") ? ", jump_command" : "";
-  return database.prepare(`SELECT name, target${jump} FROM peers`).all() as SalvagedPeer[];
+  const extra = ["jump_command", "rex_host"]
+    .filter((name) => columns.some((column) => column.name === name))
+    .map((name) => `, ${name}`)
+    .join("");
+  return database.prepare(`SELECT name, target${extra} FROM peers`).all() as SalvagedPeer[];
 }
 
 /** Human-authored peer fields, and the only state worth salvaging. */
@@ -401,7 +432,7 @@ function salvagePeers(path: string): SalvagedPeer[] {
     const existing = openDatabase(path, { fileMustExist: true });
     try {
       const version = (existing.pragma("user_version", { simple: true }) as number) ?? 0;
-      if (usable(existing, version)) return [];
+      if (usable(existing, version) || upgradable(version)) return [];
       return peerRows(existing);
     } catch {
       // Too old to have the table, or unreadable. Nothing to save.
@@ -522,7 +553,7 @@ function storeCondition(path: string): "ok" | "reset" | StoreTooNewError {
   }
   try {
     const version = (existing.pragma("user_version", { simple: true }) as number) ?? 0;
-    if (usable(existing, version)) return "ok";
+    if (usable(existing, version) || upgradable(version)) return "ok";
     if (version > SCHEMA_USER_VERSION) return new StoreTooNewError(path, version);
     return "reset";
   } catch {
@@ -661,6 +692,14 @@ function openWritableDatabase(path: string): Database {
           // The reset lock is best effort and can be stolen, so a newer build may
           // have written the file since the check above. Never build over it.
           if (version > SCHEMA_USER_VERSION) throw new StoreTooNewError(path, version);
+          if (upgradable(version)) {
+            // Additive: every row stays, the compat stamp included.
+            for (let step = version; step < SCHEMA_USER_VERSION; step += 1) {
+              opened.exec(UPGRADES[step] ?? "");
+            }
+            opened.pragma(`user_version = ${SCHEMA_USER_VERSION}`);
+            return;
+          }
           opened.exec(SCHEMA);
           opened.prepare("INSERT INTO compat (compatible_since) VALUES (?)").run(COMPATIBLE_SINCE);
           opened.pragma(`user_version = ${SCHEMA_USER_VERSION}`);
@@ -668,13 +707,14 @@ function openWritableDatabase(path: string): Database {
           // snapshot and has never been fetched, and saying otherwise would
           // render a never-reached host as fresh.
           const restore = opened.prepare(
-            "INSERT OR IGNORE INTO peers (name, target, jump_command) VALUES (?, ?, ?)",
+            "INSERT OR IGNORE INTO peers (name, target, jump_command, rex_host) VALUES (?, ?, ?, ?)",
           );
           for (const peer of salvaged) {
             restore.run(
               peer.name,
               peer.target,
               peer.jump_command ?? defaultJumpCommand(peer.target),
+              peer.rex_host ?? null,
             );
           }
         })
@@ -835,6 +875,7 @@ function buildStore(database: Database): Store {
       last_error: row.last_error,
       murmur_version: row.murmur_version,
       snapshot_version: row.snapshot_version,
+      rex_host: row.rex_host,
     };
   }
 
@@ -946,6 +987,13 @@ function buildStore(database: Database): Store {
     setPeerJumpCommand(name, jumpCommand) {
       return (
         database.prepare("UPDATE peers SET jump_command = ? WHERE name = ?").run(jumpCommand, name)
+          .changes > 0
+      );
+    },
+
+    setPeerRexHost(name, rexHost) {
+      return (
+        database.prepare("UPDATE peers SET rex_host = ? WHERE name = ?").run(rexHost, name)
           .changes > 0
       );
     },

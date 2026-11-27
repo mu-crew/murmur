@@ -131,6 +131,12 @@ export type PeerRecord = {
   murmur_version: string | null;
   /** The peer's `murmur_snapshot` value, i.e. the document version it speaks. */
   snapshot_version: number | null;
+  /**
+   * The `rex -S` label (a `rex hosts` name or address) reaching this peer's Rex
+   * server, set by hand on THIS node. Never on the wire: a peer's Rex panes stay
+   * `{ kind: "rex" }`, and only the viewer knows how its own Rex reaches them.
+   */
+  rex_host: string | null;
 };
 
 /**

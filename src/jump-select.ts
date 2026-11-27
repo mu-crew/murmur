@@ -108,8 +108,10 @@ export async function runJump(
   // JSON callers are scripts: with no tmux client to move and no Rex to open a
   // tab in, the attach needs a terminal that is not there. Say so up front.
   const interactive = deps.interactive ?? (() => Boolean(process.stdin.isTTY));
+  // A Rex jump runs no attach at all: its focus and select need no terminal.
   if (
     options.json &&
+    agent.server.kind !== "rex" &&
     options.client === undefined &&
     !process.env.TMUX &&
     outsideTmux() === "inherit" &&

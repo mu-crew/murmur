@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { peerForHost, shellQuote } from "./agents.js";
+import { peerForHost, rexArgv, shellQuote } from "./agents.js";
 import { SSH_OPTIONS } from "./channel.js";
 import { helperPath } from "./helper-path.js";
 import type { PaneId } from "./ids.js";
@@ -137,14 +137,71 @@ function rexDelivery(pane: PaneView, text: string | null): InputDelivery {
   return { command: "sh", args: ["-c", script, "sh", pane.session, pane.pane], input: text ?? "" };
 }
 
+/**
+ * `rex -S` first, the warm ssh second. The text is read once into the shell, so
+ * the fallback can send it again; a `send` that failed delivered nothing, and
+ * once it succeeded the Enter is never retried elsewhere, so nothing is typed
+ * twice. `$1` is the Rex host, `$2`/`$3` session and block, the rest the ssh argv.
+ */
+export const REX_PROMPT_SCRIPT = `text=$(cat; printf x); text=\${text%x}
+if printf %s "$text" | rex -S "$1" --autostart=false send -s "$2" -b "$3"; then
+  exec rex -S "$1" --autostart=false send-key -s "$2" -b "$3" enter
+fi
+shift 3
+printf %s "$text" | ssh "$@"`;
+
+/** {@link REX_PROMPT_SCRIPT}'s Escape: no text, so the fallback is a plain retry. */
+export const REX_ESCAPE_SCRIPT = `rex -S "$1" --autostart=false send-key -s "$2" -b "$3" escape && exit 0
+shift 3
+exec ssh "$@"`;
+
+/**
+ * A remote Rex block's input. Over the peer's ssh, the remote shell runs its
+ * own local `rex`; with a `rex_host` configured here, `rex -S <rex_host>` is
+ * tried first and the ssh is the fallback.
+ */
+function remoteRexDelivery(
+  pane: PaneView,
+  text: string | null,
+  target: string,
+  rexHost: string | null,
+): InputDelivery {
+  const block = ["-s", pane.session, "-b", pane.pane];
+  const remote = (args: string[]) => ["rex", ...rexArgv(null, args)].map(shellQuote).join(" ");
+  const command =
+    text === null
+      ? remote(["send-key", ...block, "escape"])
+      : `${remote(["send", ...block])} && ${remote(["send-key", ...block, "enter"])}`;
+  const ssh = [...SSH_OPTIONS, target, command];
+  if (rexHost === null) return { command: "ssh", args: ssh, input: text ?? "" };
+  return {
+    command: "sh",
+    args: [
+      "-c",
+      text === null ? REX_ESCAPE_SCRIPT : REX_PROMPT_SCRIPT,
+      "sh",
+      rexHost,
+      pane.session,
+      pane.pane,
+      ...ssh,
+    ],
+    input: text ?? "",
+  };
+}
+
 export function buildPromptDelivery(
   pane: PaneView,
   text: string,
   target: string | null,
   buffer = `murmur-input-${process.pid}`,
+  rexHost: string | null = null,
 ): InputDelivery {
+  if (pane.server.kind === "rex") {
+    return pane.local
+      ? rexDelivery(pane, text)
+      : remoteRexDelivery(pane, text, target ?? "", rexHost);
+  }
   if (pane.local) {
-    if (pane.server.kind === "rex") return rexDelivery(pane, text);
     return {
       command: "tmux",
       args: serverArgs(pane.server, tmuxArgs(pane.pane, buffer)),
@@ -159,9 +216,17 @@ export function buildPromptDelivery(
   };
 }
 
-export function buildEscapeDelivery(pane: PaneView, target: string | null): InputDelivery {
+export function buildEscapeDelivery(
+  pane: PaneView,
+  target: string | null,
+  rexHost: string | null = null,
+): InputDelivery {
+  if (pane.server.kind === "rex") {
+    return pane.local
+      ? rexDelivery(pane, null)
+      : remoteRexDelivery(pane, null, target ?? "", rexHost);
+  }
   if (pane.local) {
-    if (pane.server.kind === "rex") return rexDelivery(pane, null);
     return {
       command: "tmux",
       args: serverArgs(pane.server, ["send-keys", "-t", pane.pane, "Escape"]),
@@ -203,24 +268,25 @@ const runInput: InputRunner = (delivery) =>
     child.stdin.end(delivery.input);
   });
 
-function inputTarget(store: Store, pane: PaneView): string | null {
-  if (pane.local) return null;
-  return peerForHost(store, pane.host_id)?.target ?? null;
+/** How a delivery reaches the pane's node: the ssh target, and its Rex host if set here. */
+type InputRoute = { target: string | null; rexHost: string | null };
+
+function inputRoute(store: Store, pane: PaneView): InputRoute {
+  if (pane.local) return { target: null, rexHost: null };
+  const resolved = peerForHost(store, pane.host_id);
+  return { target: resolved?.target ?? null, rexHost: resolved?.peer.rex_host ?? null };
 }
 
 async function deliver(
   store: Store,
   pane: PaneView,
-  makeDelivery: (target: string | null) => InputDelivery,
+  makeDelivery: (route: InputRoute) => InputDelivery,
   run: InputRunner,
 ): Promise<InputResult> {
-  const target = inputTarget(store, pane);
-  if (!pane.local && !target) return { ok: false, message: `no peer for ${pane.host}` };
-  if (!pane.local && pane.server.kind === "rex") {
-    return { ok: false, message: `${pane.pane} is a Rex pane on ${pane.host}; steer it there` };
-  }
+  const route = inputRoute(store, pane);
+  if (!pane.local && !route.target) return { ok: false, message: `no peer for ${pane.host}` };
   try {
-    await run(makeDelivery(target));
+    await run(makeDelivery(route));
     return { ok: true };
   } catch (error) {
     return { ok: false, message: error instanceof Error ? error.message : String(error) };
@@ -233,7 +299,12 @@ export function sendPrompt(
   text: string,
   run: InputRunner = runInput,
 ): Promise<InputResult> {
-  return deliver(store, pane, (target) => buildPromptDelivery(pane, text, target), run);
+  return deliver(
+    store,
+    pane,
+    (route) => buildPromptDelivery(pane, text, route.target, undefined, route.rexHost),
+    run,
+  );
 }
 
 /**
@@ -273,7 +344,7 @@ export function acknowledgeAttention(
     clearLocal(pane.pane, pane.server);
     return Promise.resolve({ ok: true });
   }
-  return deliver(store, pane, (target) => buildClearDelivery(pane, target ?? ""), run);
+  return deliver(store, pane, (route) => buildClearDelivery(pane, route.target ?? ""), run);
 }
 
 export function sendEscape(
@@ -281,5 +352,10 @@ export function sendEscape(
   pane: PaneView,
   run: InputRunner = runInput,
 ): Promise<InputResult> {
-  return deliver(store, pane, (target) => buildEscapeDelivery(pane, target), run);
+  return deliver(
+    store,
+    pane,
+    (route) => buildEscapeDelivery(pane, route.target, route.rexHost),
+    run,
+  );
 }

@@ -383,6 +383,7 @@ test("the store exposes no reader-side mutation of remote state", () => {
     "removePeer",
     "replacePeerSnapshot",
     "setPeerJumpCommand",
+    "setPeerRexHost",
     "syncLocal",
   ]);
 });

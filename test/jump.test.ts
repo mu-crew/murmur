@@ -19,6 +19,7 @@ import {
   remoteSessionName,
   WRAPPER_CLIENT_OPTION,
 } from "../src/agents.js";
+import { SSH_OPTIONS } from "../src/channel.js";
 import { JUMP_CLIENT_OPTION } from "../src/goto.js";
 import { asPaneId, asSessionId, asWindowId } from "../src/ids.js";
 import { shellQuote } from "../src/jump-command.js";
@@ -1580,4 +1581,109 @@ test("the peer-set remediation survives a backslash line continuation", () => {
     .split("\n")
     .slice(0, -1);
   expect(argv).toEqual(["-t", "legacy.invalid", "tmux -L private attach -t %1"]);
+});
+
+/** A Rex block as the collector reads it: block, session and window are Rex ids. */
+function rexView(over: Partial<PaneView> = {}): PaneView {
+  return view({
+    server: { kind: "rex" },
+    pane: asPaneId("block:b1"),
+    session: asSessionId("session:s1"),
+    window: asWindowId("window:w1"),
+    ...over,
+  });
+}
+
+type Call = [string, string[]];
+function recorder(answer: (file: string, args: string[]) => ReturnType<Runner> = () => ok()) {
+  const calls: Call[] = [];
+  const run: Runner = (file, args) => {
+    calls.push([file, args]);
+    return answer(file, args);
+  };
+  return { calls, run };
+}
+
+const FOCUS = [
+  "api",
+  "call",
+  "session.focus_block",
+  JSON.stringify({ session_id: "session:s1", block_id: "block:b1" }),
+];
+const SELECT = ["do", "session.select", "session_id=session:s1", "window_id=window:w1"];
+
+test("a local Rex jump focuses the block, then shows its session in the named app client", () => {
+  const { calls, run } = recorder();
+  const result = jumpToAgent(store, rexView({ host_id: "LOCAL", local: true }), fakeMux(), run, {
+    REX_CLIENT: "mac",
+  });
+  expect(result).toEqual({ ok: true });
+  expect(calls).toEqual([
+    ["rex", ["--autostart=false", ...FOCUS]],
+    ["rex", ["--autostart=false", "-C", "mac", ...SELECT]],
+  ]);
+});
+
+test("a remote Rex jump focuses on the peer's server via rex -S, and selects locally, never -S", () => {
+  peer("p", "remote-host");
+  store.setPeerRexHost("p", "me@p");
+  const { calls, run } = recorder();
+  expect(jumpToAgent(store, rexView(), fakeMux(), run, {})).toEqual({ ok: true });
+  expect(calls).toEqual([
+    ["rex", ["-S", "me@p", "--autostart=false", ...FOCUS]],
+    ["rex", ["--autostart=false", ...SELECT]],
+  ]);
+});
+
+test("a remote Rex jump whose rex -S fails focuses over the peer's warm ssh instead", () => {
+  peer("p", "remote-host");
+  store.setPeerRexHost("p", "me@p");
+  const { calls, run } = recorder((file, args) =>
+    file === "rex" && args[0] === "-S" ? { status: 1, stdout: "", failed: false } : ok(),
+  );
+  expect(jumpToAgent(store, rexView(), fakeMux(), run, {})).toEqual({ ok: true });
+  expect(calls.map(([file]) => file)).toEqual(["rex", "ssh", "rex"]);
+  const ssh = calls[1]?.[1] ?? [];
+  expect(ssh.slice(0, SSH_OPTIONS.length)).toEqual(SSH_OPTIONS);
+  expect(ssh.at(-2)).toBe("p");
+  // The peer's own local Rex, every word quoted into the one remote command.
+  expect(ssh.at(-1)).toBe(["rex", "--autostart=false", ...FOCUS].map(shellQuote).join(" "));
+});
+
+test("a remote Rex jump with no Rex host goes straight to ssh, and says how to set one", () => {
+  peer("p", "remote-host");
+  const { calls, run } = recorder((_file, args) =>
+    args.includes("session.select") ? { status: 1, stdout: "", failed: false } : ok(),
+  );
+  const result = jumpToAgent(store, rexView(), fakeMux(), run, {});
+  expect(calls.map(([file]) => file)).toEqual(["ssh", "rex"]);
+  expect(result).toMatchObject({ ok: false, reason: "attach_failed" });
+  expect(result.ok ? "" : result.message).toMatch(/does not show that machine's Rex server/);
+  expect(result.ok ? "" : result.message).toMatch(/murmur peer set p --rex-host <label>/);
+});
+
+test("a Rex jump names the missing app client when session.select exits 3", () => {
+  const { run } = recorder((_file, args) =>
+    args.includes("session.select") ? { status: 3, stdout: "", failed: false } : ok(),
+  );
+  const result = jumpToAgent(store, rexView({ local: true }), fakeMux(), run, {});
+  expect(result).toMatchObject({ ok: false, reason: "attach_failed" });
+  expect(result.ok ? "" : result.message).toMatch(/not connected to this machine's Rex server/);
+});
+
+test("a Rex jump that cannot focus the block stops there and selects nothing", () => {
+  peer("p", "remote-host");
+  const { calls, run } = recorder(() => ({ status: 1, stdout: "", failed: false }));
+  const result = jumpToAgent(store, rexView(), fakeMux(), run, {});
+  expect(result).toMatchObject({ ok: false, reason: "attach_failed" });
+  expect(calls.some(([, args]) => args.includes("session.select"))).toBe(false);
+});
+
+test("a remote Rex jump with no peer for the host is no_peer, and runs nothing", () => {
+  const { calls, run } = recorder();
+  expect(jumpToAgent(store, rexView(), fakeMux(), run, {})).toMatchObject({
+    ok: false,
+    reason: "no_peer",
+  });
+  expect(calls).toEqual([]);
 });

@@ -1,5 +1,5 @@
-import { execFileSync, spawn } from "node:child_process";
-import { peerForHost, shellQuote } from "./agents.js";
+import { execFile, execFileSync, spawn } from "node:child_process";
+import { peerForHost, rexArgv, shellQuote } from "./agents.js";
 import { endLinesWithReset, scan, sgrOnly } from "./ansi.js";
 import { SSH_OPTIONS } from "./channel.js";
 import { helperPath } from "./helper-path.js";
@@ -154,19 +154,57 @@ const sshRunnerAsync: GlanceRunnerAsync = (target, argv) =>
   });
 
 /**
- * The ssh a remote glance would run, or null when it must not run at all.
+ * A local `rex` run, its stdout or a throw: the seam for a Rex capture, local
+ * or through `rex -S`, as `GlanceRunner` is for the ssh.
+ */
+export type RexGlanceRunner = (args: string[]) => string;
+export type RexGlanceRunnerAsync = (args: string[]) => Promise<string>;
+
+const rexRunner: RexGlanceRunner = (args) =>
+  execFileSync(helperPath("rex"), args, {
+    encoding: "utf8",
+    timeout: 3000,
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+
+const rexRunnerAsync: RexGlanceRunnerAsync = (args) =>
+  new Promise((resolve, reject) => {
+    execFile(
+      helperPath("rex"),
+      args,
+      { encoding: "utf8", timeout: 3000, maxBuffer: STDOUT_MAX_BYTES },
+      (error, stdout) => (error ? reject(error) : resolve(stdout)),
+    );
+  });
+
+/** The `rex capture` of one block, against the local server or `-S <host>`. */
+function rexCaptureArgs(agent: PaneView, server: string | null): string[] {
+  return rexArgv(server, ["capture", "-s", agent.session, "-b", agent.pane, "--format", "vt"]);
+}
+
+/** A Rex capture's last `lines` lines. */
+const tail = (out: string, lines: number) => out.split("\n").slice(-lines).join("\n");
+
+/**
+ * How a remote glance reaches the pane: `rex -S <rex_host>` first for a Rex
+ * pane whose peer has one configured here, then the ssh (null when it must not
+ * run), or null when nothing may run at all.
  *
  * Shared by `glance` and `glanceAsync` so the skip rules and the quoting exist
- * once; only the way the ssh is waited on differs.
+ * once; only the way each is waited on differs.
  */
 function remoteGlance(
   store: Store,
   agent: PaneView,
   lines: number,
-): { target: string; argv: string[] } | null {
+): { rex: string[] | null; ssh: { target: string; argv: string[] } | null } | null {
   const resolved = peerForHost(store, agent.host_id);
   if (!resolved) return null;
   const { peer, target } = resolved;
+  const rex = agent.server.kind === "rex";
+  // `rex -S` is its own transport, so a failed murmur collect over ssh does not
+  // gate it; the skip below is about the ssh's cost.
+  const direct = rex && peer.rex_host !== null ? rexCaptureArgs(agent, peer.rex_host) : null;
   // Never dial a peer whose last attempt failed.
   //
   // The preview runs PER KEYPRESS as the cursor moves, so this ssh is on the
@@ -184,9 +222,12 @@ function remoteGlance(
   // The row itself still previews. Its metadata is cached and worth reading --
   // and a peer whose fetch failed keeps its last-known snapshot, which is
   // exactly why the row is on screen at all.
-  if (peer.last_error !== null) return null;
-  // A remote Rex pane is reached through that node's Rex, not over ssh tmux.
-  if (agent.server.kind === "rex") return null;
+  if (peer.last_error !== null) return direct ? { rex: direct, ssh: null } : null;
+  // A remote Rex pane over ssh: that node's own local `rex capture`.
+  if (agent.server.kind === "rex") {
+    const argv = [["rex", ...rexCaptureArgs(agent, null)].map(shellQuote).join(" ")];
+    return { rex: direct, ssh: { target, argv } };
+  }
   // ssh's remote side is a login shell. Build the tmux argv first, including
   // the snapshot's server selector, then quote every word into its one remote
   // command so hostile server values and pane ids remain data. `-e` keeps the
@@ -195,21 +236,30 @@ function remoteGlance(
     "tmux",
     ...tmuxArgs(agent.server, ["capture-pane", "-p", "-e", "-t", agent.pane, "-S", `-${lines}`]),
   ];
-  return { target, argv: [argv.map(shellQuote).join(" ")] };
+  return { rex: null, ssh: { target, argv: [argv.map(shellQuote).join(" ")] } };
 }
 
-/** A local Rex block's screen, its last `lines` lines kept, or null. */
-function rexCapture(agent: PaneView, lines: number): string | null {
-  try {
-    const out = execFileSync(
-      helperPath("rex"),
-      ["--autostart=false", "capture", "-s", agent.session, "-b", agent.pane, "--format", "vt"],
-      { encoding: "utf8", timeout: 3000, stdio: ["ignore", "pipe", "ignore"] },
-    );
-    return out.split("\n").slice(-lines).join("\n");
-  } catch {
-    return null;
+/** The first of `attempts` that answers, or null when none does. */
+function firstAnswer(attempts: (() => string)[]): string | null {
+  for (const attempt of attempts) {
+    try {
+      return attempt();
+    } catch {
+      // Cold socket, dead tmux or Rex, gone pane: try the next way, then say so.
+    }
   }
+  return null;
+}
+
+async function firstAnswerAsync(attempts: (() => Promise<string>)[]): Promise<string | null> {
+  for (const attempt of attempts) {
+    try {
+      return await attempt();
+    } catch {
+      // As `firstAnswer`.
+    }
+  }
+  return null;
 }
 
 export function glance(
@@ -217,23 +267,24 @@ export function glance(
   agent: PaneView,
   lines = GLANCE_LINES,
   run: GlanceRunner = sshRunner,
+  rexRun: RexGlanceRunner = rexRunner,
 ): string | null {
   if (agent.local) {
     const local =
       agent.server.kind === "rex"
-        ? rexCapture(agent, lines)
+        ? firstAnswer([() => tail(rexRun(rexCaptureArgs(agent, null)), lines)])
         : tmux.capture(agent.pane, lines, agent.server);
     return local === null ? null : previewSafe(local);
   }
   const remote = remoteGlance(store, agent, lines);
   if (!remote) return null;
-  try {
-    return previewSafe(run(remote.target, remote.argv));
-  } catch {
-    // Cold socket, dead tmux, gone pane. The preview says so rather than the
-    // picker failing.
-    return null;
-  }
+  const { rex, ssh } = remote;
+  const out = firstAnswer([
+    ...(rex ? [() => rexRun(rex)] : []),
+    ...(ssh ? [() => run(ssh.target, ssh.argv)] : []),
+  ]);
+  // The preview says a capture failed rather than the picker failing.
+  return out === null ? null : previewSafe(agent.server.kind === "rex" ? tail(out, lines) : out);
 }
 
 /**
@@ -246,13 +297,17 @@ export async function glanceAsync(
   agent: PaneView,
   lines = GLANCE_LINES,
   run: GlanceRunnerAsync = sshRunnerAsync,
+  rexRun: RexGlanceRunnerAsync = rexRunnerAsync,
 ): Promise<string | null> {
-  if (agent.local) return glance(store, agent, lines);
-  const remote = remoteGlance(store, agent, lines);
+  if (agent.local && agent.server.kind !== "rex") return glance(store, agent, lines);
+  const remote = agent.local
+    ? { rex: rexCaptureArgs(agent, null), ssh: null }
+    : remoteGlance(store, agent, lines);
   if (!remote) return null;
-  try {
-    return previewSafe(await run(remote.target, remote.argv));
-  } catch {
-    return null;
-  }
+  const { rex, ssh } = remote;
+  const out = await firstAnswerAsync([
+    ...(rex ? [() => rexRun(rex)] : []),
+    ...(ssh ? [() => run(ssh.target, ssh.argv)] : []),
+  ]);
+  return out === null ? null : previewSafe(agent.server.kind === "rex" ? tail(out, lines) : out);
 }

@@ -407,6 +407,58 @@ test("a stored jump command round-trips", () => {
   expect(s.peers()[0]?.jump_command).toBe('et dev -c "tmux attach -t {pane}"');
 });
 
+test("a peer's Rex host is set, survives a retarget, and clears", () => {
+  const s = store();
+  s.addPeer("dev", "dev.example");
+  expect(s.peers()[0]?.rex_host).toBeNull();
+  expect(s.setPeerRexHost("dev", "me@dev")).toBe(true);
+  expect(s.peers()[0]?.rex_host).toBe("me@dev");
+  // Human-authored, like the jump command: a corrected target keeps it.
+  s.addPeer("dev", "dev2.example");
+  expect(s.peers()[0]?.rex_host).toBe("me@dev");
+  expect(s.setPeerRexHost("dev", null)).toBe(true);
+  expect(s.peers()[0]?.rex_host).toBeNull();
+  expect(s.setPeerRexHost("nobody", "x")).toBe(false);
+});
+
+test("a 3.0 store (schema 13) upgrades in place: every row kept, compat stamp kept", () => {
+  // Additive schema rule: 14 only adds the nullable peers.rex_host, so a 3.0.x
+  // store is ALTERed, never rebuilt, and a 3.0.x build can still open it.
+  const s = store();
+  s.addPeer("dev", "dev.example");
+  s.recordCrash(location());
+  s.close();
+  const database = new Database(dbPath());
+  database.exec("ALTER TABLE peers DROP COLUMN rex_host");
+  database.pragma("user_version = 13");
+  database.close();
+
+  const reopened = store();
+  expect(reopened.localPanes()).toHaveLength(1);
+  expect(reopened.setPeerRexHost("dev", "me@dev")).toBe(true);
+  expect(reopened.peers()[0]?.rex_host).toBe("me@dev");
+  reopened.close();
+  const after = new Database(dbPath(), { readonly: true });
+  expect(after.pragma("user_version", { simple: true })).toBe(14);
+  expect(after.prepare("SELECT compatible_since FROM compat").all()).toEqual([
+    { compatible_since: 13 },
+  ]);
+  after.close();
+});
+
+test("a reset keeps a peer's Rex host along with its name and target", () => {
+  const s = store();
+  s.addPeer("dev", "dev.example");
+  s.setPeerRexHost("dev", "me@dev");
+  s.close();
+  const database = new Database(dbPath());
+  database.exec("DROP TABLE compat");
+  database.pragma("user_version = 9");
+  database.close();
+
+  expect(store().peers()[0]).toMatchObject({ name: "dev", rex_host: "me@dev" });
+});
+
 test("addPeer with the same target keeps the cache and a custom jump command", () => {
   const s = store();
   s.addPeer("dev", "old.example");
@@ -554,6 +606,7 @@ test("an existing database upgrades without losing peers", () => {
       last_error: null,
       murmur_version: null,
       snapshot_version: null,
+      rex_host: null,
     },
   ]);
   expect(reopened.localPanes()).toEqual([]);
@@ -646,7 +699,7 @@ test("a 2.x store (schema 12) is rebuilt as 3.0's, keeping only the peers", () =
   expect(reopened.peers().map((peer) => peer.name)).toEqual(["dev"]);
   reopened.close();
   const after = new Database(dbPath(), { readonly: true });
-  expect(after.pragma("user_version", { simple: true })).toBe(13);
+  expect(after.pragma("user_version", { simple: true })).toBe(14);
   const tables = (
     after.prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name").all() as {
       name: string;

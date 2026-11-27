@@ -26,6 +26,7 @@ function peerRecord(over: Partial<PeerRecord> & { name: string }): PeerRecord {
     last_error: null,
     murmur_version: "0.2.1",
     snapshot_version: SNAPSHOT_VERSION,
+    rex_host: null,
     ...over,
   };
 }

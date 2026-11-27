@@ -1,5 +1,7 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { expect, test } from "vitest";
 import { SSH_OPTIONS } from "../src/channel.js";
 import {
@@ -364,4 +366,111 @@ test("acknowledging names the pane's server, locally and on its node", async () 
     "-S",
     "'/tmp/private sock'",
   ]);
+});
+
+function rexPane(local: boolean): PaneView {
+  return {
+    ...pane(local),
+    server: { kind: "rex" },
+    pane: asPaneId("block:b1"),
+    session: asSessionId("session:s1"),
+    window: asWindowId("window:w1"),
+  };
+}
+
+/** A `peers()` holding the remote pane's peer, with or without a Rex host. */
+function rexStore(rexHost: string | null): Store {
+  return {
+    peers: () => [
+      { name: "dev", target: "dev.example", host_id: "remote-host", rex_host: rexHost },
+    ],
+  } as unknown as Store;
+}
+
+test("a local Rex prompt is rex send on stdin, then Enter, on the local server", () => {
+  const delivery = buildPromptDelivery(rexPane(true), "hi", null);
+  expect(delivery.command).toBe("sh");
+  expect(delivery.args.slice(-2)).toEqual(["session:s1", "block:b1"]);
+  expect(delivery.args[1]).not.toContain("-S");
+  expect(delivery.input).toBe("hi");
+});
+
+test("a remote Rex prompt with no Rex host runs the peer's own rex over ssh, text on stdin", () => {
+  const delivery = buildPromptDelivery(rexPane(false), "secret", "dev.example");
+  expect(delivery).toEqual({
+    command: "ssh",
+    args: [
+      ...SSH_OPTIONS,
+      "dev.example",
+      "'rex' '--autostart=false' 'send' '-s' 'session:s1' '-b' 'block:b1' && " +
+        "'rex' '--autostart=false' 'send-key' '-s' 'session:s1' '-b' 'block:b1' 'enter'",
+    ],
+    input: "secret",
+  });
+});
+
+test("remote Rex steer is no longer refused: the peer's route is used", async () => {
+  const seen: InputDelivery[] = [];
+  const run = async (delivery: InputDelivery) => {
+    seen.push(delivery);
+  };
+  expect(await sendPrompt(rexStore("me@dev"), rexPane(false), "go", run)).toEqual({ ok: true });
+  expect(await sendEscape(rexStore(null), rexPane(false), run)).toEqual({ ok: true });
+  expect(seen[0]?.command).toBe("sh");
+  expect(seen[0]?.args.slice(3, 6)).toEqual(["me@dev", "session:s1", "block:b1"]);
+  expect(seen[1]?.command).toBe("ssh");
+  expect(seen[1]?.args.at(-1)).toContain("'escape'");
+});
+
+/**
+ * Run a delivery for real against stub `rex` and `ssh` that log their argv and
+ * stdin; `rex -S` fails when `failDirect` is set. Exercises the fallback shell.
+ */
+function runStubbed(delivery: InputDelivery, failDirect: boolean): string[] {
+  const bin = mkdtempSync(join(tmpdir(), "murmur-rex-bin-"));
+  const log = join(bin, "log");
+  const stub = (name: string, fail: string) =>
+    writeFileSync(
+      join(bin, name),
+      `#!/bin/sh\nprintf '%s|%s|%s\\036' "${name}" "$*" "$(cat)" >> "${log}"\n${fail}\nexit 0\n`,
+      { mode: 0o755 },
+    );
+  stub("rex", failDirect ? `[ "$1" = "-S" ] && exit 1` : "");
+  stub("ssh", "");
+  try {
+    execFileSync("sh", delivery.args, {
+      input: delivery.input,
+      env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+    });
+    return readFileSync(log, "utf8").split("\x1e").slice(0, -1);
+  } finally {
+    rmSync(bin, { recursive: true, force: true });
+  }
+}
+
+test("a remote Rex prompt goes through rex -S when it answers, and never touches ssh", () => {
+  const text = "multi\nline 'quoted' $HOME\n";
+  const log = runStubbed(buildPromptDelivery(rexPane(false), text, "dev", "b", "me@dev"), false);
+  expect(log).toEqual([
+    `rex|-S me@dev --autostart=false send -s session:s1 -b block:b1|${text.trimEnd()}`,
+    "rex|-S me@dev --autostart=false send-key -s session:s1 -b block:b1 enter|",
+  ]);
+});
+
+test("a remote Rex prompt whose rex -S fails is sent once more over ssh, the same text", () => {
+  const text = "hello there";
+  const log = runStubbed(buildPromptDelivery(rexPane(false), text, "dev", "b", "me@dev"), true);
+  expect(log).toHaveLength(2);
+  expect(log[0]).toBe(`rex|-S me@dev --autostart=false send -s session:s1 -b block:b1|${text}`);
+  expect(log[1]).toMatch(/^ssh\|.* dev 'rex' '--autostart=false' 'send' .*'enter'\|hello there$/);
+});
+
+test("a remote Rex Escape falls back to ssh only when rex -S fails", () => {
+  const delivery = buildEscapeDelivery(rexPane(false), "dev", "me@dev");
+  expect(runStubbed(delivery, false)).toEqual([
+    "rex|-S me@dev --autostart=false send-key -s session:s1 -b block:b1 escape|",
+  ]);
+  const log = runStubbed(delivery, true);
+  expect(log[0]).toMatch(/^rex\|-S me@dev/);
+  expect(log[1]).toMatch(/^ssh\|.* dev 'rex' '--autostart=false' 'send-key' .*'escape'\|$/);
 });

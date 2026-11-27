@@ -153,6 +153,15 @@ export function peerAddDecision(input: {
   return null;
 }
 
+const REX_HOST_HELP =
+  'the `rex -S` server (a `rex hosts` label or address) reaching this peer\'s Rex; "" clears it';
+
+/** A `--rex-host` value: blank clears it. */
+export function rexHostValue(value: string): string | null {
+  const trimmed = value.trim();
+  return trimmed === "" ? null : trimmed;
+}
+
 export function registerPeer(program: Command): void {
   const peer = program.command("peer").description("Manage peers");
 
@@ -167,86 +176,107 @@ export function registerPeer(program: Command): void {
       "--jump-command <template>",
       "interactive template; {attach} is a quoted tmux command, {pane} is a default-server pane id",
     )
-    .action(async (name: string, target = name, options: { jumpCommand?: string }) => {
-      const store = openStore();
-      try {
-        // Probe BEFORE writing. Identity is discovered, so the probe is what
-        // tells us whether this is a node we already have under another name
-        // — and a peer written first would be found by its own duplicate
-        // check.
-        let snapshot: Snapshot | null = null;
-        // WHY the probe failed, kept rather than discarded. A host that answered
-        // and answered WRONG was reported as "identity pending" -- the right
-        // words for a sleeping laptop, and a lie for a reachable host serving a
-        // document murmur rejected. `error: null` meant nothing downstream could
-        // tell them apart either, so the operator waited for a collect that was
-        // never going to succeed.
-        //
-        // Reachable-but-broken is a category this repo already models
-        // everywhere else; `peer add` is the one surface where a human is
-        // actively waiting for the answer, and it was throwing it away.
-        let probeError: string | null = null;
+    .option("--rex-host <label>", REX_HOST_HELP)
+    .action(
+      async (name: string, target = name, options: { jumpCommand?: string; rexHost?: string }) => {
+        const store = openStore();
         try {
-          // Bare `murmur export`: it takes no options, here or in the collector.
-          snapshot = parseSnapshot(await ssh.exec(target, ["murmur", "export"]));
-        } catch (error) {
-          snapshot = null;
-          probeError = describeFailure(
+          // Probe BEFORE writing. Identity is discovered, so the probe is what
+          // tells us whether this is a node we already have under another name
+          // — and a peer written first would be found by its own duplicate
+          // check.
+          let snapshot: Snapshot | null = null;
+          // WHY the probe failed, kept rather than discarded. A host that answered
+          // and answered WRONG was reported as "identity pending" -- the right
+          // words for a sleeping laptop, and a lie for a reachable host serving a
+          // document murmur rejected. `error: null` meant nothing downstream could
+          // tell them apart either, so the operator waited for a collect that was
+          // never going to succeed.
+          //
+          // Reachable-but-broken is a category this repo already models
+          // everywhere else; `peer add` is the one surface where a human is
+          // actively waiting for the answer, and it was throwing it away.
+          let probeError: string | null = null;
+          try {
+            // Bare `murmur export`: it takes no options, here or in the collector.
+            snapshot = parseSnapshot(await ssh.exec(target, ["murmur", "export"]));
+          } catch (error) {
+            snapshot = null;
+            probeError = describeFailure(
+              name,
+              error instanceof Error ? error.message : String(error),
+            );
+          }
+
+          const refusal = peerAddDecision({
             name,
-            error instanceof Error ? error.message : String(error),
-          );
-        }
+            target,
+            snapshot,
+            selfHostId: loadIdentity()?.host_id ?? null,
+            peers: store.peers(),
+          });
+          if (refusal) {
+            process.stderr.write(refusal);
+            process.exitCode = 1;
+            return;
+          }
 
-        const refusal = peerAddDecision({
-          name,
-          target,
-          snapshot,
-          selfHostId: loadIdentity()?.host_id ?? null,
-          peers: store.peers(),
-        });
-        if (refusal) {
-          process.stderr.write(refusal);
-          process.exitCode = 1;
-          return;
+          store.addPeer(name, target, options.jumpCommand);
+          if (options.rexHost !== undefined)
+            store.setPeerRexHost(name, rexHostValue(options.rexHost));
+          // The probe already parsed a valid document, so recording it here means
+          // `peer list` can name the host, its version and its snapshot version
+          // immediately rather than after the first collect.
+          if (snapshot) {
+            store.replacePeerSnapshot(name, { ok: true, snapshot, at: Date.now() }, target);
+          } else if (probeError) {
+            // Recorded so `peer list`, `doctor` and the collector's own
+            // classification all agree without a second probe.
+            store.replacePeerSnapshot(
+              name,
+              { ok: false, error: probeError, at: Date.now() },
+              target,
+            );
+          }
+          if (snapshot) {
+            process.stdout.write(`Added ${name} (${snapshot.display_name})\n`);
+          } else if (probeError) {
+            process.stdout.write(
+              `Added ${name}, but it did not answer usefully:\n  ${probeError}\n`,
+            );
+          } else {
+            process.stdout.write(`Added ${name} (identity pending)\n`);
+          }
+        } finally {
+          store.close();
         }
-
-        store.addPeer(name, target, options.jumpCommand);
-        // The probe already parsed a valid document, so recording it here means
-        // `peer list` can name the host, its version and its snapshot version
-        // immediately rather than after the first collect.
-        if (snapshot) {
-          store.replacePeerSnapshot(name, { ok: true, snapshot, at: Date.now() }, target);
-        } else if (probeError) {
-          // Recorded so `peer list`, `doctor` and the collector's own
-          // classification all agree without a second probe.
-          store.replacePeerSnapshot(name, { ok: false, error: probeError, at: Date.now() }, target);
-        }
-        if (snapshot) {
-          process.stdout.write(`Added ${name} (${snapshot.display_name})\n`);
-        } else if (probeError) {
-          process.stdout.write(`Added ${name}, but it did not answer usefully:\n  ${probeError}\n`);
-        } else {
-          process.stdout.write(`Added ${name} (identity pending)\n`);
-        }
-      } finally {
-        store.close();
-      }
-    });
+      },
+    );
 
   peer
     .command("set")
     .description("Set peer properties")
     .argument("<name>", "peer to update")
-    .requiredOption("--jump-command <template>", "interactive command template")
+    .option("--jump-command <template>", "interactive command template")
+    .option("--rex-host <label>", REX_HOST_HELP)
     .addHelpText(
       "after",
       "\n{attach}: quoted tmux attach command, including private server\n{pane}: pane id only; default tmux server only\n",
     )
-    .action((name: string, options: { jumpCommand: string }) => {
+    .action((name: string, options: { jumpCommand?: string; rexHost?: string }) => {
+      if (options.jumpCommand === undefined && options.rexHost === undefined) {
+        process.stderr.write("murmur: peer set needs --jump-command or --rex-host\n");
+        process.exitCode = 1;
+        return;
+      }
       const store = openStore();
       try {
-        if (store.setPeerJumpCommand(name, options.jumpCommand))
-          process.stdout.write(`Updated ${name}\n`);
+        const found =
+          (options.jumpCommand === undefined ||
+            store.setPeerJumpCommand(name, options.jumpCommand)) &&
+          (options.rexHost === undefined ||
+            store.setPeerRexHost(name, rexHostValue(options.rexHost)));
+        if (found) process.stdout.write(`Updated ${name}\n`);
         else {
           process.stderr.write(`no such peer: ${name}\n`);
           process.exitCode = 1;
@@ -347,6 +377,8 @@ export function registerPeer(program: Command): void {
             // takes no session at all. JSON only: the table has no room and this
             // is a value for a script, not a reader.
             jump_command: entry?.jump_command ?? null,
+            // How this node's `rex -S` reaches the peer's Rex server, if set.
+            rex_host: entry?.rex_host ?? null,
           };
         });
 

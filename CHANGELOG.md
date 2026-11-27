@@ -11,6 +11,14 @@ so it says what changed for a user rather than listing every commit.
 - **`murmur clear --target <jump_target>`.** Dismiss a crash by the token
   `status --json` publishes, so a consumer such as tsesh needs no socket or
   `--rex` flag of its own. A token for another host clears nothing.
+- **Rex jump, steer and glance, local and remote.** A Rex jump now focuses
+  the block on the server that owns it and shows its session in this
+  machine's Rex.app (`session.select`, on `$REX_CLIENT` when set). Remote Rex
+  panes, refused until now, are jumped to, prompted, stopped and previewed
+  through `rex -S <rex_host>`, falling back to the peer's warm ssh. Set the
+  host with `murmur peer set <name> --rex-host <label>` (`""` clears it).
+  The snapshot wire format is unchanged; the store gains a nullable
+  `peers.rex_host` column, upgraded in place, and 3.0.x can still open it.
 
 ## 3.0.2
 

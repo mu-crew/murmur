@@ -242,25 +242,106 @@ export type JumpResult =
     };
 
 /**
- * Focus a local Rex block: Rex's own API, since a Rex pane has no tmux to
- * attach. Focuses the block within its session; showing that session in the
- * app is Rex's to do.
+ * A `rex` argv against one server: the local one, or `-S <host>`. Never starts
+ * a server: a jump or a steer must not bring one into existence.
  */
-function jumpToRex(agent: PaneView, run: Runner): JumpResult {
-  const result = run("rex", [
-    "--autostart=false",
+export function rexArgv(server: string | null, args: readonly string[]): string[] {
+  return [...(server === null ? [] : ["-S", server]), "--autostart=false", ...args];
+}
+
+/**
+ * How this node reaches a remote Rex pane's server: `rex -S <rex_host>` when
+ * the peer has one configured here, and the peer's warm ssh to its own local
+ * Rex either way, as the fallback. Null when no peer reaches the host.
+ *
+ * Viewer-side by design: the pane on the wire is a bare `{ kind: "rex" }` on
+ * `host_id`, and only this node knows what its `rex hosts` calls that machine.
+ */
+export function rexRoute(
+  store: Store,
+  agent: Pick<PaneView, "host_id">,
+): { peer: PeerRecord; target: string; rexHost: string | null } | null {
+  const resolved = peerForHost(store, agent.host_id);
+  return resolved ? { ...resolved, rexHost: resolved.peer.rex_host } : null;
+}
+
+const succeeded = (result: ReturnType<Runner>) => result.status === 0 && !result.failed;
+
+/**
+ * Jump to a Rex block, in two steps, both Rex's own API since a Rex pane has no
+ * tmux to attach:
+ *
+ * 1. focus the block on the server that OWNS it (`session.focus_block`): the
+ *    local one, or a peer's via `rex -S <rex_host>`, else over the peer's ssh;
+ * 2. show its session in THIS machine's Rex.app (`session.select`, a client
+ *    action), always against the local server and the named client
+ *    (`$REX_CLIENT`). Never with `-S`: the remote server's app client, if it
+ *    has one, is someone else's screen.
+ *
+ * `session.select` exits 1 for a session the app's server does not hold and 3
+ * when no app client is connected; each gets its own remediation.
+ */
+function jumpToRex(store: Store, agent: PaneView, run: Runner, env: NodeJS.ProcessEnv): JumpResult {
+  const label = agentLabel(agent);
+  const focus = [
     "api",
     "call",
     "session.focus_block",
     JSON.stringify({ session_id: agent.session, block_id: agent.pane }),
-  ]);
-  return result.status === 0 && !result.failed
-    ? { ok: true }
-    : {
+  ];
+  let focused: boolean;
+  let hint = "";
+  if (agent.local) focused = succeeded(run("rex", rexArgv(null, focus)));
+  else {
+    const route = rexRoute(store, agent);
+    if (!route) {
+      return {
         ok: false,
-        reason: "attach_failed",
-        message: `could not focus ${agentLabel(agent)} in Rex (rex session.focus_block failed).`,
+        reason: "no_peer",
+        message: `${label} is a Rex pane on ${agent.host}, and no peer reaches that host.`,
       };
+    }
+    focused = route.rexHost !== null && succeeded(run("rex", rexArgv(route.rexHost, focus)));
+    focused ||= succeeded(
+      run("ssh", [
+        ...SSH_OPTIONS,
+        route.target,
+        ["rex", ...rexArgv(null, focus)].map(shellQuote).join(" "),
+      ]),
+    );
+    if (route.rexHost === null) {
+      hint = ` Set its Rex host with \`murmur peer set ${route.peer.name} --rex-host <label>\`.`;
+    }
+  }
+  if (!focused) {
+    return {
+      ok: false,
+      reason: "attach_failed",
+      message: `could not focus ${label} in Rex on ${agent.host} (session.focus_block failed).`,
+    };
+  }
+  const client = env.REX_CLIENT;
+  const select = run(
+    "rex",
+    rexArgv(null, [
+      ...(client ? ["-C", client] : []),
+      "do",
+      "session.select",
+      `session_id=${agent.session}`,
+      ...(agent.window.startsWith("window:") ? [`window_id=${agent.window}`] : []),
+    ]),
+  );
+  if (succeeded(select)) return { ok: true };
+  const app = client ? `Rex.app client "${client}"` : "Rex.app";
+  const message =
+    select.status === 3
+      ? `focused ${label}, but ${app} is not connected to this machine's Rex server (is Rex.app open with Remote Control on? set $REX_CLIENT to name it).`
+      : select.status === 1
+        ? agent.local
+          ? `focused ${label}, but ${app} could not show its session (it is gone, or the app is on another server).`
+          : `focused ${label} on ${agent.host}, but ${app} does not show that machine's Rex server; connect it in Rex.app (\`rex hosts\`).${hint}`
+        : `focused ${label}, but could not show it in ${app} (rex do session.select failed).`;
+  return { ok: false, reason: "attach_failed", message };
 }
 
 /**
@@ -361,14 +442,7 @@ export function jumpToAgent(
   explicitClient?: string,
 ): JumpResult {
   const server = agent.server;
-  if (server.kind === "rex") {
-    if (agent.local) return jumpToRex(agent, run);
-    return {
-      ok: false,
-      reason: "unsupported_server",
-      message: `${agentLabel(agent)} is a Rex pane on ${agent.host}; jump to it from that machine's Rex.`,
-    };
-  }
+  if (server.kind === "rex") return jumpToRex(store, agent, run, env);
   // A tmux pane from here on: the address an attach can name.
   const destination = { server, pane: agent.pane };
   const inside = Boolean(env.TMUX) || explicitClient !== undefined;

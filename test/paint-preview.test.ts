@@ -713,3 +713,122 @@ test("the preview names the harness and keeps the cli line", () => {
   expect(claude).toContain("harness  claude");
   expect(claude).toContain("cli      claude");
 });
+
+/** A remote Rex pane as this node sees it, its peer `bubba` with `rexHost` set here. */
+function remoteRexAgent(rexHost: string | null): PaneView {
+  store.addPeer("bubba", "bubba.example");
+  if (rexHost !== null) store.setPeerRexHost("bubba", rexHost);
+  store.replacePeerSnapshot("bubba", {
+    ok: true,
+    at: Date.now(),
+    // The wire is unchanged: a Rex pane is a bare `{ kind: "rex" }`.
+    snapshot: remoteSnapshot([remotePane("block:b1", { kind: "rex" })]),
+  });
+  const identity = loadIdentity();
+  if (!identity) throw new Error("no identity");
+  const agent = status(store, identity, local).panes.find((p) => p.pane === "block:b1");
+  if (!agent) throw new Error("no remote Rex pane");
+  return agent;
+}
+
+const REX_CAPTURE = ["capture", "-s", "$9", "-b", "block:b1", "--format", "vt"];
+
+test("a remote Rex glance captures through rex -S <rex_host>, and never dials ssh", async () => {
+  const agent = remoteRexAgent("me@bubba");
+  const rexCalls: string[][] = [];
+  let dialled = false;
+  const ssh = () => {
+    dialled = true;
+    return "SSH";
+  };
+  const rex = (args: string[]) => {
+    rexCalls.push(args);
+    return "one\ntwo\nREX_OK";
+  };
+  expect(glance(store, agent, 2, ssh, rex)).toContain("two");
+  expect(glance(store, agent, 2, ssh, rex)).not.toContain("one");
+  expect(
+    await glanceAsync(
+      store,
+      agent,
+      40,
+      async () => ssh(),
+      async (args) => rex(args),
+    ),
+  ).toContain("REX_OK");
+  expect(dialled).toBe(false);
+  expect(rexCalls[0]).toEqual(["-S", "me@bubba", "--autostart=false", ...REX_CAPTURE]);
+});
+
+test("a remote Rex glance falls back to the peer's own rex over ssh", async () => {
+  const agent = remoteRexAgent("me@bubba");
+  const argvs: string[][] = [];
+  const failing = () => {
+    throw new Error("rex -S unreachable");
+  };
+  const out = glance(
+    store,
+    agent,
+    40,
+    (target, argv) => {
+      argvs.push([target, ...argv]);
+      return "VIA_SSH";
+    },
+    failing,
+  );
+  expect(out).toContain("VIA_SSH");
+  expect(argvs[0]).toEqual([
+    "bubba.example",
+    ["rex", "--autostart=false", ...REX_CAPTURE].map((word) => `'${word}'`).join(" "),
+  ]);
+  expect(
+    await glanceAsync(
+      store,
+      agent,
+      40,
+      async () => "VIA_SSH",
+      async () => failing(),
+    ),
+  ).toContain("VIA_SSH");
+});
+
+test("a remote Rex glance with no Rex host goes over ssh; a failed peer skips only the ssh", () => {
+  const agent = remoteRexAgent(null);
+  let rexRan = false;
+  const rex = () => {
+    rexRan = true;
+    return "REX";
+  };
+  expect(glance(store, agent, 40, () => "VIA_SSH", rex)).toContain("VIA_SSH");
+  expect(rexRan).toBe(false);
+
+  store.replacePeerSnapshot("bubba", { ok: false, at: Date.now(), error: "denied" });
+  let dialled = false;
+  const ssh = () => {
+    dialled = true;
+    return "x";
+  };
+  expect(glance(store, agent, 40, ssh, rex)).toBeNull();
+  expect(dialled).toBe(false);
+  // `rex -S` is its own transport: a failed collect over ssh does not gate it.
+  store.setPeerRexHost("bubba", "me@bubba");
+  expect(glance(store, agent, 40, ssh, rex)).toContain("REX");
+  expect(dialled).toBe(false);
+});
+
+test("a local Rex glance captures from the local server, with no -S", async () => {
+  const agent = { ...remoteRexAgent(null), local: true };
+  const calls: string[][] = [];
+  const rex = (args: string[]) => {
+    calls.push(args);
+    return "LOCAL_REX";
+  };
+  expect(glance(store, agent, 40, undefined, rex)).toContain("LOCAL_REX");
+  expect(await glanceAsync(store, agent, 40, undefined, async (args) => rex(args))).toContain(
+    "LOCAL_REX",
+  );
+  expect(calls).toEqual([
+    ["--autostart=false", ...REX_CAPTURE],
+    ["--autostart=false", ...REX_CAPTURE],
+  ]);
+});

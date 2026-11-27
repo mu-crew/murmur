@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -5,7 +6,7 @@ import { beforeEach, expect, test } from "vitest";
 import { formatTable, lastSeen, parseSshHosts, peerAddDecision } from "../src/cli/peer.js";
 import { openStore } from "../src/store.js";
 import type { PeerRecord, Snapshot } from "../src/types.js";
-import { runBuiltCli } from "./helpers/built.js";
+import { builtArtifact, runBuiltCli } from "./helpers/built.js";
 
 /** A probe result: what `peer add` parsed out of the far side's `murmur export`. */
 function probe(hostId: string, displayName: string): Snapshot {
@@ -33,6 +34,7 @@ function existing(name: string, hostId: string): PeerRecord {
     last_error: null,
     murmur_version: null,
     snapshot_version: null,
+    rex_host: null,
   };
 }
 
@@ -45,6 +47,42 @@ test("peer set help defines both jump placeholders tersely", () => {
 
   expect(help).toContain("{attach}: quoted tmux attach command, including private server");
   expect(help).toContain("{pane}: pane id only; default tmux server only");
+});
+
+test("peer set --rex-host records the viewer-side Rex host, lists it, and clears on blank", () => {
+  const store = openStore();
+  store.addPeer("dev", "dev.example");
+  store.close();
+
+  expect(runBuiltCli(["peer", "set", "dev", "--rex-host", "me@dev"])).toBe("Updated dev\n");
+  const listed = JSON.parse(runBuiltCli(["peer", "list", "--json"])) as { rex_host: string }[];
+  expect(listed[0]?.rex_host).toBe("me@dev");
+  // The jump command is untouched by a Rex-host-only set.
+  const reopened = openStore();
+  expect(reopened.peers()[0]).toMatchObject({
+    rex_host: "me@dev",
+    jump_command: "ssh -t 'dev.example' env LC_CTYPE=C.UTF-8 {attach}",
+  });
+  reopened.close();
+
+  runBuiltCli(["peer", "set", "dev", "--rex-host", ""]);
+  const cleared = openStore();
+  expect(cleared.peers()[0]?.rex_host).toBeNull();
+  cleared.close();
+});
+
+test("peer set with nothing to set fails, and so does an unknown peer", () => {
+  const run = (args: string[]) =>
+    spawnSync(process.execPath, [builtArtifact("cli.js"), ...args], {
+      env: process.env,
+      encoding: "utf8",
+    });
+  const empty = run(["peer", "set", "dev"]);
+  expect(empty.status).toBe(1);
+  expect(empty.stderr).toMatch(/--jump-command or --rex-host/);
+  const missing = run(["peer", "set", "nobody", "--rex-host", "x"]);
+  expect(missing.status).toBe(1);
+  expect(missing.stderr).toMatch(/no such peer: nobody/);
 });
 
 test("parses literal Host names and skips wildcards and Match blocks", () => {
