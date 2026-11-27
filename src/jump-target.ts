@@ -39,6 +39,6 @@ export function parseJumpTarget(token: string): JumpAddress | null {
 function validServer(value: unknown): value is TmuxServer {
   if (typeof value !== "object" || value === null) return false;
   const server = value as { kind?: unknown; value?: unknown };
-  if (server.kind === "default") return true;
+  if (server.kind === "default" || server.kind === "rex") return true;
   return (server.kind === "label" || server.kind === "path") && typeof server.value === "string";
 }
