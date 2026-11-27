@@ -1,5 +1,8 @@
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { expect, test } from "vitest";
-import { readRex, shellCommand } from "../src/rex.js";
+import { readRex, rexCli, shellCommand } from "../src/rex.js";
 import { type FakeBlock, rexWalk } from "./helpers/rex.js";
 
 /**
@@ -436,4 +439,83 @@ test("mu/role gives a mu agent its role and never the pane's state", async () =>
     expect(by(id)).toMatchObject({ role: null });
   // Not a mu agent: the role record neither lists it nor gives it a role.
   expect(by("block:human")).toBeUndefined();
+});
+
+test("a process reply that fails otherwise makes the read no evidence; an older Rex's is empty", async () => {
+  const idle = { status: quiet, process: {}, label: "a", resume: { ok: { records: {} } } };
+  const failed = { err: "timeout", code: "deadline_exceeded" };
+  const { call } = rexWalk([
+    { session_id: "s-1", label: "mu-ws", blocks: { "block:a": { ...idle, processReply: failed } } },
+  ]);
+  expect(await readRex(call)).toBeNull();
+  const missing = { err: "method not found (code=method_not_found)", code: "method_not_found" };
+  const { call: older } = rexWalk([
+    {
+      session_id: "s-1",
+      label: "mu-ws",
+      blocks: { "block:a": { ...idle, processReply: missing } },
+    },
+  ]);
+  expect((await readRex(older))?.panes[0]).toMatchObject({ agent_name: "a", cli: null });
+});
+
+test("on a tie in state, the root record speaks for the pane", async () => {
+  const { call } = rexWalk([
+    {
+      session_id: "s-1",
+      label: "work",
+      blocks: {
+        "block:a": {
+          status: {
+            records: [
+              { id: "mu/delegates", state: "working", msg: "waiting on 2 delegates" },
+              { id: "", state: "working", app: "pi", title: "Building" },
+            ],
+          },
+          process: {},
+        },
+      },
+    },
+  ]);
+  expect((await readRex(call))?.panes[0]).toMatchObject({
+    state: "running",
+    harness: "pi",
+    title: "Building",
+    pending: 2,
+  });
+});
+
+test("progress and times outside the snapshot's ranges read as unknown", async () => {
+  const blocks: Record<string, FakeBlock> = {};
+  const bad: [unknown, string][] = [
+    [-1, "0001-01-01T00:00:00Z"],
+    [12.5, "1970-01-01T00:00:00Z"],
+  ];
+  for (const [i, [progress, updated_at]] of bad.entries()) {
+    blocks[`block:${i}`] = {
+      status: { records: [{ state: "working", app: "pi", progress, updated_at }] },
+      process: {},
+    };
+  }
+  const { call } = rexWalk([{ session_id: "s-1", label: "work", blocks }]);
+  const panes = (await readRex(call))?.panes ?? [];
+  expect(panes).toHaveLength(2);
+  for (const pane of panes) expect(pane).toMatchObject({ progress: null, state_time: null });
+});
+
+test("the real call reads the local Rex, never $REX_SERVER's", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "murmur-rex-"));
+  const binary = join(dir, "rex");
+  writeFileSync(binary, `#!/bin/sh\nprintf '{"server":"%s"}' "$REX_SERVER"\n`);
+  chmodSync(binary, 0o755);
+  const saved = process.env.REX_SERVER;
+  process.env.REX_SERVER = "far";
+  try {
+    const call = rexCli(binary);
+    expect(await call?.("return 1")).toEqual({ server: "" });
+  } finally {
+    if (saved === undefined) delete process.env.REX_SERVER;
+    else process.env.REX_SERVER = saved;
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

@@ -4,6 +4,8 @@ import type { RexCall } from "../../src/rex.js";
 export type FakeBlock = {
   status: unknown;
   process: unknown;
+  /** The `process` reply verbatim, `{ ok }` or `{ err, code }`, overriding `process`. */
+  processReply?: unknown;
   label?: string | null;
   title?: unknown;
   resume?: unknown;
@@ -58,7 +60,7 @@ export function rexWalk(sessions: FakeSession[], server = { host_id: "host-here"
               id,
               {
                 status: wrap(block.status),
-                process: wrap(block.process),
+                process: "processReply" in block ? block.processReply : wrap(block.process),
                 title: "title" in block ? block.title : { ok: { title: "" } },
                 resume: "resume" in block ? block.resume : { ok: { records: {} } },
               },

@@ -104,6 +104,12 @@ const arr = (value: unknown): unknown[] => {
 const list = (value: unknown, key: string): Json[] =>
   isJson(value) ? arr(value[key]).filter(isJson) : [];
 
+/** The environment without `REX_SERVER`, which `rex` honours when `-S` is not given. */
+function localEnv(): NodeJS.ProcessEnv {
+  const { REX_SERVER: _server, ...env } = process.env;
+  return env;
+}
+
 /** The real call: `rex do -e WALK --json`, or null when `rex` is not installed. */
 export function rexCli(binary = findHelper("rex")): RexCall | null {
   if (binary === null) return null;
@@ -112,7 +118,9 @@ export function rexCli(binary = findHelper("rex")): RexCall | null {
       execFile(
         binary,
         ["--autostart=false", "--timeout", "2s", "do", "-e", script, "--json"],
-        { timeout: 5000, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 },
+        // Always this machine's Rex: `$REX_SERVER` would walk another server's
+        // blocks as local ones, and read every local one as gone.
+        { timeout: 5000, encoding: "utf8", maxBuffer: 64 * 1024 * 1024, env: localEnv() },
         (error, stdout) => {
           if (error) return resolve(null);
           try {
@@ -179,7 +187,13 @@ function summary(records: readonly Json[]): Json | null {
   for (const record of records) {
     const rank = PRIORITY.indexOf(String(record.state));
     if (rank === -1) continue;
-    if (best === null || rank < PRIORITY.indexOf(String(best.state))) best = record;
+    if (best === null) {
+      best = record;
+      continue;
+    }
+    const bestRank = PRIORITY.indexOf(String(best.state));
+    if (rank < bestRank || (rank === bestRank && str(record.id) === null && str(best.id) !== null))
+      best = record;
   }
   return best;
 }
@@ -253,7 +267,9 @@ function parseWalk(reply: Json): RexRead | null {
       const status = value(calls.status);
       const resume = value(calls.resume);
       const titleReply = value(calls.title);
-      const proc = isJson(calls.process) && isJson(calls.process.ok) ? calls.process.ok : {};
+      const procReply = value(calls.process);
+      if (procReply !== null && !isJson(procReply)) throw new Unreadable();
+      const proc = procReply ?? {};
       if (status !== null && !isJson(status)) throw new Unreadable();
       if (resume !== null && !isJson(resume)) throw new Unreadable();
       const pane = blockPane({
@@ -358,7 +374,12 @@ function blockPane(block: {
   const kind = top ? str(top.kind) : null;
   const at = top ? Date.parse(String(top.updated_at)) : Number.NaN;
   const progress =
-    top && typeof top.progress === "number" && top.progress <= 100 ? top.progress : null;
+    top &&
+    Number.isInteger(top.progress) &&
+    Number(top.progress) >= 0 &&
+    Number(top.progress) <= 100
+      ? Number(top.progress)
+      : null;
   const driver: Driver = agentName ? "orchestrated" : "human";
   // A mu agent's label is its name; anyone else's label is the pane's own title.
   const shownLabel = agentName === null && label !== GENERIC_BLOCK ? label : null;
@@ -371,7 +392,8 @@ function blockPane(block: {
     session_name: block.sessionName,
     window_name: block.windowName,
     state,
-    state_time: Number.isFinite(at) ? at : null,
+    // As the snapshot takes it: Go's zero time or the epoch is no time.
+    state_time: Number.isSafeInteger(at) && at > 0 ? at : null,
     agent_name: agentName,
     workstream: agentName ? block.workstream : null,
     role,
