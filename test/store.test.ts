@@ -135,16 +135,54 @@ test.each<[PaneState, boolean]>([
   // Mid-work is a crash murmur must remember, since the multiplexer has
   // nothing left to say about the pane; at rest it simply finished.
   const s = store();
-  s.syncLocal([{ server: DEFAULT, panes: [seen("%1", state)] }], 1_000);
+  s.syncLocal([{ server: DEFAULT, panes: [seen("%1", state, { driver: "human" })] }], 1_000);
   const sync = s.syncLocal([{ server: DEFAULT, panes: [] }], 2_000);
   expect(sync.crashed).toEqual(crashed ? ["%1"] : []);
   expect(s.localPanes()).toHaveLength(crashed ? 1 : 0);
 });
 
+test.each<[string, TmuxServer | { kind: "rex" }, string]>([
+  ["tmux", DEFAULT, "%1"],
+  ["rex", { kind: "rex" }, "block:01a21c8c-0000-7000-8000-000000000001"],
+])("a %s crew pane mu closes mid-work is no crash; a human one still is", (_, server, pane) => {
+  // mu closes workers and delegates while their OSC 7501 state still says
+  // working, and tracks its own agents dying; only a human pane crashes here.
+  const s = store();
+  const other = pane.replace(/1$/, "2");
+  s.syncLocal(
+    [
+      {
+        server: server as TmuxServer,
+        panes: [
+          seen(pane, "running", {
+            server: server as TmuxServer,
+            driver: "orchestrated",
+            role: "worker",
+          }),
+          seen(other, "running", {
+            server: server as TmuxServer,
+            driver: "human",
+            agent_name: null,
+            workstream: null,
+          }),
+        ],
+      },
+    ],
+    1_000,
+  );
+  const sync = s.syncLocal([{ server: server as TmuxServer, panes: [] }], 2_000);
+  expect(sync.crashed).toEqual([other]);
+});
+
 test("a crash carries the identity the pane was last seen with", () => {
   const s = store();
   s.syncLocal(
-    [{ server: DEFAULT, panes: [seen("%1", "waiting", { pane_title: "Fix auth" })] }],
+    [
+      {
+        server: DEFAULT,
+        panes: [seen("%1", "waiting", { pane_title: "Fix auth", role: "orchestrator" })],
+      },
+    ],
     1_000,
   );
   s.syncLocal([{ server: DEFAULT, panes: [] }], 2_000);
@@ -156,7 +194,7 @@ test("a crash carries the identity the pane was last seen with", () => {
         activity: "stopped",
         agent_name: "worker-1",
         workstream: "murmur",
-        role: "implementer",
+        role: "orchestrator",
         driver: "orchestrated",
         cli: "pi",
         harness: "pi",
@@ -186,7 +224,7 @@ test("a crash carries the identity the pane was last seen with", () => {
 
 test("a crash is recorded once, and its age is when it was first seen", () => {
   const s = store();
-  s.syncLocal([{ server: DEFAULT, panes: [seen("%1", "running")] }], 1_000);
+  s.syncLocal([{ server: DEFAULT, panes: [seen("%1", "running", { driver: "human" })] }], 1_000);
   expect(s.syncLocal([{ server: DEFAULT, panes: [] }], 2_000).crashed).toEqual(["%1"]);
   // Gone is gone: a second empty read concludes nothing new.
   expect(s.syncLocal([{ server: DEFAULT, panes: [] }], 3_000).crashed).toEqual([]);
@@ -212,8 +250,8 @@ test("each server is its own namespace, and a server seen once is asked again", 
   const mule: TmuxServer = { kind: "label", value: "mule" };
   s.syncLocal(
     [
-      { server: DEFAULT, panes: [seen("%1", "running")] },
-      { server: mule, panes: [seen("%1", "running", { server: mule })] },
+      { server: DEFAULT, panes: [seen("%1", "running", { driver: "human" })] },
+      { server: mule, panes: [seen("%1", "running", { server: mule, driver: "human" })] },
     ],
     1_000,
   );
@@ -571,7 +609,7 @@ test("a newer store whose compat stamp still includes this build is opened, not 
   // upgrade separately, so either can be the older one for a while.
   const s = store();
   s.addPeer("dev", "dev.example");
-  s.syncLocal([{ server: DEFAULT, panes: [seen("%1", "running")] }], 1_000);
+  s.syncLocal([{ server: DEFAULT, panes: [seen("%1", "running", { driver: "human" })] }], 1_000);
   s.close();
   const database = new Database(dbPath());
   const ours = database.pragma("user_version", { simple: true }) as number;

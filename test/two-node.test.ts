@@ -261,7 +261,14 @@ test("a crash detected on one node reaches the other as crashed, with the dead a
   const a = nodeStore(dirA);
   const b = nodeStore(dirB);
   a.addPeer("bubba", "bubba");
-  await collect(a, exportFrom(b, [working("%11", "worker-7")], 4_000), 4_000, local());
+  // An orchestrator: mu closes and watches its workers, so only an
+  // orchestrator's pane vanishing mid-work is murmur's crash to record.
+  await collect(
+    a,
+    exportFrom(b, [working("%11", "worker-7", { mu_role: "orchestrator" })], 4_000),
+    4_000,
+    local(),
+  );
 
   await collect(a, exportFrom(b, [], 5_000), 5_000, local());
 

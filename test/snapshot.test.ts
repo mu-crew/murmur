@@ -151,7 +151,7 @@ test("absence from a snapshot is absence: a pane that left is not published", as
   const s = store();
   await built(s, [
     vtmuxRow({ pane: "%1", state: "done" }),
-    vtmuxRow({ pane: "%2", state: "working", mu_agent: "worker-2" }),
+    vtmuxRow({ pane: "%2", state: "working", mu_agent: "worker-2", mu_role: "orchestrator" }),
   ]);
   const after = await built(s, [], 50);
   expect(after.panes).toMatchObject([

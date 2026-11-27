@@ -788,6 +788,10 @@ function buildStore(database: Database): Store {
         deleteSeen.run(kind, value, gone.pane);
         if (read.live?.has(gone.pane)) continue;
         if (!MID_WORK.includes(gone.state)) continue;
+        // mu owns its crew's lifecycles: it closes workers and delegates while
+        // they still report working, and reports a worker that died itself.
+        // Only an orchestrator, which nobody above it watches, crashes here.
+        if (gone.driver === "orchestrated" && gone.role !== "orchestrator") continue;
         insertCrash.run({ ...gone, last_state: gone.state, requested_at: now });
         result.crashed.push(asPaneId(gone.pane));
       }
