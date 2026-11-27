@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { jumpToAgent } from "../src/agents.js";
+import { printSteerResult } from "../src/cli/steer-run.js";
 import type { InputDelivery } from "../src/dash-input.js";
 import { createIdentity, loadIdentity, type NodeIdentity } from "../src/identity.js";
 import { asPaneId, asSessionId, asWindowId } from "../src/ids.js";
@@ -62,13 +63,18 @@ function target(pane = "%1"): string {
   });
 }
 
-const deps = (log: InputDelivery[]) => ({
+/** What a stop reads back from the pane: idle unless a test says otherwise. */
+const deps = (log: InputDelivery[], state = "idle") => ({
   mux: live(),
   warm: () => true,
   rex: false as const,
   run: async (delivery: InputDelivery) => {
     log.push(delivery);
   },
+  capture: async (command: string) =>
+    command === "rex" ? Promise.reject(new Error("no rex")) : `0||${state}|\n`,
+  ctlSocket: async () => null,
+  stopBounds: { totalMs: 300, intervalMs: 20, probeMs: 100, ctlMs: 100 },
 });
 
 test("promptAgent pastes the text into the resolved pane and presses Enter", async () => {
@@ -83,11 +89,33 @@ test("promptAgent pastes the text into the resolved pane and presses Enter", asy
   expect(log[0]?.args.at(-1)).toBe("Enter");
 });
 
-test("stopAgent sends Escape to the resolved pane", async () => {
+test("stopAgent sends Escape to the resolved pane and confirms it left working", async () => {
   const log: InputDelivery[] = [];
   const result = await stopAgent(store, identity(), target(), deps(log));
-  expect(result).toEqual({ ok: true, action: "stop", jump_target: target() });
+  expect(result).toEqual({
+    ok: true,
+    action: "stop",
+    jump_target: target(),
+    via: "escape",
+    stopped: true,
+    state: "idle",
+  });
   expect(log[0]?.args.slice(-4)).toEqual(["send-keys", "-t", "%1", "Escape"]);
+});
+
+test("a stop the pane ignored is not ok: --json says stopped:false with the state, exit 1", async () => {
+  const result = await stopAgent(store, identity(), target(), deps([], "working"));
+  expect(result).toMatchObject({
+    ok: false,
+    reason: "not_stopped",
+    via: "escape",
+    stopped: false,
+    state: "running",
+  });
+  const write = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+  printSteerResult(result, true);
+  expect(JSON.parse(String(write.mock.calls[0]?.[0]))).toMatchObject({ stopped: false });
+  expect(process.exitCode).toBe(1);
 });
 
 test("steering reports an invalid, vanished or empty target without delivering", async () => {
@@ -259,7 +287,14 @@ test("prompt and stop reach a remote Rex pane: rex -S with a Rex host, its ssh w
   expect(log[0]?.fallback?.input).toBe("go on");
 
   store.setPeerRexHost("far", null);
-  expect(await stopAgent(store, identity(), token, deps(log))).toMatchObject({ ok: true });
+  // The fake ssh answers no Rex walk: the Escape went out, the stop is unconfirmed.
+  expect(await stopAgent(store, identity(), token, deps(log))).toMatchObject({
+    ok: false,
+    reason: "unconfirmed",
+    via: "escape",
+    stopped: null,
+    state: null,
+  });
   expect(log[1]?.command).toBe("ssh");
   expect(log[1]?.args.slice(-2)).toEqual([
     "far.example",

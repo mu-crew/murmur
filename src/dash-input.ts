@@ -129,7 +129,7 @@ function tmuxArgs(pane: string, buffer: string): string[] {
  * the default server is pinned with `-L default` (a bare tmux follows $TMUX);
  * over ssh it stays bare, since the remote shell is not inside tmux.
  */
-function remoteSelector(server: TmuxServer): string[] {
+export function remoteSelector(server: TmuxServer): string[] {
   if (server.kind === "default") return [];
   if (server.kind === "rex") return ["--rex"];
   return [server.kind === "label" ? "-L" : "-S", shellQuote(server.value)];
@@ -365,12 +365,12 @@ export function makeInputRunner(bounds: InputBounds = INPUT_BOUNDS): InputRunner
   };
 }
 
-const runInput: InputRunner = makeInputRunner();
+export const runInput: InputRunner = makeInputRunner();
 
 /** How a delivery reaches the pane's node: the ssh target, and its Rex host if set here. */
-type InputRoute = { target: string | null; rexHost: string | null };
+export type InputRoute = { target: string | null; rexHost: string | null };
 
-function inputRoute(store: Store, pane: PaneView): InputRoute {
+export function inputRoute(store: Store, pane: PaneView): InputRoute {
   if (pane.local) return { target: null, rexHost: null };
   const resolved = peerForHost(store, pane.host_id);
   return { target: resolved?.target ?? null, rexHost: resolved?.peer.rex_host ?? null };

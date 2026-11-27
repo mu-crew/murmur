@@ -22,7 +22,6 @@ import {
   emptyComposer,
   emptyFilter,
   type InputResult,
-  sendEscape,
   sendPrompt,
 } from "../dash-input.js";
 import {
@@ -89,6 +88,7 @@ import {
   sessionNotice,
 } from "../paint.js";
 import { localStatus, type Status, statusWithCollect } from "../status.js";
+import { stopPane } from "../stop.js";
 import type { Store } from "../store.js";
 import {
   age,
@@ -817,11 +817,12 @@ export function App({ dashStore, initial }: DashProps) {
       } else if (key.ctrl && input === "e") {
         const generation = inputGenerationRef.current;
         setInputSending(true);
-        void sendEscape(store, inputTarget).then((result) => {
+        void stopPane(store, inputTarget).then((result) => {
           if (inputGenerationRef.current !== generation) return;
           setInputSending(false);
-          setInputError(result.ok ? "" : result.message);
-          if (result.ok) setCollectRevision((revision) => revision + 1);
+          const stopped = result.delivered && result.stopped === true;
+          setInputError(stopped ? "" : result.message);
+          if (result.delivered) setCollectRevision((revision) => revision + 1);
         });
       } else if (key.return) {
         if (!composer.text) return;

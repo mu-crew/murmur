@@ -38,6 +38,9 @@ const CLEARED = [
   // process (never this one's environment).
   "MU_MANAGED_AGENT",
   "MU_ORCHESTRATOR",
+  // The pi control socket `murmur stop` reads from a pane's root process: a
+  // crew agent running the suite has its own.
+  "MU_CTL_SOCK",
   "TMUX",
   "TMUX_PANE",
   // A suite run from a Rex pane would otherwise take the Rex jump path and

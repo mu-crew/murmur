@@ -10,7 +10,8 @@
  * The environment carries every secret in the pane, so it is parsed here and
  * only the mu keys listed below leave this file: nothing else is kept, logged or
  * stored. Read once per pane process (`Store.paneProcess` caches it), never
- * per status tick.
+ * per status tick. `murmur stop` alone reads `MU_CTL_SOCK` (`readPaneCtlSocket`),
+ * fresh and uncached, to reach pi's control socket.
  *
  * Not covered: a pane whose root is a shell that later ran the harness (the
  * env is the shell's), and Rex or remote panes (the env is ssh's).
@@ -137,6 +138,14 @@ const MU_ENTRY = /^MU_[A-Z_]+=\S*$/;
  * pid changed between them).
  */
 export function parsePsEnvironment(command: string, envCommand: string): PaneProcess | null {
+  const env = psEnvironment(command, envCommand);
+  return env && paneProcessFacts(env.argv, env.entries);
+}
+
+/** A root process's argv and its environment entries, as far as they could be read. */
+type PaneEnv = { argv: string[]; entries: string[] };
+
+function psEnvironment(command: string, envCommand: string): PaneEnv | null {
   const argvLine = command.replace(/\n+$/, "");
   const envLine = envCommand.replace(/\n+$/, "");
   if (!argvLine.trim() || !envLine.startsWith(argvLine)) return null;
@@ -149,11 +158,11 @@ export function parsePsEnvironment(command: string, envCommand: string): PanePro
     const at = entry.indexOf("=");
     const [key, value] = [entry.slice(0, at), entry.slice(at + 1)];
     if (seen.has(key) && seen.get(key) !== value) {
-      return paneProcessFacts(argvLine.trim().split(/\s+/), []);
+      return { argv: argvLine.trim().split(/\s+/), entries: [] };
     }
     seen.set(key, value);
   }
-  return paneProcessFacts(argvLine.trim().split(/\s+/), entries);
+  return { argv: argvLine.trim().split(/\s+/), entries };
 }
 
 /**
@@ -165,6 +174,29 @@ export function readPaneProcess(
   platform: NodeJS.Platform = process.platform,
   procRoot = "/proc",
 ): PaneProcess | null {
+  const env = readPaneEnv(pid, platform, procRoot);
+  return env && paneProcessFacts(env.argv, env.entries);
+}
+
+/**
+ * The mu pi extension's control socket a pane's root process was given
+ * (`MU_CTL_SOCK`), or null. mu sets it for every harness it spawns; only a pi
+ * with the extension loaded listens on it. Never throws.
+ */
+export function readPaneCtlSocket(
+  pid: string,
+  platform: NodeJS.Platform = process.platform,
+  procRoot = "/proc",
+): string | null {
+  const entries = readPaneEnv(pid, platform, procRoot)?.entries ?? [];
+  const entry = entries.find((candidate) => candidate.startsWith(`${CTL_SOCK_KEY}=`));
+  return entry?.slice(CTL_SOCK_KEY.length + 1) || null;
+}
+
+const CTL_SOCK_KEY = "MU_CTL_SOCK";
+
+/** The argv and environment of a pid, by `/proc` on Linux and `ps -E` elsewhere. */
+function readPaneEnv(pid: string, platform: NodeJS.Platform, procRoot: string): PaneEnv | null {
   // Interpolated into a path or an argv: digits only, checked here.
   if (!/^\d+$/.test(pid)) return null;
   if (platform === "linux") {
@@ -176,7 +208,7 @@ export function readPaneProcess(
       } catch {
         // Another user's process: its argv still names the harness.
       }
-      return paneProcessFacts(argv, environ);
+      return { argv, entries: environ };
     } catch {
       return null;
     }
@@ -189,7 +221,7 @@ export function readPaneProcess(
         stdio: ["ignore", "pipe", "ignore"],
       });
     const command = ps([]);
-    return parsePsEnvironment(command, ps(["-E"]));
+    return psEnvironment(command, ps(["-E"]));
   } catch {
     return null;
   }
