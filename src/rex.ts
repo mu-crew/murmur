@@ -16,7 +16,14 @@ import { execFile } from "node:child_process";
 import { findHelper } from "./helper-path.js";
 import { asPaneId, asSessionId, asWindowId } from "./ids.js";
 import { chosenPaneTitle, type ObservedPane, programState } from "./local.js";
-import { BLOCKED_KINDS, type BlockedKind, type Driver, FEED_APP, isHarnessCli } from "./types.js";
+import {
+  BLOCKED_KINDS,
+  type BlockedKind,
+  DELEGATES_RECORD,
+  type Driver,
+  FEED_APP,
+  isHarnessCli,
+} from "./types.js";
 
 /** Rex's panes murmur lists, and every block id Rex holds. */
 export type RexRead = { server: { kind: "rex" }; panes: ObservedPane[]; live: Set<string> };
@@ -288,6 +295,8 @@ function blockPane(block: {
   const top = summary(
     block.records.filter((record) => record.app !== FEED_APP && record.effective_app !== FEED_APP),
   );
+  // mu's delegate count shows beside a running agent too, not only when it wins.
+  const delegates = block.records.find((record) => record.id === DELEGATES_RECORD) ?? null;
   const agentName =
     block.workstream !== null &&
     label !== null &&
@@ -353,7 +362,7 @@ function blockPane(block: {
       state === "blocked" && kind && (BLOCKED_KINDS as readonly string[]).includes(kind)
         ? (kind as BlockedKind)
         : null,
-    pending: state === "waiting" ? Math.max(1, Number(/\d+/.exec(message ?? "")?.[0] ?? 1)) : null,
+    pending: delegates ? Math.max(1, Number(/\d+/.exec(str(delegates.msg) ?? "")?.[0] ?? 1)) : null,
     resume_command: command ? shellCommand(command) : null,
     resume_cwd: resume ? str(resume.cwd) : null,
     cwd: str(fg.cwd),

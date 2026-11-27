@@ -336,3 +336,24 @@ test("a nil list from Rex is an empty one", async () => {
   };
   expect((await readRex(nil))?.panes).toEqual([]);
 });
+
+test("mu/delegates sets pending whenever present, even under a running root", async () => {
+  const rec = (state: string, id: string, msg?: string) => ({ state, app: "pi", id, msg });
+  const block = (...records: unknown[]) => ({ status: { records }, process: {} });
+  const { call } = rexWalk([
+    {
+      session_id: "s-1",
+      label: "a",
+      blocks: {
+        "block:run": block(rec("working", ""), rec("working", "mu/delegates", "3 delegates")),
+        "block:idle": block(rec("idle", ""), rec("working", "mu/delegates", "2 delegates")),
+        "block:none": block(rec("working", "")),
+      },
+    },
+  ]);
+  const read = await readRex(call);
+  const by = (id: string) => read?.panes.find((p) => p.pane === id);
+  expect(by("block:run")).toMatchObject({ state: "running", pending: 3 });
+  expect(by("block:idle")).toMatchObject({ state: "waiting", pending: 2 });
+  expect(by("block:none")).toMatchObject({ state: "running", pending: null });
+});
