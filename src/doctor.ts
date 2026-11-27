@@ -9,6 +9,7 @@ import {
   mapSettled,
   needsInteractiveAuth,
 } from "./collector.js";
+import { shellQuote } from "./jump-command.js";
 import type { ServerInfo } from "./mux.js";
 import { parseSnapshot } from "./snapshot.js";
 import type { PeerRecord } from "./types.js";
@@ -1005,7 +1006,18 @@ export async function probeReach(
   from: TopologyNode,
   to: TopologyNode,
 ): Promise<{ ok: boolean; detail: string | null }> {
-  const inner = ["ssh", "-o", "BatchMode=yes", `-o`, "ConnectTimeout=1", to.target, "true"];
+  // The far side's login shell reads these words, and `to.target` can be this
+  // node's display name, which is free text: quoted, and after `--`.
+  const inner = [
+    "ssh",
+    "-o",
+    "BatchMode=yes",
+    "-o",
+    "ConnectTimeout=1",
+    "--",
+    shellQuote(to.target),
+    "true",
+  ];
   try {
     // A local dial for this node's own row: probing ourselves through an ssh to
     // ourselves would measure a loopback that no other node uses. `true` is

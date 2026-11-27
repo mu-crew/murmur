@@ -42,7 +42,7 @@ function dialsOf(reaches: readonly string[], log: string[] = []): Channel {
       // inner ssh. Both are recorded so a test can assert the argv shape.
       const inner = argv[argv.length - 2];
       const from = argv[0] === "true" ? "SELF" : target;
-      const to = argv[0] === "true" ? target : (inner as string);
+      const to = argv[0] === "true" ? target : (inner as string).replace(/^'|'$/g, "");
       log.push(`${from}>${to}`);
       if (allowed.has(`${from}>${to}`)) return "";
       throw new Error(
@@ -85,7 +85,7 @@ test("the probe asks a bare true through an inner ssh, never murmur", async () =
   // One thing measured: can macmini open an ssh session to gardenpc. Asking
   // macmini to run `murmur export` against gardenpc would conflate transport
   // with installation, and those have different fixes.
-  expect(log).toEqual(["macmini :: ssh -o BatchMode=yes -o ConnectTimeout=1 gardenpc true"]);
+  expect(log).toEqual(["macmini :: ssh -o BatchMode=yes -o ConnectTimeout=1 -- 'gardenpc' true"]);
   expect(log[0]).not.toContain("murmur");
   // BatchMode on the INNER ssh is not optional: without it the far side can
   // block on a password prompt with no terminal attached, and the dial hangs
@@ -95,6 +95,21 @@ test("the probe asks a bare true through an inner ssh, never murmur", async () =
   // Our own ControlPath is a local socket and names a file that does not exist
   // on the far host.
   expect(log[0]).not.toContain("ControlPath");
+});
+
+test("a target with shell syntax reaches the inner ssh as one quoted word", async () => {
+  // This node's target is its display name (`murmur init --name`), free text.
+  const log: string[] = [];
+  const channel: Channel = {
+    exec: async (_target, argv) => {
+      log.push(argv.join(" "));
+      return "";
+    },
+  };
+  await probeReach(channel, node("macmini"), node("Bob's mac; touch /tmp/x"));
+  expect(log).toEqual([
+    "ssh -o BatchMode=yes -o ConnectTimeout=1 -- 'Bob'\\''s mac; touch /tmp/x' true",
+  ]);
 });
 
 test("this node's own row is dialled locally, not through an ssh to itself", async () => {
