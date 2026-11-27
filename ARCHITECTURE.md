@@ -141,7 +141,7 @@ Three facts, independent, each with exactly one writer:
 They are never folded into one enum. The words a surface paints (`crashed`,
 `error`, `blocked`, `done`, `running`, `waiting`, `idle`) are derived at read
 time by `renderState`. `waiting` is a stopped agent with outstanding
-background work (`pending`, from mu's `mu/delegates` record).
+background work (`pending`: the `@mu_pending` pane option while the pane is `working` and alive, else mu's `mu/delegates` record).
 
 Why three and not one. A crashed agent on an unreachable host is crashed *and*
 stale, on different axes; a running agent that is also blocked is both, and the

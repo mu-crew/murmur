@@ -112,6 +112,42 @@ test("mu/delegates under working is the agent waiting, with its delegate count",
   expect(parse({ state: "working" })).toMatchObject({ state: "running", pending: null });
 });
 
+test("@mu_pending counts delegates beside a running agent, only while working and alive", () => {
+  expect(parse({ state: "working", mu_pending: "3" })).toMatchObject({
+    state: "running",
+    pending: 3,
+  });
+  // It beats the winning record's own count.
+  expect(
+    parse({
+      state: "working",
+      id: DELEGATES_RECORD,
+      message: "waiting on 1 delegate",
+      mu_pending: "4",
+    }),
+  ).toMatchObject({ state: "waiting", pending: 4 });
+  // A stale option is ignored unless the OSC 7501 state is working.
+  for (const state of ["idle", "done", "blocked", "error", ""]) {
+    expect(parse({ state, mu_agent: "w-1", mu_pending: "3" })?.pending).toBeNull();
+  }
+  // ... and on a dead pane.
+  expect(
+    parse({ state: "working", dead: "1", dead_status: "0", mu_pending: "3" })?.pending,
+  ).toBeNull();
+  // Zero, junk and unset (older mu, vanilla tmux, empty expansion) change nothing.
+  for (const bad of ["0", "-1", "x", "2.5", "3 ", ""]) {
+    expect(parse({ state: "working", mu_pending: bad })?.pending).toBeNull();
+  }
+  expect(
+    parse({
+      state: "working",
+      id: DELEGATES_RECORD,
+      message: "waiting on 2 delegates",
+      mu_pending: "0",
+    })?.pending,
+  ).toBe(2);
+});
+
 test("a blocked pane carries its kind; any other state carries none", () => {
   expect(parse({ state: "blocked", kind: "permission" })?.blocked_kind).toBe("permission");
   expect(parse({ state: "blocked", kind: "question" })?.blocked_kind).toBe("question");

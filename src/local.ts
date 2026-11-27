@@ -84,6 +84,8 @@ export const PANE_FIELDS = [
   tmuxText("@mu_workstream"),
   tmuxText("@mu_role"),
   tmuxText(MU_HOST_OPTION),
+  // How many delegates mu's pi extension has out; empty when unset.
+  "#{@mu_pending}",
 ] as const;
 
 /** The pill's state words, in tmux's vocabulary, as `@murmur_count_<word>` names them. */
@@ -199,6 +201,26 @@ function delegates(message: string | null): number {
 }
 
 /**
+ * Delegates out for a pane. `@mu_pending` (a positive integer) counts only
+ * while the pane's OSC 7501 state is `working` and the pane is alive: vtmux
+ * drops a working record when the process exits, so a crashed agent's stale
+ * option never shows. Otherwise the `mu/delegates` record that won (waiting).
+ */
+function pendingOf(
+  option: string,
+  state: string,
+  dead: boolean,
+  paneState: PaneState,
+  message: string,
+): number | null {
+  if (state === "working" && !dead && /^\d+$/.test(option)) {
+    const count = Number(option);
+    if (Number.isSafeInteger(count) && count > 0) return count;
+  }
+  return paneState === "waiting" ? delegates(message || null) : null;
+}
+
+/**
  * A pane title worth showing: tmux starts every pane titled with the host
  * name, which names the machine rather than the agent.
  */
@@ -261,6 +283,7 @@ export function parsePaneRow(
     workstream = "",
     role = "",
     host = "",
+    muPending = "",
   ] = fields;
   if (!pane || !session || !window) return null;
   // `murmur rex-feed`'s own pane: reading it back would re-report the fleet.
@@ -312,7 +335,7 @@ export function parsePaneRow(
     message: message || null,
     progress: progress(rawProgress),
     blocked_kind: paneState === "blocked" ? blockedKind(kind) : null,
-    pending: paneState === "waiting" ? delegates(message || null) : null,
+    pending: pendingOf(muPending, state, isDead, paneState, message),
     resume_command: resumeCommand || null,
     resume_cwd: resumeCwd || null,
     cwd: path || null,

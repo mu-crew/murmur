@@ -78,6 +78,7 @@ export const ROW_FIELDS = [
   "mu_workstream",
   "mu_role",
   "mu_host",
+  "mu_pending",
 ] as const;
 
 export type RowField = (typeof ROW_FIELDS)[number] | `pill_${(typeof PILL_WORDS)[number]}`;
