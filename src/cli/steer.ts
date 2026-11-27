@@ -18,8 +18,8 @@ pane's state is then read back for up to 5s: delivery alone is not success.
                 no_socket | no_answer | identity_mismatch | abort_failed
   stopped       true (left working) | false (still working) | null (unreadable)
   state         crashed|error|blocked|done|running|waiting|idle|gone, or null
-  reason        on failure: not_stopped | unconfirmed | delivery_failed |
-                invalid_target | not_found (the last three are only
+  reason        on failure: not_stopped | unconfirmed | not_initialised |
+                delivery_failed | invalid_target | not_found (the last four are only
                 ok, reason and message: nothing was sent, so no action, jump_target,
                 via, ctl_fallback, stopped or state)
   message       on failure: one line saying why

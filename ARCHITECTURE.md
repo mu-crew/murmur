@@ -28,9 +28,9 @@ them requires a major version:
   `@mu_agent` (name; makes the pane crew), `@mu_workstream`, `@mu_role`,
   `@mu_host`, `@mu_pending` (delegates out; a positive integer, counted only
   while the pane is `working` and alive, else ignored)
-- the OSC 7501 record id `mu/delegates`: a `working` record under it reads as
-  `waiting` on tmux; on Rex it also fills `pending` (the delegate count) while
-  the pane is working
+- the OSC 7501 record id `mu/delegates`: a `working` record under it makes the pane
+  `waiting` when it wins the summary (tmux and Rex), and fills `pending` (the
+  delegate count) whenever that record is working
 - the OSC 7501 record id `mu/role` (`ROLE_RECORD`, exported): on Rex its `idle`
   state carries mu's role in `title` (`orchestrator`, `worker` or `delegate`),
   the Rex counterpart of `@mu_role`. A Rex orchestrator that vanishes mid-work
@@ -78,8 +78,9 @@ them requires a major version:
   - `state`: the last state read (`crashed|error|blocked|done|running|waiting|idle`,
     or `gone` for a pane that no longer exists), `null` if none was
   - on failure, `reason` and a one-line `message`: `not_stopped`
-    (`stopped: false`), `unconfirmed` (`stopped: null`), `delivery_failed`,
-    `invalid_target`, `not_found`. The last three are only `{ ok, reason,
+    (`stopped: false`), `unconfirmed` (`stopped: null`), `not_initialised`
+    (this node is not initialised), `delivery_failed`, `invalid_target`,
+    `not_found`. The last four are only `{ ok, reason,
     message }`: no `action`, `jump_target`, `via`, `ctl_fallback`, `stopped` or
     `state`, since nothing was sent, or what was could not be.
 - the `on-attention` hook: its path in the config dir and the `MURMUR_KIND`,

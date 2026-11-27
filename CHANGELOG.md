@@ -24,10 +24,11 @@ so it says what changed for a user rather than listing every commit.
   record speak on a state tie (an agent with delegates out reads `running`,
   not `waiting`), and drops progress or times a snapshot would reject. A live
   pane is never also listed as a crash a concurrent collect recorded.
-- **SDK `readStatus` probes nothing by default.** It now matches
-  `murmur status --json --cached`: no `ssh -O check`, `tmux`, `ps` or
-  `ssh -G`. Pass `cached: false` for the live probes. `StatusOptions` is
-  exported.
+- **SDK: `readStatus`.** `readStatus`, `ReadStatus`, `StatusOptions`,
+  `peekLocal`, `LocalPeekRead`, `LocalPeek` and `openStore({ readonly: true })`
+  give `status --json` from a read-only store: nothing is synced or written.
+  `cached: true` is the default, like `status --json --cached` (no `ssh -O
+  check`, `tmux`, `ps` or `ssh -G`); pass `cached: false` for a fresh probe.
 
 - **Untagged mu panes read as crew.** A tmux pane mu placed but failed to tag
   (`@mu_agent` empty, mu before 5.6.1) showed as a person's own. murmur now
@@ -64,13 +65,13 @@ so it says what changed for a user rather than listing every commit.
   crew orchestrator that vanishes while working is recorded as `crashed`.
 - **Delegate count.** A running tmux agent shows its delegates out from the
   `@mu_pending` pane option while it is alive and working (the value is
-  escaped, so a `|` cannot shift the row). On Rex the `mu/delegates` record
-  fills `pending` whenever the pane is working. Neither makes the pane
-  `waiting`.
+  escaped, so a `|` cannot shift the row). A `working` `mu/delegates`
+  record makes a pane `waiting` when it wins the summary (tmux and Rex), and
+  on Rex fills `pending` whenever that record is working.
 - **Idle harnesses are listed.** A fresh `pi`, `claude` or `codex` pane shows
   as `idle` on tmux and Rex before it reports anything. Harness executables
-  match as in 2.x (`.real`, `.js`, `.mjs`, `.cjs` stripped; Rex `argv0` and
-  name are tested too).
+  match as in 2.x (only `.real` is stripped, so `pi.js` is no harness; Rex
+  `argv0` and name are tested too).
 - **`murmur rex-feed`** forwards each agent's `blocked_kind` in its OSC 7501
   record, and `--exclude-rex` leaves out Rex panes, so only tmux-hosted agents
   are bridged.
@@ -81,9 +82,6 @@ so it says what changed for a user rather than listing every commit.
   the pane was seen to leave working. A failure before delivery
   (`delivery_failed`, `invalid_target`, `not_found`) is only `ok`, `reason`
   and `message`.
-- **SDK: `readStatus`.** `readStatus`, `ReadStatus`, `peekLocal`,
-  `LocalPeekRead`, `LocalPeek` and `openStore({ readonly: true })` give
-  `status --json` from a read-only store, with nothing synced or cached.
 - **Help text.** `murmur dash` and `sidepanel` `?` now say what the keys do:
   `a` shows all crew (off hides crew that needs no human), `i` dismisses a
   crash, `^e` stops the agent.
