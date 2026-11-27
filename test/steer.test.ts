@@ -193,3 +193,21 @@ test("jump --json outside tmux and Rex without a terminal is a clear no_tty erro
   expect(jump).not.toHaveBeenCalled();
   expect(process.exitCode).toBe(1);
 });
+
+test("a rex j1 token is a valid target: absent is not_found, not invalid_target", async () => {
+  const log: InputDelivery[] = [];
+  const rexToken = jumpTarget({
+    host_id: identity().host_id,
+    server: { kind: "rex" },
+    pane: asPaneId("%99"),
+  });
+  expect(await stopAgent(store, identity(), rexToken, deps(log))).toMatchObject({
+    ok: false,
+    reason: "not_found",
+  });
+  expect(await promptAgent(store, identity(), rexToken, "hi", deps(log))).toMatchObject({
+    ok: false,
+    reason: "not_found",
+  });
+  expect(log).toEqual([]);
+});

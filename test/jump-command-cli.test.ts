@@ -371,3 +371,11 @@ test("jump verb: an unreadable identity is one stderr line, no stack", () => {
   expect(result.stderr.trim().split(/\r?\n/)).toHaveLength(1);
   expect(result.stderr).not.toContain("    at ");
 });
+
+test("stop with an absent rex j1 token reports not_found, not invalid_target", () => {
+  const body = JSON.stringify(["host-x", { kind: "rex" }, "%9"]);
+  const token = `j1:${Buffer.from(body, "utf8").toString("base64url")}`;
+  const result = cliResult("stop", token, "--json");
+  expect(result.stdout + result.stderr).toContain("not_found");
+  expect(result.stdout + result.stderr).not.toContain("invalid_target");
+});
