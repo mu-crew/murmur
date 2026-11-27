@@ -79,9 +79,17 @@ const isJson = (value: unknown): value is Json =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 const str = (value: unknown): string | null =>
   typeof value === "string" && value !== "" ? value : null;
-/** A list, where Lua's JSON writes an empty one as `{}`. */
-const arr = (value: unknown): unknown[] =>
-  Array.isArray(value) ? value : isJson(value) && Object.keys(value).length === 0 ? [] : [];
+/**
+ * A list, where Lua's JSON writes an empty one as `{}` and Rex leaves a nil
+ * slice out. Anything else is {@link Unreadable}: reading it as empty would
+ * read every block in it as gone.
+ */
+const arr = (value: unknown): unknown[] => {
+  if (Array.isArray(value)) return value;
+  if (value === null || value === undefined) return [];
+  if (isJson(value) && Object.keys(value).length === 0) return [];
+  throw new Unreadable();
+};
 const list = (value: unknown, key: string): Json[] =>
   isJson(value) ? arr(value[key]).filter(isJson) : [];
 
@@ -134,7 +142,10 @@ export function shellCommand(argv: readonly string[]): string {
     .join(" ");
 }
 
-/** The resume record that speaks for the block: the chosen one, else the latest reported. */
+/**
+ * The resume record that speaks for the block: the chosen one, else the latest
+ * reported. Rex lists newest first, so the first of a tie wins.
+ */
 function resumeRecord(records: readonly Json[]): Json | null {
   const usable = records.filter(
     (record) => Array.isArray(record.command) && record.command.length > 0,
@@ -143,7 +154,7 @@ function resumeRecord(records: readonly Json[]): Json | null {
   if (chosen) return chosen;
   let latest: Json | null = null;
   for (const record of usable) {
-    if (latest === null || String(record.reported_at ?? "") >= String(latest.reported_at ?? ""))
+    if (latest === null || String(record.reported_at ?? "") > String(latest.reported_at ?? ""))
       latest = record;
   }
   return latest;
@@ -275,7 +286,12 @@ function blockPane(block: {
     block.records.filter((record) => record.app !== FEED_APP && record.effective_app !== FEED_APP),
   );
   const agentName =
-    block.workstream !== null && label !== null && label !== MU_PLACEHOLDER ? label : null;
+    block.workstream !== null &&
+    label !== null &&
+    label !== MU_PLACEHOLDER &&
+    label !== GENERIC_BLOCK
+      ? label
+      : null;
   // Listed like a tmux pane: an OSC 7501 record, a mu agent, or a live OSC 7577
   // record. Rex prunes a resume record once its owner exits, so a plain shell drops off.
   if (top === null && agentName === null && resume === null) return null;

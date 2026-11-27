@@ -124,6 +124,31 @@ test("without a chosen record, the latest one speaks", async () => {
   expect((await readRex(call))?.panes[0]?.resume_command).toBe("/bin/new");
 });
 
+test("a reported_at tie keeps Rex's newest-first order", async () => {
+  const at = "2026-11-27T10:00:00Z";
+  const { call } = rexWalk([
+    {
+      session_id: "s-1",
+      label: "work",
+      blocks: {
+        "block:a": {
+          status: quiet,
+          process: {},
+          resume: {
+            ok: {
+              records: [
+                { command: ["/bin/newest"], reported_at: at },
+                { command: ["/bin/older"], reported_at: at },
+              ],
+            },
+          },
+        },
+      },
+    },
+  ]);
+  expect((await readRex(call))?.panes[0]?.resume_command).toBe("/bin/newest");
+});
+
 test("shell quoting matches vtmux's shell_command", () => {
   expect(shellCommand(["claude", "--resume", "abc-123"])).toBe("claude --resume abc-123");
   expect(shellCommand(["a b", "", "$x", "k=v"])).toBe("'a b' '' '$x' 'k=v'");
@@ -212,6 +237,26 @@ test("a block in mu's session is an orchestrated agent named by its label", asyn
   });
 });
 
+test("a plain shell in mu's session is no agent", async () => {
+  const { call } = rexWalk([
+    {
+      session_id: "s-1",
+      label: "mu-crew-rex",
+      blocks: {
+        "block:a": { status: quiet, process: {}, label: "shell" },
+        "block:b": { status: working, process: {}, label: "shell" },
+      },
+    },
+  ]);
+  const read = await readRex(call);
+  expect(read?.panes.map((pane) => pane.pane)).toEqual(["block:b"]);
+  expect(read?.panes[0]).toMatchObject({
+    agent_name: null,
+    workstream: null,
+    driver: "human",
+  });
+});
+
 test("a block on another host than the server runs there", async () => {
   const { call } = rexWalk([
     {
@@ -234,4 +279,33 @@ test("a reply that is not the walk is no Rex", async () => {
   expect(await readRex(async () => ({}))).toBeNull();
   expect(await readRex(async () => ({ sessions: { err: "x", code: "unavailable" } }))).toBeNull();
   expect(await readRex(async () => [])).toBeNull();
+});
+
+test("a list that is neither a list nor Lua's empty `{}` is no evidence", async () => {
+  for (const bad of [{ x: 1 }, "blocks", 3]) {
+    const { call } = rexWalk([
+      { session_id: "s-1", label: "work", blocks: { "block:a": { status: working, process: {} } } },
+    ]);
+    const mangle = (path: "sessions" | "blocks") => async (script: string) => {
+      const reply = (await call(script)) as {
+        sessions: { ok: { sessions: unknown } };
+        walked: { blocks: { ok: { blocks: unknown } } }[];
+      };
+      if (path === "sessions") reply.sessions.ok.sessions = bad;
+      else for (const entry of reply.walked) entry.blocks.ok.blocks = bad;
+      return reply;
+    };
+    expect(await readRex(mangle("sessions"))).toBeNull();
+    expect(await readRex(mangle("blocks"))).toBeNull();
+  }
+});
+
+test("a nil list from Rex is an empty one", async () => {
+  const { call } = rexWalk([{ session_id: "s-1", label: "work", blocks: {} }]);
+  const nil = async (script: string) => {
+    const reply = (await call(script)) as { walked: { blocks: { ok: { blocks: unknown } } }[] };
+    for (const entry of reply.walked) entry.blocks.ok.blocks = null;
+    return reply;
+  };
+  expect((await readRex(nil))?.panes).toEqual([]);
 });
