@@ -5,7 +5,7 @@
 | Doc | Reach when |
 | --- | --- |
 | [README.md](README.md) | product surfaces, comparison with herdr / workmux / mu, install one-liner, what murmur is not |
-| [docs/setup.md](docs/setup.md) | tmux clear hooks, side panel binding, `murmur notify` for Codex/Cursor, peers, doctor, jump overrides |
+| [docs/setup.md](docs/setup.md) | vtmux options, side panel binding, Rex and `rex-feed`, peers, doctor, jump overrides |
 | [SSH.md](SSH.md) | BatchMode, warm ControlMaster, `MaxSessions 1`, Eternal Terminal |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | activity / attention / freshness model, single-writer invariants, design costs, known gaps |
 
@@ -26,7 +26,7 @@ npm run lint:fix   # biome check --write: fixes lint AND formatting
   `noExplicitAny` or `noNonNullAssertion` fires, fix the code. Do not silence
   the rule to get green.
 - A `pre-commit` hook in `.githooks/` runs typecheck and lint on any staged
-  `src/`, `test/`, `scripts/` or `extension/` file. `npm install` wires it up
+  `src/`, `test/` or `scripts/` file. `npm install` wires it up
   via `prepare`.
 - Tests are deliberately not in the hook. They belong to your task's own
   validation step, and a slow hook is a hook people bypass.
@@ -37,10 +37,10 @@ npm run lint:fix   # biome check --write: fixes lint AND formatting
 
 A change that breaks on-disk state compatibility with the released version
 gets a new versioned directory under `~/.local/state` (`<tool><major>`, e.g.
-`mu5`, `murmur2`), never a `<tool>-next` name; additive changes stay in the
+`mu5`, `murmur3`), never a `<tool>-next` name; additive changes stay in the
 current directory. Never run a development build against the real state
 directory: tests and manual runs use the tool's state-dir override
-(`MURMUR_STATE_DIR`, plus a temp `HOME` for the 1.x migration) and a private
+(`MURMUR_STATE_DIR`, plus a temp `HOME` for the 2.x migration) and a private
 tmux socket.
 
 ## npm registry proxy

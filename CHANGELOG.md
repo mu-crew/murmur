@@ -53,6 +53,43 @@ so it says what changed for a user rather than listing every commit.
   The snapshot wire format is unchanged; the store gains a nullable
   `peers.rex_host` column, upgraded in place, and 3.0.x can still open it.
 
+- **Rex collector v2.** One `rex do` Lua walk reads every Rex pane at full
+  fidelity (status, process, resume, mu labels) instead of one call per block.
+  A malformed list now reads as no Rex rather than a partial one, and a plain
+  shell or `_mu` block is no agent. A Rex pane that mu's pi labels with the
+  OSC 7501 `mu/role` record (`ROLE_RECORD`, `idle`, `title` `orchestrator`,
+  `worker` or `delegate`) is a crew pane: an orchestrator that vanishes
+  mid-work crashes, a worker or delegate does not.
+- **A crew pane mu closes mid-work is not a crash.** Only a human's pane or a
+  crew orchestrator that vanishes while working is recorded as `crashed`.
+- **Delegate count.** A running tmux agent shows its delegates out from the
+  `@mu_pending` pane option while it is alive and working (the value is
+  escaped, so a `|` cannot shift the row). On Rex the `mu/delegates` record
+  fills `pending` whenever the pane is working. Neither makes the pane
+  `waiting`.
+- **Idle harnesses are listed.** A fresh `pi`, `claude` or `codex` pane shows
+  as `idle` on tmux and Rex before it reports anything. Harness executables
+  match as in 2.x (`.real`, `.js`, `.mjs`, `.cjs` stripped; Rex `argv0` and
+  name are tested too).
+- **`murmur rex-feed`** forwards each agent's `blocked_kind` in its OSC 7501
+  record, and `--exclude-rex` leaves out Rex panes, so only tmux-hosted agents
+  are bridged.
+- **`murmur stop` confirms.** A local mu pi agent is aborted over its ctl
+  socket, but only after `hello` names the pane's own agent; anything else gets
+  Escape. The pane's state is then read back for up to 5 s. `--json` carries
+  `via`, `ctl_fallback`, `stopped`, `state` and `reason`, and exits 0 only when
+  the pane was seen to leave working. A failure before delivery
+  (`delivery_failed`, `invalid_target`, `not_found`) is only `ok`, `reason`
+  and `message`.
+- **SDK: `readStatus`.** `readStatus`, `ReadStatus`, `peekLocal`,
+  `LocalPeekRead`, `LocalPeek` and `openStore({ readonly: true })` give
+  `status --json` from a read-only store, with nothing synced or cached.
+- **Help text.** `murmur dash` and `sidepanel` `?` now say what the keys do:
+  `a` shows all crew (off hides crew that needs no human), `i` dismisses a
+  crash, `^e` stops the agent.
+- **Docs.** README, ARCHITECTURE (store schema 15, `NEEDS_HUMAN`, the crew
+  crash rule, Rex driving) and docs/setup.md match the code.
+
 ## 3.0.2
 
 - **Clean pi session labels.** `chosenPaneTitle` strips pi's `π - <name> - <dir>`

@@ -24,7 +24,7 @@ agent over ssh without leaving it.
 | `murmur prompt <target> [text]` / `murmur stop <target>` | Prompt or interrupt the agent a `jump_target` names; `stop` confirms the pane left working |
 | `murmur dash` | Full-screen dashboard: watch, prompt, and stop local or remote agents |
 | `murmur sidepanel` | Compact agent list in a full-height pane beside the current tmux window |
-| `murmur rex-feed` | The status pill's agents as terminal program status (OSC 7501), for Rex; bridges tmux-hosted agents into Rex.app, see [setup](docs/setup.md#rex) |
+| `murmur rex-feed` | The status pill's agents as terminal program status (OSC 7501), for Rex; reports every pane to Rex.app (`--exclude-rex` bridges only tmux-hosted ones), see [setup](docs/setup.md#rex) |
 
 They all read the same list. Local jump is a window switch; remote jump opens
 over ssh (or your `--jump-command`). Orchestrated (`crew`) agents stay hidden
@@ -71,8 +71,8 @@ from and what each tool owns.
 
 | | murmur | herdr | workmux | [mu](https://github.com/mu-crew/mu) |
 | --- | --- | --- | --- | --- |
-| Primary job | Agent-state HUD over tmux | Terminal runtime for agents | Git worktree + tmux window workflow | Task DAG control plane for an agent crew |
-| Owns the terminals | No; reads your tmux | Yes; its server owns the panes | No; drives tmux (or zellij, kitty, WezTerm) | No; spawns agents into tmux or herdr panes |
+| Primary job | Agent-state HUD over tmux and Rex | Terminal runtime for agents | Git worktree + tmux window workflow | Task DAG control plane for an agent crew |
+| Owns the terminals | No; reads your tmux and Rex | Yes; its server owns the panes | No; drives tmux (or zellij, kitty, WezTerm) | No; spawns agents into tmux or Rex panes |
 | Across machines | Yes; peers exchange state snapshots over ssh | One host at a time; attach remotely with `herdr --remote` | One host | One orchestrator; remote agents run over ssh commands |
 | Git worktrees | No | Yes (`herdr worktree`) | Yes, its core feature | Per-agent VCS workspaces |
 | Places work | No | Agents drive panes through its CLI and socket API | Delegates tasks to worktree agents | Yes; typed task DAG with claims |
@@ -88,8 +88,10 @@ Needs [vtmux](https://github.com/martintrojer/vtmux) **>= 3.8-rc3** (or Rex),
 `fzf`, and Node 22.14+. Multi-machine: ssh access, murmur on each node.
 
 **Vanilla tmux 3.8:** stock tmux drops OSC 7501 and OSC 7577, so murmur 3.0
-sees no live state on untagged local panes (`@mu_agent`-tagged crew panes still
-appear as `idle`, or `crashed` on a retained nonzero exit). Remote peers
+sees no live state on local panes. It still lists `@mu_agent`-tagged crew panes,
+untagged panes mu placed (read from the root process environment) and a
+foreground `pi`, `claude` or `codex`, all as `idle` (`crashed` on a retained
+nonzero exit). Remote peers
 running vtmux or Rex still appear, and jumping works to remote tmux/vtmux panes
 (remote Rex panes too, with `murmur peer add|set --rex-host <label>`). If you stay on stock tmux, use murmur 2.x,
 which is maintained on the `release/2.x` branch (`npm i -g @mu-crew/murmur@2`).
@@ -122,9 +124,11 @@ their own state over OSC 7501, and vtmux clears `done` and `error` when you
 focus the pane. Upgrading from 2.x? See
 [docs/setup.md](docs/setup.md#coming-from-murmur-2x).
 
-A tmux server plus pane id is the address; without one there is nothing to
-jump to. Remote agents need vtmux on the remote too — the jump uses
-`ssh -t <host> env LC_CTYPE=C.UTF-8 tmux attach` unless you override it.
+A server plus pane id is the address (a tmux server and pane id, or a Rex block
+id); without one there is nothing to jump to. Remote tmux agents need vtmux on
+the remote too — the jump uses `ssh -t <host> env LC_CTYPE=C.UTF-8 tmux attach`
+unless you override it. Remote Rex agents are reached through `rex -S
+<rex_host>` (`murmur peer set <name> --rex-host <label>`), falling back to ssh.
 
 Jumps to agents on a named tmux server (`tmux -L` / `-S`) on a peer are addressed
 by host, tmux server and pane (the `jump_target`), and a failure prints one

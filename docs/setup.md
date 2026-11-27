@@ -11,8 +11,9 @@ own state over [OSC 7501](https://www.superlogical.com/rex/docs/build/program-st
 [OSC 7577](https://www.superlogical.com/rex/docs/build/program-resume)
 (Program Resume), and the multiplexer keeps both records per pane. That needs
 **vtmux >= 3.8-rc3** (or Rex): stock tmux 3.8 drops both sequences, so murmur 3
-sees none of its local panes (remote peers running vtmux or Rex still appear
-and jump works). **On vanilla tmux 3.8, use murmur 2.x** (`npm i -g
+sees no live state on its local panes (it still lists mu's crew panes and a
+foreground `pi`, `claude` or `codex` as `idle`; remote peers running vtmux or
+Rex still appear and jump works). **On vanilla tmux 3.8, use murmur 2.x** (`npm i -g
 @mu-crew/murmur@2`, branch `release/2.x`): it is the clean out. Using the two
 protocols is why murmur 3 no longer needs harness hooks, inboxes, process-chain
 walking, a pi extension or `@murmur_*` option publishing.
@@ -65,14 +66,16 @@ Once nothing runs 2.x, remove `~/.local/state/murmur2`.
 ## Which panes murmur lists
 
 One `list-panes -a` per local tmux server, every collect. A pane is listed when
-its program keeps an OSC 7501 record, or when mu placed it (`@mu_agent` set),
-so a crew pane whose program died is never missed. murmur's seven words, from
+its program keeps an OSC 7501 record or a live OSC 7577 resume record, or when
+mu placed it (`@mu_agent` set, or mu's identity in the pane's root environment),
+so a crew pane whose program died is never missed. A foreground `pi`, `claude`
+or `codex` is listed as `idle` before it reports anything. murmur's seven words, from
 the record and the pane's lifecycle:
 
 | Pane | murmur |
 | --- | --- |
 | retained (`remain-on-exit on`) and dead with a non-zero `pane_dead_status` | `crashed` |
-| vanished between two collects while `working`, `waiting` or `blocked` | `crashed` (murmur's own row) |
+| vanished between two collects while `working`, `waiting` or `blocked` (not a crew worker or delegate that mu closed) | `crashed` (murmur's own row) |
 | `blocked` (kind `permission`, `question` or `auth`) | `blocked` |
 | `error` | `error` |
 | `done` | `done` |
@@ -84,7 +87,8 @@ Who the agent is comes from the pane options mu sets when it places a worker:
 `@mu_agent` (its name, and what makes the pane crew), `@mu_workstream`,
 `@mu_role`, `@mu_host` for a remote worker's local pane, and `@mu_pending`
 (delegates out, a positive integer; counted only while the pane is `working`
-and alive, otherwise ignored). A pane without
+and alive, otherwise ignored). `@mu_pending` fills the agent's `pending`
+count only; it never makes the pane `waiting`. A pane without
 `@mu_agent` is yours.
 
 Harnesses that speak OSC 7501 natively need nothing: pi (>= 1.1.0), Claude Code
@@ -287,23 +291,26 @@ glance work on remote Rex panes as on local ones.
 ### rex-feed: why it exists, and when you need it
 
 Rex.app already shows native OSC 7501 chrome for panes whose program reports
-status to Rex directly. `murmur rex-feed` is a bridge for what Rex cannot see
-or badges badly:
+status to Rex directly. `murmur rex-feed` writes one summary tab for what Rex
+cannot see or badges badly. It cannot remove Rex.app's native badges on
+individual tabs, and without `--exclude-rex` it reports every pane, Rex ones
+included:
 
 - **tmux inside Rex tabs, and remote vtmux peers.** A tmux pane keeps the
   record itself rather than pass it to the outer terminal, so Rex.app shows
   nothing for it. `rex-feed` is the only way those agents (local or on another
   machine) reach Rex.app's chrome.
 - **Attention filtering.** Rex.app badges every pane equally, including `done`
-  crew workers a supervisor owns. `rex-feed` applies the same filter as the
-  status pill: human-driven agents plus crew agents only when `blocked`,
-  `error` or `crashed`.
-- **`crashed` rollup.** A pane that vanished mid-work surfaces as an error.
+  crew workers a supervisor owns. The `rex-feed` summary tab applies the same
+  filter as the status pill: human-driven agents plus crew agents only when
+  `blocked`, `error` or `crashed`.
+- **`crashed` rollup.** A pane that vanished mid-work leaves nothing in
+  Rex.app; the summary tab keeps it as an error until dismissed.
 
-You do **not** need it in a pure-Rex fleet: local Rex panes and remote Rex
-servers connected in Rex.app already report to their own tabs. Hybrid users who
-want only tmux-hosted agents bridged, without duplicating native Rex tabs,
-pass `--exclude-rex`.
+A pure-Rex fleet works without it: Rex panes report to their own tabs. You want
+it there only for the filtered, crash-aware summary, and then the tab duplicates
+the native badges. Hybrid users who want only tmux-hosted agents bridged pass
+`--exclude-rex`.
 
 Run it in a tab of its own; that tab carries one record per agent the pill
 counts, with the most urgent state on its root record.
@@ -324,12 +331,14 @@ rex window new crew -- murmur rex-feed --exclude-rex
 
 ### dash and jump in a Rex pane
 
-`murmur dash` and `murmur jump` both run in a Rex pane outside tmux. A jump opens the agent in a new tab of
-the current Rex session, named after the agent (`linuxpc · dotfiles` for a
-remote one): `tmux attach -t <pane>` for a local agent, the peer's jump
-command for a remote one. The dash, or whatever called `murmur jump`, stays
-where it was. Closing the
-tab, or detaching, ends the attach.
+`murmur dash` and `murmur jump` both run in a Rex pane outside tmux. Jumping to
+a tmux agent opens it in a new tab of the current Rex session, named after the
+agent (`linuxpc · dotfiles` for a remote one): `tmux attach -t <pane>` for a
+local agent, the peer's jump command for a remote one. The dash, or whatever
+called `murmur jump`, stays where it was. Closing the tab, or detaching, ends
+the attach. Jumping to a Rex agent, local or remote, opens no tab: it focuses
+the block (`session.focus_block`) and selects its session in Rex.app
+(`session.select`).
 
 That tab shows no program status of its own: the agent runs inside tmux, which
 keeps the record rather than pass it to the outer terminal. Keep `rex-feed`
@@ -366,8 +375,10 @@ with a trailing `~`:
 
 Both are per-session. Leaving the remote returns you to the window you jumped
 from and destroys the wrapper. Jumping to the same host twice reuses one
-session. Outside tmux, `dash` and `jump` run ssh directly and you land back at your
-shell on exit.
+session. Outside tmux, in a Rex pane, `dash` and `jump` open a new Rex tab (tmux
+agent) or focus the block (Rex agent) as described under Rex. In a plain
+terminal outside both, `jump` attaches in place and you land back at your shell
+on exit; `dash` refuses to start.
 
 Inside the wrapper the local tmux has no prefix. Escape hatch (root table —
 not `M-b` / other Alt letters a picker or the remote may want):

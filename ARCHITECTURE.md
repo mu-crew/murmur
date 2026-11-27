@@ -29,7 +29,12 @@ them requires a major version:
   `@mu_host`, `@mu_pending` (delegates out; a positive integer, counted only
   while the pane is `working` and alive, else ignored)
 - the OSC 7501 record id `mu/delegates`: a `working` record under it reads as
-  `waiting`
+  `waiting` on tmux; on Rex it also fills `pending` (the delegate count) while
+  the pane is working
+- the OSC 7501 record id `mu/role` (`ROLE_RECORD`, exported): on Rex its `idle`
+  state carries mu's role in `title` (`orchestrator`, `worker` or `delegate`),
+  the Rex counterpart of `@mu_role`. A Rex orchestrator that vanishes mid-work
+  crashes; a worker or delegate does not
 - `murmur status --json` (and `--cached`, which reaches no peer, so
   `peers[].needs_session` there means only "the last attempt was refused on
   auth"; pair it with a detached `murmur collect --quiet --floored` to warm the
@@ -143,7 +148,10 @@ Three facts, independent, each with exactly one writer:
 They are never folded into one enum. The words a surface paints (`crashed`,
 `error`, `blocked`, `done`, `running`, `waiting`, `idle`) are derived at read
 time by `renderState`. `waiting` is a stopped agent with outstanding
-background work (`pending`: the `@mu_pending` pane option while the pane is `working` and alive, else mu's `mu/delegates` record).
+background work: a `working` pane under mu's `mu/delegates` record. `pending`
+is only the delegate count (the `@mu_pending` pane option while a tmux pane is
+`working` and alive; mu's `mu/delegates` record on Rex); it never changes a
+pane's state, so a `running` agent can carry one.
 
 Why three and not one. A crashed agent on an unreachable host is crashed *and*
 stale, on different axes; a running agent that is also blocked is both, and the
@@ -197,7 +205,8 @@ Three consequences worth stating, because each is easy to violate by accident:
 
 ## A tmux server and pane id are the agent's address
 
-Everything below assumes agents run inside vtmux (or Rex). The tagged server and
+Everything below assumes agents run inside vtmux (or Rex; a Rex pane's address is
+its block id on the `rex` server). The tagged server and
 pane id together are how murmur names an agent and how a jump reaches one.
 
 An agent IS a pane address. A session and a window are only where that pane
@@ -228,9 +237,11 @@ on one keypress. **A failed jump now mutates nothing**: it returns a
 than a deletion. That is the same single-writer rule one level down — the jump
 runs on the reader, and only the owning node may retire a pane.
 
-The remote jump inherits the tmux requirement, since it is `ssh -t <host> tmux
-attach`. tmux must be running on the far side, which is why a dead remote tmux
-server gets its own diagnosis rather than being reported as an unreachable host.
+The remote jump to a tmux agent inherits the tmux requirement, since it is
+`ssh -t <host> tmux attach`. tmux must be running on the far side, which is why
+a dead remote tmux server gets its own diagnosis rather than being reported as
+an unreachable host. A remote Rex agent is reached through `rex -S <rex_host>`
+(set with `murmur peer set --rex-host`), falling back to the peer's warm ssh.
 
 **Named-server jump guarantees and limits.** For an agent on a named tmux server
 (`-L` / `-S`) on a peer, the jump is addressed by host, tmux server and pane, and
@@ -284,7 +295,7 @@ vtmux's (`#{pane_program_state}`, `#{window_program_state}`,
 | ---- | ---- | ---------- |
 | `identity` | Read/create this node's `{host_id, display_name}` | state dir |
 | `local` | The local read: one `list-panes -a -F` per tmux server, plus Rex, into `LocalPane[]`; builds this node's snapshot | `mux`, `rex`, `store` |
-| `rex` | The Rex reader: `program_status` and `process` per block, fail-silent | the `rex` CLI |
+| `rex` | The Rex reader: one `rex do` Lua walk of every session and block (status, process, resume, labels), fail-closed on a malformed list | the `rex` CLI |
 | `pill` | Write `@murmur_count_*` to each tmux server, only where it changed | `mux`, `view` |
 | `store` | Local memory (since, crashes), alert claims, peer cache. **The only module touching SQL** | nothing |
 | `snapshot` | **Pure.** `parseSnapshot`: validate one document, totally | nothing |
@@ -320,7 +331,9 @@ and no escape hatch exposing the database handle.
 
 Two seams exist with exactly one implementation each: `channel` (ssh) and `mux`
 (tmux). Defined so a second backend is possible; not designed for one that does
-not exist. Rex is read, not driven, so it is a reader rather than a third seam.
+not exist. Rex is a reader for collection, and the `rex` CLI drives it for
+actions (focus, prompt, stop, capture, local and `rex -S`): a CLI, not a third
+seam.
 The harness is not a seam at all: it speaks OSC 7501 to its terminal and murmur
 never talks to it.
 
@@ -347,18 +360,22 @@ or deleted, not even a `-shm`, so 2.x keeps working there.
 
 ## The data model
 
-In `state.db` (`STRICT`, `user_version = 13`), only what the multiplexer cannot
+In `state.db` (`STRICT`, `user_version = 15`), only what the multiplexer cannot
 remember for murmur:
 
 - `seen` — the last state each live local pane was in, since when, and the
   identity it had (name, workstream, role, driver, harness, cli, title). The
   memory that tells a pane that vanished mid-work from one that finished.
-- `crashed` — a pane that vanished while `running`, `waiting` or `blocked`,
-  with the identity it was last seen with, until someone dismisses it or a new
+- `crashed` — a pane that vanished while `running`, `waiting` or `blocked`
+  (a crew worker or delegate that mu closed mid-work is not a crash; only a
+  human's pane or a crew orchestrator is), with the identity it was last seen with, until someone dismisses it or a new
   pane takes the address. murmur's one word of its own.
 - `alerted` — which [alert](#alerting) events have fired.
 - `peers` — the peer cache: one validated snapshot per peer, plus the two
-  clocks (`snapshot_at`, the peer's; `fetched_at`, ours).
+  clocks (`snapshot_at`, the peer's; `fetched_at`, ours) and the optional
+  `rex_host` label of the peer's Rex server.
+- `pane_process` — a cache of a pane's root process (argv, mu identity
+  environment), read once per pane process.
 - `compat` — the oldest schema that can use this file.
 
 Every write is one statement or one `.immediate` transaction. `syncLocal` reads
@@ -366,9 +383,10 @@ the previous sightings and writes the new ones, so a deferred transaction would
 start as a reader and fail its upgrade with `SQLITE_BUSY_SNAPSHOT` when the
 status bar and a dash collect at once; `.immediate` makes the loser wait.
 
-**Reset, not migrate.** A store at an older schema is rebuilt, keeping only the
-peers (the one thing a person typed): every other row is re-observed at the next
-collect. A store from a newer build is refused, never rebuilt downward,
+**Upgrade additive changes, reset the rest.** A store at schema 13 or 14 is
+upgraded in place (14 adds `peers.rex_host`, 15 adds `pane_process`) and keeps
+every row. A store older than that is rebuilt, keeping only the peers (the one
+thing a person typed): every other row is re-observed at the next collect. A store from a newer build is refused, never rebuilt downward,
 unless its `compat` stamp admits this build. Salvage, delete and rebuild happen
 under one file lock, because deleting the database file is the one operation
 SQLite cannot serialise.
@@ -431,8 +449,8 @@ Rules, each of which a reader depends on:
 2. No pid is in it, on purpose. A reader has nothing to probe.
 3. A pane with `"agent": null` and `"attention": []` is not emitted, and is
    rejected if a document carries one.
-4. `server` is an exact tagged value: `default` has no `value`, `label` has a
-   non-empty value, and `path` has an absolute path. A remote path is interpreted
+4. `server` is an exact tagged value: `default` and `rex` have no `value`, `label`
+   has a non-empty value, and `path` has an absolute path. A remote path is interpreted
    only on the node that owns it.
 5. `panes` order is presentation-only. Emitted sorted by server and pane id so
    the output diffs cleanly; readers sort for themselves.
@@ -547,10 +565,12 @@ only thing that writes what it concluded:
    `_id`, `_state_time`), the OSC 7577 record (`pane_resume_command`, `_cwd`),
    the `@mu_*` options and the pill's current values. Free text is escaped so a
    `|` cannot split a row.
-2. Rex, when it runs: `session.list`, `session.list_blocks`, then
-   `program_status` and `process` per block, never starting a server. Any
-   failure is "no Rex", never an error and never a crash.
-3. A pane is listed when it has a program record or an `@mu_agent`, so a crew
+2. Rex, when it runs: one `rex do` Lua walk of the local server's sessions and
+   blocks (status, process, resume, labels), never starting a server. A failed
+   or malformed read is "no Rex", never an error and never a crash; a plain
+   shell block is no agent.
+3. A pane is listed when it has a program record, a live OSC 7577
+   `resume_command`, or an `@mu_agent`, so a crew
    pane whose program died is never missed, or when its foreground program is
    a known harness (`pi`, `claude`, `codex`), directly or run by `node`/`bun`
    (told from the root process's argv, in the same cached read). Its word:
@@ -568,7 +588,8 @@ only thing that writes what it concluded:
    carried while the state holds). And a pane present last time and absent now:
    gone while `running`, `waiting` or `blocked` is a crash, recorded in
    `crashed` with the identity it was last seen with; gone at rest is a pane
-   that finished. A server read as null (a timeout, a permission error) is no
+   that finished, and so is a crew worker or delegate mu closed (only a human's
+   pane or a crew orchestrator crashes). A server read as null (a timeout, a permission error) is no
    evidence and changes nothing — treating it as empty would paint every agent
    on it `crashed`.
 
@@ -847,8 +868,8 @@ paths to a pane's host are not alike:
 | surface | needs |
 |---|---|
 | collect | `ssh <target> murmur export` |
-| glance (dash pane glance) | `ssh <target> tmux capture-pane -e` |
-| jump | `ssh <target>`, interactively |
+| glance (dash pane glance) | `ssh <target> tmux capture-pane -e` (a Rex pane: `rex capture`, or `rex -S`) |
+| jump | `ssh <target>`, interactively (a Rex pane: `rex -S`, or ssh `rex`) |
 
 **A card renders only from collected state; a capture serves one selected pane.**
 This is a rule, arrived at by breaking it. An earlier build captured a pane per
@@ -882,7 +903,7 @@ agent an orchestrator placed want opposite treatment: when the orchestrated one
 finishes, its supervisor consumes the result and nobody needs to acknowledge
 anything. Same facts, opposite attention. So an orchestrated agent's `done` is
 crew, and its rows are hidden from status, dash, and sidepanel
-unless its attention includes `blocked` or `crashed` — the two kinds only a
+unless its attention includes `blocked`, `error` or `crashed` — the kinds only a
 human can answer. That list is `NEEDS_HUMAN`, shared by every surface, because
 it was two literals in two files. That duplication once hid a row that needed a
 human.
@@ -900,7 +921,7 @@ makes the pane human, so a mixed pane never hides a request a person raised.
 different problems: a stateless `capture-pane` (cheap, and what the preview
 does) and continuous frame streaming with resize negotiation and arbitrary
 input routing (most of herdr's codebase). Dash adds buffered prompt submission:
-the editor is local, and one tmux command runs on submission. It does not stream
+the editor is local, and one tmux (or `rex`) command runs on submission. It does not stream
 a terminal, negotiate size, or forward each key. Glance remains small because
 murmur still does not emulate a terminal.
 
@@ -1114,4 +1135,6 @@ each was cheaper to accept than to solve:
   not crashed (a null read is no evidence), but they are not published either,
   so a peer briefly sees them gone. They return, with their age, at the next
   read that succeeds.
-- **Stock tmux shows no local panes.** It drops OSC 7501; `doctor` says so.
+- **Stock tmux shows no live state.** It drops OSC 7501; `doctor` says so. It
+  still lists `@mu_agent` crew panes, panes whose root environment says mu placed
+  them, and a foreground `pi`, `claude` or `codex` as `idle`.
