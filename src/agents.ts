@@ -388,16 +388,22 @@ function runOutside(
 ): boolean {
   const result =
     how === "rex"
-      ? run("rex", [
-          "window",
-          "new",
-          ...(env.REX_SESSION ? ["-s", env.REX_SESSION] : []),
-          label,
-          "--",
-          "sh",
-          "-c",
-          command,
-        ])
+      ? run(
+          "rex",
+          rexArgv(null, [
+            "window",
+            "new",
+            ...(env.REX_SESSION ? ["-s", env.REX_SESSION] : []),
+            // A positional before `--`, so rex parses a leading `-` as a flag:
+            // a pane title (set by the program, OSC 2) of `--shell=...` or
+            // `--help` became an option of this command. Never a dash first.
+            label.replace(/^-+/, "") || "agent",
+            "--",
+            "sh",
+            "-c",
+            command,
+          ]),
+        )
       : run("sh", ["-c", command], true);
   return result.status === 0 && !result.failed;
 }

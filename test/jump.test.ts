@@ -1502,7 +1502,18 @@ test("in a Rex pane a local jump opens the agent in a new tab of this session", 
   expect(calls).toEqual([
     [
       "rex",
-      ["window", "new", "-s", "session:abc", "worker-1", "--", "sh", "-c", "tmux attach -t '%9'"],
+      [
+        "--autostart=false",
+        "window",
+        "new",
+        "-s",
+        "session:abc",
+        "worker-1",
+        "--",
+        "sh",
+        "-c",
+        "tmux attach -t '%9'",
+      ],
       undefined,
     ],
   ]);
@@ -1528,6 +1539,7 @@ test("in a Rex pane a remote jump probes, then opens the jump command in a new t
   expect(calls[1]).toEqual([
     "rex",
     [
+      "--autostart=false",
       "window",
       "new",
       "-s",
@@ -1540,6 +1552,30 @@ test("in a Rex pane a remote jump probes, then opens the jump command in a new t
     ],
     undefined,
   ]);
+});
+
+test("in a Rex pane a title starting with a dash is never read as a rex flag", () => {
+  // The label is a positional before `--`; a pane title is set by the program.
+  for (const [title, label] of [
+    ["--shell=/bin/echo", "shell=/bin/echo"],
+    ["--help", "help"],
+    ["---", "agent"],
+  ] as const) {
+    const calls: string[][] = [];
+    jumpToAgent(
+      store,
+      localView({ agent_name: null, pane_title: title }),
+      fakeMux({ livePanes: () => new Set([asPaneId("%9")]) }),
+      (_file, args) => {
+        calls.push(args);
+        return ok();
+      },
+      { TERM_PROGRAM: "rex", REX_SESSION: "session:abc" },
+    );
+    const args = calls[0] ?? [];
+    expect(args[args.indexOf("--") - 1]).toBe(label);
+    expect(args.slice(0, args.indexOf("--")).some((arg) => arg.startsWith("--s"))).toBe(false);
+  }
 });
 
 test("in a Rex pane a tab that cannot be opened is reported", () => {
