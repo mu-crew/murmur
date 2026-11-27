@@ -555,6 +555,8 @@ test.each([
   "Error: no Rex server is running at /nonexistent.sock, and autostart is disabled",
   "Error: connecting to Rex server http://192.0.2.1:1 timed out after 1s; increase --timeout: context deadline exceeded",
   "Error: connecting to Rex server http://127.0.0.1:1: dial tcp 127.0.0.1:1: connect: connection refused",
+  // rex's own text for a scheme-less `-S 127.0.0.1:1` (no server word before the colon).
+  "Error: connecting to Rex server: probing https://127.0.0.1:1: connecting to API control: failed to WebSocket dial: dial tcp 127.0.0.1:1: connect: connection refused",
   "Error: connecting to Rex server ssh://nonexistent.invalid: ssh could not connect to nonexistent.invalid",
   "Error: connecting to the server timed out after 3s",
   "Error: connecting to the home at dev timed out after 3s",

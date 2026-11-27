@@ -264,7 +264,9 @@ class StepError extends Error {
 const REX_PRE_CONNECT = [
   /no Rex server is running/,
   /connecting to (the )?Rex server .*timed out/,
-  /connecting to (the )?Rex server \S+: .*connection refused/,
+  // The server word is absent for a scheme-less `host:port`, which rex probes:
+  // `connecting to Rex server: probing https://host:port: ... connection refused`.
+  /connecting to (the )?Rex server(?: \S+)?: .*connection refused/,
   /connecting to (the )?Rex server \S+: ssh could not connect/,
   /connecting to the server timed out/,
   /connecting to the home at .* timed out/,
