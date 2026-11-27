@@ -57,7 +57,7 @@ export const FEED_APP = "murmur";
 /** Agent harnesses murmur lists as `idle` before they emit any OSC 7501. */
 const KNOWN_HARNESSES: ReadonlySet<string> = new Set(["pi", "claude", "codex"]);
 
-/** The known harness a program name or path names (`pi`, `/x/claude.js`), else null. */
+/** The known harness a program name or path names (`pi`, `/x/claude.real`), else null. */
 export function harnessName(cli: string | null | undefined): string | null {
   if (!cli) return null;
   const name = (cli.split("/").pop() ?? "").replace(/\.real$/, "");

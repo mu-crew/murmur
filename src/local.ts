@@ -311,6 +311,8 @@ export function parsePaneRow(
   const fromEnv = facts?.managed === true;
   const name = agentName || (fromEnv ? (facts.agent_name ?? "") : "");
   const stream = workstream || (fromEnv ? (facts.workstream ?? "") : "");
+  // No `delegate` from the environment: mu runs delegates headless, never as
+  // a pane's root process, so its mu environment names an orchestrator or a worker.
   const paneRole = role || (fromEnv ? (facts.orchestrator ? "orchestrator" : "worker") : "");
   const isDead = dead === "1";
   const paneState = programState({
