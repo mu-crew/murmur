@@ -29,7 +29,7 @@ function pane(local: boolean, over: Partial<PaneView> = {}): PaneView {
     attention: [],
     freshness: "fresh",
     agent_name: "worker-1",
-    workstream: null,
+    workstream: "crew",
     role: null,
     cli: "pi",
     harness: "pi",
@@ -111,15 +111,23 @@ afterEach(() => {
   for (const server of servers.splice(0)) server.close();
 });
 
-/** A fake mu pi extension: answers `abort` the way protocol v1 does, recording requests. */
-async function ctlServer(): Promise<{ sock: string; requests: unknown[] }> {
+/** A fake mu pi extension for `agent` in `workstream`: answers protocol v1, recording requests. */
+async function ctlServer(
+  agent = "worker-1",
+  workstream = "crew",
+): Promise<{ sock: string; requests: unknown[] }> {
   const sock = join(mkdtempSync(join(tmpdir(), "murmur-ctl-")), "ctl.sock");
   const requests: unknown[] = [];
   const server = createServer((conn) => {
     conn.setEncoding("utf8");
     conn.on("data", (line: string) => {
-      requests.push(JSON.parse(line));
-      conn.end(`${JSON.stringify({ v: 1, ok: true, wasBusy: true })}\n`);
+      const request = JSON.parse(line) as { op: string };
+      requests.push(request);
+      const reply =
+        request.op === "hello"
+          ? { v: 1, ok: true, agent, workstream, incarnation: "i1", ops: ["hello", "abort"] }
+          : { v: 1, ok: true, wasBusy: true };
+      conn.end(`${JSON.stringify(reply)}\n`);
     });
   });
   servers.push(server);
@@ -138,8 +146,14 @@ test("a pi pane with a ctl socket is aborted over ctl, and confirmed once it lea
     ctlSocket: async () => sock,
     bounds,
   });
-  expect(outcome).toMatchObject({ delivered: true, via: "ctl", stopped: true, state: "idle" });
-  expect(requests).toEqual([{ op: "abort" }]);
+  expect(outcome).toMatchObject({
+    delivered: true,
+    via: "ctl",
+    ctl_fallback: null,
+    stopped: true,
+    state: "idle",
+  });
+  expect(requests).toEqual([{ op: "hello" }, { op: "abort" }]);
   expect(sent).toEqual([]);
   expect(calls[0]?.command).toBe("tmux");
   expect(calls[0]?.args).toEqual(expect.arrayContaining(["display-message", "-t", "%9"]));
@@ -176,8 +190,104 @@ test("a ctl socket nothing answers on falls back to Escape", async () => {
     ctlSocket: async () => dead,
     bounds,
   });
-  expect(outcome).toMatchObject({ via: "escape", stopped: true, state: "idle" });
+  expect(outcome).toMatchObject({
+    via: "escape",
+    ctl_fallback: "no_answer",
+    stopped: true,
+    state: "idle",
+  });
   expect(sent).toHaveLength(1);
+});
+
+test("an inherited socket of another agent is never aborted: Escape, identity_mismatch", async () => {
+  for (const [agent, workstream] of [
+    ["boss", "crew"],
+    ["worker-1", "other"],
+  ] as const) {
+    const { sock, requests } = await ctlServer(agent, workstream);
+    const { run, sent } = escapes();
+    const { capture } = recorder(() => "0||idle|\n");
+    const outcome = await stopPane(store(), pane(true), {
+      run,
+      capture,
+      ctlSocket: async () => sock,
+      bounds,
+    });
+    expect(outcome).toMatchObject({ via: "escape", ctl_fallback: "identity_mismatch" });
+    expect(requests).toEqual([{ op: "hello" }]);
+    expect(sent).toHaveLength(1);
+  }
+});
+
+test("only a pi pane with a mu identity is offered ctl; the socket is not even asked otherwise", async () => {
+  const cases: [Partial<PaneView>, string][] = [
+    [{ harness: "claude" }, "not_pi"],
+    [{ harness: null }, "not_pi"],
+    [{ agent_name: null }, "no_identity"],
+    [{ workstream: null }, "no_identity"],
+  ];
+  for (const [over, why] of cases) {
+    const { sock, requests } = await ctlServer();
+    const { run, sent } = escapes();
+    const { capture } = recorder(() => "0||idle|\n");
+    const outcome = await stopPane(store(), pane(true, over), {
+      run,
+      capture,
+      ctlSocket: async () => sock,
+      bounds,
+    });
+    expect(outcome).toMatchObject({ via: "escape", ctl_fallback: why });
+    expect(requests).toEqual([]);
+    expect(sent).toHaveLength(1);
+  }
+});
+
+test("an unreadable state reply is unconfirmed, never idle", async () => {
+  for (const reply of ["", "\n", "Welcome to dev\n0||idle|\n", "0||idl", "0|", "x||idle|\n"]) {
+    const { run } = escapes();
+    const { capture } = recorder(() => reply);
+    const outcome = await stopPane(store(), pane(true), {
+      run,
+      capture,
+      ctlSocket: async () => null,
+      bounds,
+    });
+    expect(outcome).toMatchObject({ delivered: true, stopped: null, state: null });
+  }
+});
+
+test("a Rex error that reads like tmux's is not taken for a gone pane", async () => {
+  const { run } = escapes();
+  const { capture } = recorder(() => new Error("can't find pane: block:b1"));
+  const outcome = await stopPane(store(), rexBlock(true), { run, capture, bounds });
+  expect(outcome).toMatchObject({ stopped: null, state: null });
+});
+
+test("a remote Rex read with both legs hanging stays within probeMs per probe and totalMs overall", async () => {
+  const { run } = escapes();
+  const timeouts: number[] = [];
+  // rex -S gives up at 120ms of its 200; ssh hangs for as long as it is let.
+  const calls: string[] = [];
+  const hang: Capture = (command, _args, ms) => {
+    calls.push(command);
+    timeouts.push(ms);
+    const after = command === "rex" ? Math.min(ms, 120) : ms;
+    return new Promise((_, reject) => setTimeout(() => reject(new Error("timed out")), after));
+  };
+  const slow: StopBounds = { totalMs: 300, intervalMs: 20, probeMs: 200, ctlMs: 100 };
+  const started = Date.now();
+  const outcome = await stopPane(store("me@dev"), rexBlock(false), {
+    run,
+    capture: hang,
+    bounds: slow,
+  });
+  expect(Date.now() - started).toBeLessThan(slow.totalMs + 150);
+  expect(outcome).toMatchObject({ stopped: null, state: null });
+  // The first probe's two legs share its 200ms: the ssh leg gets only the rest.
+  expect(calls.slice(0, 2)).toEqual(["rex", "ssh"]);
+  expect(timeouts[0]).toBe(200);
+  expect(timeouts[1]).toBeGreaterThan(0);
+  expect(timeouts[1]).toBeLessThanOrEqual(slow.probeMs - 120);
 });
 
 test("a pane that vanished after the interrupt is stopped, state gone", async () => {
@@ -270,6 +380,9 @@ test("the state line reads as the collector reads list-panes", () => {
   expect(parseStateLine("0||working|mu/delegates\n")).toBe("waiting");
   expect(parseStateLine("1|1|working|\n")).toBe("crashed");
   expect(parseStateLine("0|||\n")).toBe("idle");
+  expect(parseStateLine("0||working|a|b\n")).toBe("running");
+  for (const bad of ["", "0||idle", "2||idle|", "0|x|idle|", "banner\n0||idle|\n"])
+    expect(parseStateLine(bad)).toBeNull();
 });
 
 test("MU_CTL_SOCK is read from the pane process's environment", () => {

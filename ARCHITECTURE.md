@@ -55,6 +55,26 @@ them requires a major version:
   a fresh re-read, with attachment focus and hardware-tap confirmation. On
   failure it prints one line on stderr and exits 1 (the caller relays it: a
   `display-popup -E` closes on exit)
+- `murmur stop <target> --json`: interrupts the agent a pane's `jump_target`
+  names (a mu pi agent by its ctl `abort`, after the socket's `hello` names the
+  pane's own agent and workstream; anything else by Escape), then reads the
+  pane's state back for up to 5s. Delivery alone is never success. It prints
+  one JSON object and exits 0 exactly when `ok` is `true`, else 1:
+  - `ok`: `true` only when the pane was seen to leave working
+  - `action`: `"stop"`; `jump_target`: the token given
+  - `via`: `"ctl"` or `"escape"`; `ctl_fallback`: `null` when `via` is
+    `"ctl"`, else why not: `not_local` (remote or Rex pane), `not_pi`,
+    `no_identity` (no mu agent and workstream on the pane), `no_socket`,
+    `no_answer`, `identity_mismatch` (the socket is another agent's, e.g.
+    inherited), `abort_failed`
+  - `stopped`: `true` (left working), `false` (still working at the bound) or
+    `null` (its state could not be read: unconfirmed, not a guess)
+  - `state`: the last state read (`crashed|error|blocked|done|running|waiting|idle`,
+    or `gone` for a pane that no longer exists), `null` if none was
+  - on failure, `reason` and a one-line `message`: `not_stopped`
+    (`stopped: false`), `unconfirmed` (`stopped: null`), `delivery_failed`,
+    `invalid_target`, `not_found`. The last three carry no `via`, `stopped` or
+    `state`: nothing was sent, or what was could not be.
 - the `on-attention` hook: its path in the config dir and the `MURMUR_KIND`,
   `MURMUR_AGENT`, `MURMUR_HOST`, `MURMUR_LOCAL`, `MURMUR_PANE` and
   `MURMUR_MESSAGE` variables it runs with

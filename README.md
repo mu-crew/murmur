@@ -21,6 +21,7 @@ agent over ssh without leaving it.
 | --- | --- |
 | `murmur status` | Attention-state rollups plus the total crew count for a tmux status bar |
 | `murmur jump <target>` | Jump to the agent a `status --json` pane's `jump_target` names; what an external picker calls after selection |
+| `murmur prompt <target> [text]` / `murmur stop <target>` | Prompt or interrupt the agent a `jump_target` names; `stop` confirms the pane left working |
 | `murmur dash` | Full-screen dashboard: watch, prompt, and stop local or remote agents |
 | `murmur sidepanel` | Compact agent list in a full-height pane beside the current tmux window |
 | `murmur rex-feed` | The status pill's agents as terminal program status (OSC 7501), for Rex; bridges tmux-hosted agents into Rex.app, see [setup](docs/setup.md#rex) |
@@ -35,7 +36,9 @@ For scripts and other pickers, `murmur status --json` prints every pane in
 urgency order with derived `render_state`, `label`, `visible` and `jump_target`
 fields, plus each program's OSC 7577 `resume_command` and `resume_cwd`, and `--cached` reads the store without ever reaching a peer (pair it
 with a detached `murmur collect --quiet --floored`). Hand a pane's
-`jump_target` to `murmur jump`. The stable fields are listed in
+`jump_target` to `murmur jump`, `murmur prompt` or `murmur stop`; `murmur stop
+--json` reports whether the agent actually stopped (`ok`, `via`, `stopped`,
+`state`, `reason`; exit 0 only when it did). The stable fields are listed in
 [ARCHITECTURE.md](ARCHITECTURE.md#contract).
 
 murmur can also notify you: an executable `~/.config/murmur/on-attention` runs

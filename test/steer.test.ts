@@ -97,6 +97,7 @@ test("stopAgent sends Escape to the resolved pane and confirms it left working",
     action: "stop",
     jump_target: target(),
     via: "escape",
+    ctl_fallback: "no_identity",
     stopped: true,
     state: "idle",
   });

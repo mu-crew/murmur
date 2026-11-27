@@ -5,7 +5,13 @@ import { parseJumpTarget } from "./jump-target.js";
 import type { LocalOptions } from "./local.js";
 import { type Mux, tmux } from "./mux.js";
 import { localStatus, type Status } from "./status.js";
-import { type Capture, type StopBounds, type StopState, stopPane } from "./stop.js";
+import {
+  type Capture,
+  type CtlFallback,
+  type StopBounds,
+  type StopState,
+  stopPane,
+} from "./stop.js";
 import type { Store } from "./store.js";
 import type { PaneView } from "./view.js";
 
@@ -20,7 +26,7 @@ export type SteerDeps = {
   run?: InputRunner;
   /** `stop`'s read back and ctl lookup; see `stopPane`. */
   capture?: Capture;
-  ctlSocket?: (pane: PaneView, capture: Capture) => Promise<string | null>;
+  ctlSocket?: (pane: PaneView, capture: Capture, ms: number) => Promise<string | null>;
   stopBounds?: StopBounds;
 };
 
@@ -58,6 +64,8 @@ type StopReceipt = {
   action: "stop";
   jump_target: string;
   via: "ctl" | "escape";
+  /** Why the stop was not a ctl abort; null when it was. */
+  ctl_fallback: CtlFallback | null;
   /** Null when the pane's state could not be read back at all. */
   stopped: boolean | null;
   state: StopState | null;
@@ -125,7 +133,12 @@ export function stopAgent(
     if (!outcome.delivered) {
       return { ok: false, reason: "delivery_failed", message: outcome.message };
     }
-    const receipt = { action: "stop" as const, jump_target: token, via: outcome.via };
+    const receipt = {
+      action: "stop" as const,
+      jump_target: token,
+      via: outcome.via,
+      ctl_fallback: outcome.ctl_fallback,
+    };
     if (outcome.stopped === true) {
       return { ok: true, ...receipt, stopped: true, state: outcome.state };
     }
