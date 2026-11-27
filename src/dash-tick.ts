@@ -355,7 +355,7 @@ export function dashHelpSections(view: DashViewState): DashHelpSection[] {
       title: "actions",
       hints: [
         { chord: "enter", label: "jump to the agent" },
-        { chord: "i", label: "prompt the agent (clears done)" },
+        { chord: "i", label: "prompt the agent (dismisses a crash)" },
         { chord: "^r", label: "refresh now" },
         { chord: "q", label: "quit" },
       ],
@@ -371,7 +371,7 @@ export function dashHelpSections(view: DashViewState): DashHelpSection[] {
       title: "view",
       hints: [
         { chord: "s", label: "cycle sort", value: view.sort },
-        { chord: "a", label: "toggle crew only", value: view.crew ? "crew only" : "all" },
+        { chord: "a", label: "show all crew", value: view.crew ? "shown" : "urgent only" },
         { chord: "f", label: "toggle stale agents", value: view.hideStale ? "hidden" : "shown" },
         { chord: "c", label: "toggle compact rows", value: view.compact ? "on" : "off" },
         { chord: "+/-", label: "resize the preview" },
@@ -380,7 +380,7 @@ export function dashHelpSections(view: DashViewState): DashHelpSection[] {
     {
       title: "prompt",
       hints: [
-        { chord: "^e", label: "send Escape to the agent" },
+        { chord: "^e", label: "stop the agent" },
         { chord: "?", label: "open or close this help" },
       ],
     },

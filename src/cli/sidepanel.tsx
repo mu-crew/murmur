@@ -78,7 +78,7 @@ export function sidepanelHelpSections(view: {
     {
       title: "view",
       hints: [
-        { chord: "a", label: "crew only", value: view.crew ? "on" : "off" },
+        { chord: "a", label: "all crew", value: view.crew ? "on" : "off" },
         { chord: "c", label: "compact", value: view.compact ? "on" : "off" },
       ],
     },

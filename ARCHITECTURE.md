@@ -74,8 +74,9 @@ them requires a major version:
     or `gone` for a pane that no longer exists), `null` if none was
   - on failure, `reason` and a one-line `message`: `not_stopped`
     (`stopped: false`), `unconfirmed` (`stopped: null`), `delivery_failed`,
-    `invalid_target`, `not_found`. The last three carry no `via`, `stopped` or
-    `state`: nothing was sent, or what was could not be.
+    `invalid_target`, `not_found`. The last three are only `{ ok, reason,
+    message }`: no `action`, `jump_target`, `via`, `ctl_fallback`, `stopped` or
+    `state`, since nothing was sent, or what was could not be.
 - the `on-attention` hook: its path in the config dir and the `MURMUR_KIND`,
   `MURMUR_AGENT`, `MURMUR_HOST`, `MURMUR_LOCAL`, `MURMUR_PANE` and
   `MURMUR_MESSAGE` variables it runs with

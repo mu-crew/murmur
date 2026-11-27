@@ -161,7 +161,7 @@ test("help lists every side panel key", () => {
     {
       title: "view",
       hints: [
-        { chord: "a", label: "crew only", value: "off" },
+        { chord: "a", label: "all crew", value: "off" },
         { chord: "c", label: "compact", value: "on" },
       ],
     },

@@ -302,16 +302,26 @@ test("help names the current value of every view toggle", () => {
 
   expect(values({ sort: "priority", crew: false, hideStale: false, compact: false })).toEqual({
     s: "priority",
-    a: "all",
+    a: "urgent only",
     f: "shown",
     c: "off",
   });
   expect(values({ sort: "age", crew: true, hideStale: true, compact: true })).toEqual({
     s: "age",
-    a: "crew only",
+    a: "shown",
     f: "hidden",
     c: "on",
   });
+});
+
+test("help describes i and ^e as the dash acts: i dismisses a crash, ^e stops", () => {
+  const labels = Object.fromEntries(
+    dashHelpSections(VIEW_STATE)
+      .flatMap((section) => section.hints)
+      .map((hint) => [hint.chord, hint.label]),
+  );
+  expect(labels.i).toBe("prompt the agent (dismisses a crash)");
+  expect(labels["^e"]).toBe("stop the agent");
 });
 
 /**

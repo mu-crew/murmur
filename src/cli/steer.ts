@@ -4,8 +4,9 @@ import type { Command } from "commander";
 type Options = { json?: boolean };
 
 const STOP_HELP = `
-A mu pi agent is aborted over its ctl socket, but only once the socket's hello
-names the pane's own agent and workstream; any other pane gets Escape. The
+A mu pi agent in a local tmux pane is aborted over its ctl socket, but only once
+the socket's hello names the pane's own agent and workstream; any other pane
+(remote, Rex, not pi) gets Escape, with ctl_fallback saying why. The
 pane's state is then read back for up to 5s: delivery alone is not success.
 
 --json prints one object; exit 0 exactly when ok is true, else 1:
@@ -18,7 +19,9 @@ pane's state is then read back for up to 5s: delivery alone is not success.
   stopped       true (left working) | false (still working) | null (unreadable)
   state         crashed|error|blocked|done|running|waiting|idle|gone, or null
   reason        on failure: not_stopped | unconfirmed | delivery_failed |
-                invalid_target | not_found (the last three carry no via/stopped/state)
+                invalid_target | not_found (the last three are only
+                ok, reason and message: nothing was sent, so no action, jump_target,
+                via, ctl_fallback, stopped or state)
   message       on failure: one line saying why
 
 See ARCHITECTURE.md#contract.`;
