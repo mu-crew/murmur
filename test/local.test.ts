@@ -347,6 +347,46 @@ test("a pane that clears its record is not a crash; one that leaves the server i
   expect(read.panes.map((pane) => pane.pane)).toEqual(["%2"]);
 });
 
+test("a retained pane that exits non-zero mid-work is a crash, unlisted or not", async () => {
+  const rows = [vtmuxRow({ pane: "%1", state: "working", command: "node" })];
+  const mux = vtmuxMux(rows);
+  await readLocal(store, mux, 1_000, { rex: false });
+  // remain-on-exit keeps %1; vtmux pruned its record, and a dead `node` is no harness.
+  rows.splice(0, 1, vtmuxRow({ pane: "%1", command: "node", dead: "1", dead_status: "1" }));
+  const read = await readLocal(store, mux, 2_000, { rex: false });
+  expect(read.crashed).toEqual(["%1"]);
+});
+
+test("a retained pane that exits zero mid-work finished, no crash", async () => {
+  const rows = [vtmuxRow({ pane: "%1", state: "working", command: "node" })];
+  const mux = vtmuxMux(rows);
+  await readLocal(store, mux, 1_000, { rex: false });
+  rows.splice(0, 1, vtmuxRow({ pane: "%1", command: "node", dead: "1", dead_status: "0" }));
+  expect((await readLocal(store, mux, 2_000, { rex: false })).crashed).toEqual([]);
+});
+
+test("a live pane is never also a recorded crash, whatever a racing collect wrote", async () => {
+  const mux = vtmuxMux([vtmuxRow({ pane: "%1", state: "working" })]);
+  // Another collect records %1 crashed between this one's sync and its read-back.
+  const racing: Store = {
+    ...store,
+    syncLocal(reads, now) {
+      const sync = store.syncLocal(reads, now);
+      store.recordCrash({
+        server: DEFAULT,
+        pane: "%1" as never,
+        session: "$0" as never,
+        window: "@0" as never,
+        session_name: null,
+        window_name: null,
+      });
+      return sync;
+    },
+  };
+  const read = await readLocal(racing, mux, 1_000, { rex: false });
+  expect(read.panes.map((pane) => pane.pane)).toEqual(["%1"]);
+});
+
 test("a Rex reader that fails is no Rex, never an error and never a crash", async () => {
   const rex = { kind: "rex" } as const;
   const pane = parse({ pane: "block:1", state: "working" });
@@ -473,6 +513,18 @@ test("a Rex block that clears its status is not a crash", async () => {
   const read = await readLocal(store, vtmuxMux([]), 2_000, { rex: () => readRex(call) });
   expect(read.crashed).toEqual([]);
   expect(read.panes).toEqual([]);
+});
+
+test("a retained Rex block that exits non-zero mid-work is a crash", async () => {
+  const blocks: Record<string, FakeBlock> = {
+    "block:human": { status: { records: [{ state: "working", app: "pi" }] }, process: {} },
+  };
+  const { call } = rexApi(blocks);
+  await readLocal(store, vtmuxMux([]), 1_000, { rex: () => readRex(call) });
+  // Rex keeps the block on exit and prunes its working record.
+  blocks["block:human"] = { status: { records: [] }, process: { last_exit: { exit_code: 1 } } };
+  const read = await readLocal(store, vtmuxMux([]), 2_000, { rex: () => readRex(call) });
+  expect(read.crashed).toEqual(["block:human"]);
 });
 
 test("rex-feed's own records in a Rex block are never read back", async () => {

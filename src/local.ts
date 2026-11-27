@@ -236,6 +236,14 @@ export function chosenPaneTitle(title: string, host = hostname()): string | null
   return title;
 }
 
+const DEAD = PANE_FIELDS.indexOf("#{pane_dead}");
+const DEAD_STATUS = PANE_FIELDS.indexOf("#{pane_dead_status}");
+
+/** Whether a `list-panes` row's program is gone, having exited other than 0. */
+function exitedNonZero(row: readonly string[]): boolean {
+  return row[DEAD] === "1" && row[DEAD_STATUS] !== "0";
+}
+
 /**
  * One `list-panes` row as an observed pane, or null for a pane murmur does not
  * list: neither a program reporting OSC 7501, nor one with a live OSC 7577
@@ -458,7 +466,15 @@ export function readTmux(
       server,
       rows: rows ?? [],
       panes: rows === null ? null : uniquePanes(rows, server, processes?.(server)),
-      live: new Set((rows ?? []).flatMap(([pane]) => (pane ? [pane] : []))),
+      // A pane dead non-zero is not live: one murmur no longer lists (a
+      // runtime-hosted harness, its record pruned on exit) must read as
+      // vanished mid-work, a crash.
+      live: new Set(
+        (rows ?? []).flatMap((row) => {
+          const pane = row[0];
+          return pane && !exitedNonZero(row) ? [pane] : [];
+        }),
+      ),
     };
   });
 }
@@ -547,8 +563,12 @@ export async function readLocal(
   const live = reads.flatMap((read) =>
     (read.panes ?? []).map((pane) => localPane(pane, sync.since.get(paneKey(pane)) ?? now)),
   );
+  // A crash a concurrent collect recorded since the sync, at an address this
+  // read holds live, describes a process this read just saw: the live pane wins.
+  const occupied = new Set(live.map(paneKey));
   const recorded = store
     .localPanes()
+    .filter((pane) => !occupied.has(paneKey(pane)))
     .map((pane): LocalPane => ({ ...pane, focused: false, runs_on: null }));
   return { panes: [...live, ...recorded], tmux, crashed: sync.crashed };
 }

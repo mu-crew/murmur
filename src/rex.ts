@@ -261,7 +261,6 @@ function parseWalk(reply: Json): RexRead | null {
     for (const block of list(blocksReply, "blocks")) {
       const blockId = str(block.block_id);
       if (blockId === null) continue;
-      live.add(blockId);
       const calls = methods[blockId];
       if (!isJson(calls)) throw new Unreadable();
       const status = value(calls.status);
@@ -270,6 +269,9 @@ function parseWalk(reply: Json): RexRead | null {
       const procReply = value(calls.process);
       if (procReply !== null && !isJson(procReply)) throw new Unreadable();
       const proc = procReply ?? {};
+      // A block that exited non-zero is not live: one murmur no longer lists
+      // (its working record pruned on exit) must read as vanished mid-work.
+      if (!exitedNonZero(proc)) live.add(blockId);
       if (status !== null && !isJson(status)) throw new Unreadable();
       if (resume !== null && !isJson(resume)) throw new Unreadable();
       const pane = blockPane({
@@ -291,6 +293,18 @@ function parseWalk(reply: Json): RexRead | null {
     }
   }
   return { server: { kind: "rex" }, panes, live };
+}
+
+/** The block's last exit code, or null when none is known. */
+function exitCode(proc: Json): number | null {
+  const exit = isJson(proc.last_exit) ? proc.last_exit : null;
+  return exit && typeof exit.exit_code === "number" ? exit.exit_code : null;
+}
+
+/** Whether the block's program is gone, having exited non-zero. */
+function exitedNonZero(proc: Json): boolean {
+  const code = exitCode(proc);
+  return !isJson(proc.child) && code !== null && code !== 0;
 }
 
 function blockPane(block: {
@@ -361,9 +375,8 @@ function blockPane(block: {
   )
     return null;
 
-  const exit = isJson(proc.last_exit) ? proc.last_exit : null;
-  const code = exit && typeof exit.exit_code === "number" ? exit.exit_code : null;
-  const dead = !isJson(proc.child) && code !== null && code !== 0;
+  const code = exitCode(proc);
+  const dead = exitedNonZero(proc);
   const state = programState({
     dead,
     deadStatus: code === null ? null : String(code),
