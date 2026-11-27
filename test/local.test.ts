@@ -533,3 +533,22 @@ test("doctor asks every tmux server and Rex, and names a server as a person type
   }));
   expect(withRex).toEqual({ tmux: [], rex: true });
 });
+
+test("parsePaneRow keeps an OSC 7577 pane as idle after vtmux clears done on focus", () => {
+  const parsed = parse({
+    pane: "%0",
+    command: "pi",
+    state: "",
+    app: "",
+    resume_command: "pi --session /tmp/s.jsonl",
+    resume_cwd: "/tmp",
+  });
+  expect(parsed).toMatchObject({
+    pane: "%0",
+    state: "idle",
+    cli: "pi",
+    resume_command: "pi --session /tmp/s.jsonl",
+  });
+  // Without 7501, 7577, or @mu_agent, a plain shell is still omitted.
+  expect(parse({ pane: "%1", command: "zsh", state: "" })).toBeNull();
+});

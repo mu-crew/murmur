@@ -5,6 +5,10 @@ so it says what changed for a user rather than listing every commit.
 
 ## Unreleased
 
+- **Keep focused agents visible after `done` clears.** `parsePaneRow` now also
+  admits panes with a live OSC 7577 `pane_resume_command` (as `idle`), so an
+  agent whose `done`/`error` record was cleared on focus by vtmux stays in
+  `murmur` and `tsesh` until its process exits.
 - **Skip dead Unix sockets in `mux.servers()`.** When tmux's socket directory
   accumulates more than four socket files (e.g. from leaked test servers),
   `murmur` now probes which sockets are actually listening in a single fast pass

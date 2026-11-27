@@ -196,8 +196,10 @@ export function chosenPaneTitle(title: string, host = hostname()): string | null
 
 /**
  * One `list-panes` row as an observed pane, or null for a pane murmur does not
- * list: neither a program reporting OSC 7501 nor a pane mu placed. A crew
- * pane is listed whatever its program says, so a dead one is never missed.
+ * list: neither a program reporting OSC 7501, nor one with a live OSC 7577
+ * resume record, nor a pane mu placed. Including OSC 7577 keeps an agent
+ * visible as `idle` after vtmux clears `done`/`error` on pane focus; vtmux
+ * prunes the resume record once the process exits, so a plain shell drops off.
  */
 export function parsePaneRow(fields: readonly string[], server: TmuxServer): ObservedPane | null {
   const [
@@ -230,7 +232,7 @@ export function parsePaneRow(fields: readonly string[], server: TmuxServer): Obs
     host = "",
   ] = fields;
   if (!pane || !session || !window) return null;
-  if (state === "" && agentName === "") return null;
+  if (state === "" && agentName === "" && resumeCommand === "") return null;
   // `murmur rex-feed`'s own pane: reading it back would re-report the fleet.
   if (app === FEED_APP) return null;
   const isDead = dead === "1";
