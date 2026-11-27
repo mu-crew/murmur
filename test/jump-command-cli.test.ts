@@ -406,6 +406,7 @@ test("stop with an absent rex j1 token reports not_found, not invalid_target", (
   const body = JSON.stringify(["host-x", { kind: "rex" }, "%9"]);
   const token = `j1:${Buffer.from(body, "utf8").toString("base64url")}`;
   const result = cliResult("stop", token, "--json");
-  expect(result.stdout + result.stderr).toContain("not_found");
-  expect(result.stdout + result.stderr).not.toContain("invalid_target");
+  expect(result.status).toBe(1);
+  expect(result.stderr).toBe("");
+  expect(JSON.parse(result.stdout).reason).toBe("not_found");
 });

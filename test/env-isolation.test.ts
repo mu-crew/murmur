@@ -79,6 +79,11 @@ test("every environment variable src/ reads is one the rig controls", () => {
         )) {
           if (match[1]) read.add(match[1]);
         }
+        // REX_* only as a property read: glance.ts quotes REX_* names that are
+        // its own shell and constant names, not environment reads.
+        for (const match of readFileSync(path, "utf8").matchAll(/\benv\.(REX_[A-Z0-9_]+)/g)) {
+          if (match[1]) read.add(match[1]);
+        }
       }
     }
   };

@@ -300,7 +300,12 @@ test("a node whose tmux cannot answer records no crash for the panes it could no
   const a = nodeStore(dirA);
   const b = nodeStore(dirB);
   a.addPeer("bubba", "bubba");
-  await collect(a, exportFrom(b, [working("%11")], 1_000), 1_000, local());
+  await collect(
+    a,
+    exportFrom(b, [working("%11", "worker-1", { mu_role: "orchestrator" })], 1_000),
+    1_000,
+    local(),
+  );
 
   await collect(a, exportFrom(b, null, 2_000), 2_000, local());
   expect(paneViews(a, IDENTITY_A, [], 2_000).flatMap((view) => view.attention)).toEqual([]);

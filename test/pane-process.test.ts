@@ -346,8 +346,3 @@ test("a bare script named like a harness is not one; its package decides", () =>
   expect(argvHarness(["node", "/srv/tools/pi.js"])).toBeNull();
   expect(argvHarness(["node", "codex.cjs"])).toBeNull();
 });
-
-test("a bare script named like a harness is not one; its package decides", () => {
-  expect(argvHarness(["node", "/srv/tools/pi.js"])).toBeNull();
-  expect(argvHarness(["node", "codex.cjs"])).toBeNull();
-});

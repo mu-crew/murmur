@@ -153,6 +153,7 @@ test("the single-pass read preserves names and option values containing pipes", 
     const session = asSessionId(run("display-message", "-p", "#{session_id}"));
     run("set-option", "-p", "-t", pane, "@mu_agent", "a|~0|~1");
     run("set-option", "-p", "-t", pane, "@mu_workstream", "w|s");
+    run("set-option", "-p", "-t", pane, "@mu_pending", "1|99");
 
     const rows = tmux.listPanes([...PANE_FIELDS, ...PILL_FIELDS], server);
     expect(rows).toHaveLength(1);
@@ -167,7 +168,9 @@ test("the single-pass read preserves names and option values containing pipes", 
       agent_name: "a|~0|~1",
       workstream: "w|s",
       state: "idle",
+      pending: null,
     });
+    expect(rows?.[0]).toHaveLength(PANE_FIELDS.length + PILL_FIELDS.length);
   } finally {
     vi.unstubAllEnvs();
     try {

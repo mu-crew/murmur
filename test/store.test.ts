@@ -63,6 +63,8 @@ function location(pane = "%1", over: Partial<Location> = {}): Location {
 }
 
 /** One pane as a collect saw it. */
+const HUMAN = { driver: "human" } as const;
+
 function seen(pane: string, state: PaneState, over: Partial<SeenPane> = {}): SeenPane {
   return {
     ...location(pane),
@@ -117,7 +119,7 @@ test("a crash is news when first seen, not when the program last reported", () =
 
 test("a pane still on the server that drops out of the listing did not crash", () => {
   const s = store();
-  s.syncLocal([{ server: DEFAULT, panes: [seen("%1", "running")] }], 1_000);
+  s.syncLocal([{ server: DEFAULT, panes: [seen("%1", "running", HUMAN)] }], 1_000);
   const sync = s.syncLocal([{ server: DEFAULT, panes: [], live: new Set(["%1"]) }], 2_000);
   expect(sync.crashed).toEqual([]);
   expect(s.localPanes()).toEqual([]);
@@ -257,7 +259,7 @@ test("a server that cannot be asked is no evidence, and changes nothing", () => 
   // A null read is a timeout or a permission error, not "no panes": treating
   // it as empty would paint every agent on the server `crashed`.
   const s = store();
-  s.syncLocal([{ server: DEFAULT, panes: [seen("%1", "running")] }], 1_000);
+  s.syncLocal([{ server: DEFAULT, panes: [seen("%1", "running", HUMAN)] }], 1_000);
   expect(s.syncLocal([{ server: DEFAULT, panes: null }], 2_000).crashed).toEqual([]);
   expect(s.localPanes()).toEqual([]);
   // And the sighting survives it, with its age.

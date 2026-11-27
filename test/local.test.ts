@@ -18,7 +18,7 @@ import {
 import { pillValues } from "../src/pill.js";
 import { readRex } from "../src/rex.js";
 import { openStore, type Store } from "../src/store.js";
-import { splitTmuxFields } from "../src/tmux-format.js";
+import { splitTmuxFields, tmuxText } from "../src/tmux-format.js";
 import { DELEGATES_RECORD, type TmuxServer } from "../src/types.js";
 import { fakeMux } from "./helpers/fake-mux.js";
 import { localPane, ROW_FIELDS, vtmuxMux, vtmuxRow } from "./helpers/panes.js";
@@ -54,7 +54,7 @@ test("the test helper's column names match the collector's format, one for one",
   expect(PANE_FIELDS[ROW_FIELDS.indexOf("id")]).toContain("pane_program_id");
   expect(PANE_FIELDS[ROW_FIELDS.indexOf("resume_command")]).toContain("pane_resume_command");
   expect(PANE_FIELDS[ROW_FIELDS.indexOf("mu_agent")]).toContain("@mu_agent");
-  expect(PANE_FIELDS[ROW_FIELDS.indexOf("mu_pending")]).toContain("@mu_pending");
+  expect(PANE_FIELDS[ROW_FIELDS.indexOf("mu_pending")]).toBe(tmuxText("@mu_pending"));
   expect(PANE_FIELDS[ROW_FIELDS.indexOf("dead_status")]).toBe("#{pane_dead_status}");
   expect(PANE_FIELDS[ROW_FIELDS.indexOf("focused")]).toBe(
     "#{&&:#{pane_active},#{&&:#{window_active},#{session_attached}}}",
@@ -157,10 +157,7 @@ test("a `|` in @mu_pending cannot shift the row's columns", () => {
   const wire = splitTmuxFields(row.join("|"));
   expect(wire).toHaveLength(row.length);
   expect(wire[ROW_FIELDS.indexOf("mu_pending")]).toBe("1|99");
-  const parsed = parsePaneRow(
-    wire.map((f, i) => (i === ROW_FIELDS.indexOf("mu_pending") ? "1|99" : f)),
-    DEFAULT,
-  );
+  const parsed = parsePaneRow(wire, DEFAULT);
   expect(parsed?.pending).toBeNull();
 });
 
@@ -625,7 +622,7 @@ test("doctor asks every tmux server and Rex, and names a server as a person type
 test("parsePaneRow keeps an OSC 7577 pane as idle after vtmux clears done on focus", () => {
   const parsed = parse({
     pane: "%0",
-    command: "pi",
+    command: "custom-agent",
     state: "",
     app: "",
     resume_command: "pi --session /tmp/s.jsonl",
@@ -634,7 +631,7 @@ test("parsePaneRow keeps an OSC 7577 pane as idle after vtmux clears done on foc
   expect(parsed).toMatchObject({
     pane: "%0",
     state: "idle",
-    cli: "pi",
+    cli: "custom-agent",
     resume_command: "pi --session /tmp/s.jsonl",
   });
   // Without 7501, 7577, or @mu_agent, a plain shell is still omitted.
