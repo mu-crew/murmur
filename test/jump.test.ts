@@ -755,7 +755,7 @@ test("a local jump reports a failed select-window instead of claiming success", 
 });
 
 test("a local jump to a live pane succeeds", () => {
-  vi.stubEnv("TMUX", "/tmp/tmux-501/default,1,0");
+  vi.stubEnv("TMUX", "/private/tmp/tmux-501/mule,1,0");
   const servers: unknown[] = [];
   const result = jumpToAgent(
     store,
@@ -777,6 +777,32 @@ test("a local jump to a live pane succeeds", () => {
     { kind: "label", value: "mule" },
     { kind: "label", value: "mule" },
   ]);
+});
+
+test("a local jump from another tmux server fails instead of switching a client there", () => {
+  // Inside the default server, an agent on `-L mule`: `tmux -L mule
+  // switch-client` cannot move this client, and with another terminal attached
+  // to mule it moved THAT one and reported ok.
+  vi.stubEnv("TMUX", "/private/tmp/tmux-501/default,1,0");
+  let attached = false;
+  const mux = fakeMux({
+    livePanes: () => new Set([asPaneId("%9")]),
+    attach: () => {
+      attached = true;
+      return true;
+    },
+  });
+  const mule = localView({ server: { kind: "label", value: "mule" } });
+  expect(jumpToAgent(store, mule, mux)).toMatchObject({ ok: false, reason: "unsupported_server" });
+  const socket = localView({ server: { kind: "path", value: "/tmp/rig.sock" } });
+  expect(jumpToAgent(store, socket, mux)).toMatchObject({
+    ok: false,
+    reason: "unsupported_server",
+  });
+  expect(attached).toBe(false);
+  // The same server still switches.
+  vi.stubEnv("TMUX", "/tmp/rig.sock,1,0");
+  expect(jumpToAgent(store, socket, mux)).toEqual({ ok: true });
 });
 
 test("a local pane that MOVED window is still jumped to, and nothing is written", () => {

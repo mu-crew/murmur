@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
+import { basename } from "node:path";
 import { SSH_OPTIONS } from "./channel.js";
 import { JUMP_CLIENT_OPTION } from "./goto.js";
 import { findHelper } from "./helper-path.js";
@@ -431,6 +432,29 @@ function wrapperSlot(
   return free ? { name: free, reuse: false } : null;
 }
 
+/**
+ * Whether `$TMUX` (the server this process runs inside) is definitely NOT the
+ * tmux server `server`. A tmux client lives on one server, so `switch-client`
+ * sent to another one cannot move it: it failed with `no current client`, or
+ * moved some other terminal's client attached there and reported ok.
+ *
+ * Lenient where it cannot tell: `default` and `-L` servers are matched on the
+ * socket's name, since `$TMUX` holds a resolved path (`/private/tmp/...` on
+ * macOS) that may not equal the conventional directory as spelled here.
+ */
+export function onOtherTmuxServer(env: NodeJS.ProcessEnv, server: TmuxServer): boolean {
+  const own = env.TMUX?.split(",")[0];
+  if (!own || server.kind === "rex") return false;
+  if (server.kind === "path") return own !== server.value;
+  return basename(own) !== (server.kind === "label" ? server.value : "default");
+}
+
+function tmuxServerName(server: TmuxServer): string {
+  if (server.kind === "label") return `-L ${server.value}`;
+  if (server.kind === "path") return `-S ${server.value}`;
+  return "default";
+}
+
 export function jumpToAgent(
   store: Store,
   agent: PaneView,
@@ -467,6 +491,13 @@ export function jumpToAgent(
           reason: "attach_failed",
           message: `could not attach to ${agentLabel(agent)} (${attach} failed).`,
         };
+  }
+  if (agent.local && explicitClient === undefined && onOtherTmuxServer(env, server)) {
+    return {
+      ok: false,
+      reason: "unsupported_server",
+      message: `${agentLabel(agent)} is on another tmux server than this client (${tmuxServerName(server)}); switch-client cannot cross servers. Jump from outside tmux or from that server.`,
+    };
   }
   if (agent.local) {
     // The PANE decides. This once asked about the WINDOW, which a live pane
