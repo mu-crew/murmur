@@ -397,3 +397,43 @@ test("a harness running a child tool is still listed via proc.child", async () =
   ]);
   expect((await readRex(call))?.panes.map((p) => p.pane)).toEqual(["block:child"]);
 });
+
+test("mu/role gives a mu agent its role and never the pane's state", async () => {
+  const rec = (state: string, id: string, title?: string, extra: object = {}) => ({
+    state,
+    app: "pi",
+    id,
+    title,
+    ...extra,
+  });
+  const block = (label: string, ...records: unknown[]) => ({
+    status: { records },
+    process: {},
+    label,
+  });
+  const { call } = rexWalk([
+    {
+      session_id: "s-1",
+      label: "mu-crew",
+      blocks: {
+        "block:orch": block("orch", rec("working", ""), rec("idle", "mu/role", "orchestrator")),
+        "block:work": block("worker-1", rec("idle", "mu/role", "worker")),
+        "block:dlg": block("delegate-1", rec("working", ""), rec("idle", "mu/role", "delegate")),
+        "block:old": block("worker-2", rec("working", "")),
+        "block:odd": block("worker-3", rec("idle", "mu/role", "admin")),
+        "block:feed": block("worker-4", rec("idle", "mu/role", "orchestrator", { app: "murmur" })),
+        "block:human": block("shell", rec("idle", "mu/role", "orchestrator")),
+      },
+    },
+  ]);
+  const read = await readRex(call);
+  const by = (id: string) => read?.panes.find((p) => p.pane === id);
+  expect(by("block:orch")).toMatchObject({ state: "running", role: "orchestrator", title: null });
+  // The role record alone is no state: the agent is listed by its label, idle.
+  expect(by("block:work")).toMatchObject({ state: "idle", role: "worker", harness: null });
+  expect(by("block:dlg")).toMatchObject({ state: "running", role: "delegate" });
+  for (const id of ["block:old", "block:odd", "block:feed"])
+    expect(by(id)).toMatchObject({ role: null });
+  // Not a mu agent: the role record neither lists it nor gives it a role.
+  expect(by("block:human")).toBeUndefined();
+});

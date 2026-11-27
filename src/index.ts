@@ -101,7 +101,7 @@ export type {
   SnapshotPane,
   TmuxServer,
 } from "./types.js";
-export { DEFAULT_DRIVER, DELEGATES_RECORD, SNAPSHOT_VERSION } from "./types.js";
+export { DEFAULT_DRIVER, DELEGATES_RECORD, ROLE_RECORD, SNAPSHOT_VERSION } from "./types.js";
 export { MURMUR_VERSION as VERSION } from "./version.js";
 export {
   age,

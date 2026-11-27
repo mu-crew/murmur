@@ -23,6 +23,7 @@ import {
   type Driver,
   FEED_APP,
   isHarnessCli,
+  ROLE_RECORD,
 } from "./types.js";
 
 /** Rex's panes murmur lists, and every block id Rex holds. */
@@ -291,9 +292,13 @@ function blockPane(block: {
   const { proc, resume } = block;
   const blockId = String(block.block.block_id);
   const label = str(block.block.label);
-  // `murmur rex-feed`'s own records are its echo of the fleet.
+  // `murmur rex-feed`'s own records are its echo of the fleet; mu's role
+  // record is identity, never the pane's state.
   const top = summary(
-    block.records.filter((record) => record.app !== FEED_APP && record.effective_app !== FEED_APP),
+    block.records.filter(
+      (record) =>
+        record.app !== FEED_APP && record.effective_app !== FEED_APP && record.id !== ROLE_RECORD,
+    ),
   );
   // mu's delegate count shows beside a running agent too, not only when it wins.
   // Only while working (a retained idle/done record is no pending work), and
@@ -312,6 +317,20 @@ function blockPane(block: {
     label !== MU_PLACEHOLDER &&
     label !== GENERIC_BLOCK
       ? label
+      : null;
+  // The crew role mu's pi reports on Rex (tmux's `@mu_role`), for a mu agent only.
+  const roleRecord = block.records.find(
+    (record) =>
+      record.id === ROLE_RECORD &&
+      record.state === "idle" &&
+      record.app !== FEED_APP &&
+      record.effective_app !== FEED_APP,
+  );
+  const roleTitle = roleRecord ? str(roleRecord.title) : null;
+  const role =
+    agentName !== null &&
+    (roleTitle === "orchestrator" || roleTitle === "worker" || roleTitle === "delegate")
+      ? roleTitle
       : null;
   // Listed like a tmux pane: an OSC 7501 record, a mu agent, or a live OSC 7577
   // record. Rex prunes a resume record once its owner exits, so a plain shell drops off.
@@ -355,7 +374,7 @@ function blockPane(block: {
     state_time: Number.isFinite(at) ? at : null,
     agent_name: agentName,
     workstream: agentName ? block.workstream : null,
-    role: null,
+    role,
     driver,
     harness: top ? (str(top.effective_app) ?? str(top.app)) : null,
     cli,

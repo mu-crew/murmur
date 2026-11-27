@@ -350,9 +350,9 @@ function sinceFor(before: SeenDbRow | undefined, pane: SeenPane, now: number): n
  * delegates while they still report working, and reports a worker that died
  * itself. Only an orchestrator, which nobody above it watches, crashes here.
  *
- * Known gap: Rex panes carry `role: null` (no `@mu_role` there), so a Rex
- * orchestrator's crash is skipped too. The role is read from the stored record,
- * so rex-mu-role-parity only has to populate it in src/rex.ts.
+ * The role is read from the stored record: tmux's `@mu_role`, or on Rex the
+ * `mu/role` OSC 7501 record mu's pi reports (src/rex.ts). A Rex orchestrator
+ * whose pi predates that record has `role: null` and is skipped.
  */
 function vanishedMidWork(gone: SeenDbRow, live: ReadonlySet<string> | undefined): boolean {
   if (live?.has(gone.pane)) return false;

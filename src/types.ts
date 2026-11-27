@@ -42,6 +42,13 @@ export type BlockedKind = (typeof BLOCKED_KINDS)[number];
 export const DELEGATES_RECORD = "mu/delegates";
 
 /**
+ * The OSC 7501 record id mu's pi extension reports a Rex pane's crew role
+ * under (tmux has the `@mu_role` pane option instead): `idle`, its `title`
+ * `orchestrator`, `worker` or `delegate` (mu's `actor_role`). Identity, not state: never the pane's summary.
+ */
+export const ROLE_RECORD = "mu/role";
+
+/**
  * The OSC 7501 `app` `murmur rex-feed` reports as. A pane carrying it is
  * murmur's own echo of the fleet, never an agent, so collectors skip it.
  */
