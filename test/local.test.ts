@@ -18,6 +18,7 @@ import {
 import { pillValues } from "../src/pill.js";
 import { readRex } from "../src/rex.js";
 import { openStore, type Store } from "../src/store.js";
+import { splitTmuxFields } from "../src/tmux-format.js";
 import { DELEGATES_RECORD, type TmuxServer } from "../src/types.js";
 import { fakeMux } from "./helpers/fake-mux.js";
 import { localPane, ROW_FIELDS, vtmuxMux, vtmuxRow } from "./helpers/panes.js";
@@ -53,6 +54,7 @@ test("the test helper's column names match the collector's format, one for one",
   expect(PANE_FIELDS[ROW_FIELDS.indexOf("id")]).toContain("pane_program_id");
   expect(PANE_FIELDS[ROW_FIELDS.indexOf("resume_command")]).toContain("pane_resume_command");
   expect(PANE_FIELDS[ROW_FIELDS.indexOf("mu_agent")]).toContain("@mu_agent");
+  expect(PANE_FIELDS[ROW_FIELDS.indexOf("mu_pending")]).toContain("@mu_pending");
   expect(PANE_FIELDS[ROW_FIELDS.indexOf("dead_status")]).toBe("#{pane_dead_status}");
   expect(PANE_FIELDS[ROW_FIELDS.indexOf("focused")]).toBe(
     "#{&&:#{pane_active},#{&&:#{window_active},#{session_attached}}}",
@@ -138,6 +140,8 @@ test("@mu_pending counts delegates beside a running agent, only while working an
   for (const bad of ["0", "-1", "x", "2.5", "3 ", ""]) {
     expect(parse({ state: "working", mu_pending: bad })?.pending).toBeNull();
   }
+  // Above MAX_SAFE_INTEGER is ignored.
+  expect(parse({ state: "working", mu_pending: "9007199254740993" })?.pending).toBeNull();
   expect(
     parse({
       state: "working",
@@ -146,6 +150,18 @@ test("@mu_pending counts delegates beside a running agent, only while working an
       mu_pending: "0",
     })?.pending,
   ).toBe(2);
+});
+
+test("a `|` in @mu_pending cannot shift the row's columns", () => {
+  const row = vtmuxRow({ state: "working", mu_pending: "1~199", pill_crashed: "5" });
+  const wire = splitTmuxFields(row.join("|"));
+  expect(wire).toHaveLength(row.length);
+  expect(wire[ROW_FIELDS.indexOf("mu_pending")]).toBe("1|99");
+  const parsed = parsePaneRow(
+    wire.map((f, i) => (i === ROW_FIELDS.indexOf("mu_pending") ? "1|99" : f)),
+    DEFAULT,
+  );
+  expect(parsed?.pending).toBeNull();
 });
 
 test("a blocked pane carries its kind; any other state carries none", () => {

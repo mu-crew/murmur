@@ -82,7 +82,9 @@ the record and the pane's lifecycle:
 
 Who the agent is comes from the pane options mu sets when it places a worker:
 `@mu_agent` (its name, and what makes the pane crew), `@mu_workstream`,
-`@mu_role`, and `@mu_host` for a remote worker's local pane. A pane without
+`@mu_role`, `@mu_host` for a remote worker's local pane, and `@mu_pending`
+(delegates out, a positive integer; counted only while the pane is `working`
+and alive, otherwise ignored). A pane without
 `@mu_agent` is yours.
 
 Harnesses that speak OSC 7501 natively need nothing: pi (>= 1.1.0), Claude Code

@@ -26,7 +26,8 @@ them requires a major version:
   `#{window_program_state}`, `#{session_program_state}`).
 - the pane options murmur reads, which mu sets on the panes it places:
   `@mu_agent` (name; makes the pane crew), `@mu_workstream`, `@mu_role`,
-  `@mu_host`
+  `@mu_host`, `@mu_pending` (delegates out; a positive integer, counted only
+  while the pane is `working` and alive, else ignored)
 - the OSC 7501 record id `mu/delegates`: a `working` record under it reads as
   `waiting`
 - `murmur status --json` (and `--cached`, which reaches no peer, so

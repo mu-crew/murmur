@@ -85,7 +85,7 @@ export const PANE_FIELDS = [
   tmuxText("@mu_role"),
   tmuxText(MU_HOST_OPTION),
   // How many delegates mu's pi extension has out; empty when unset.
-  "#{@mu_pending}",
+  tmuxText("@mu_pending"),
 ] as const;
 
 /** The pill's state words, in tmux's vocabulary, as `@murmur_count_<word>` names them. */
