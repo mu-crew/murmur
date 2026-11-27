@@ -267,8 +267,13 @@ export function parsePaneRow(
   if (app === FEED_APP) return null;
   const listed = state !== "" || agentName !== "" || resumeCommand !== "" || isHarnessCli(command);
   const hostedCommand = HARNESS_HOSTS.has(command);
+  // A dead pane's pid may be gone or reused, and a remote pane's root is the
+  // local ssh: neither process says anything about the pane's agent.
+  const readable = dead !== "1" && host === "" && command !== "ssh";
   const facts =
-    agentName === "" && (listed || hostedCommand) && processOf ? processOf(pane, pid) : null;
+    agentName === "" && readable && (listed || hostedCommand) && processOf
+      ? processOf(pane, pid)
+      : null;
   const hosted = hostedCommand ? (facts?.harness ?? null) : null;
   if (!listed && hosted === null) return null;
   // The tag is mu's word; the environment stands in only where it is missing.

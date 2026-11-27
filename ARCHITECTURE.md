@@ -137,10 +137,11 @@ Identity and address are separated:
 - **agent identity** — who the agent is, as mu names it in the pane options
   `@mu_agent`, `@mu_workstream` and `@mu_role`. A pane without `@mu_agent` is
   a person's own, unless its root process's environment says mu placed it
-  (`MU_MANAGED_AGENT=1`, `MU_AGENT_NAME`, `MU_WORKSTREAM`, `MU_ORCHESTRATOR`):
+  (`MU_MANAGED_AGENT=1`, `MU_AGENT_NAME`, `MU_WORKSTREAM`, `MU_ORCHESTRATOR=1`):
   mu before 5.6.1 could fail to tag. The tag always wins; the environment is
   read once per (pane, pid), cached in the store's `pane_process` table, and
-  never for Rex or a remote pane. `doctor` warns about such a pane. murmur mints no agent ids: a pane's program is whatever its
+  never for a dead pane, Rex or a remote pane (`@mu_host` set, or `ssh`). On
+  macOS only the `ps -E` suffix after the exact argv is environment. `doctor` warns about such a pane. murmur mints no agent ids: a pane's program is whatever its
   multiplexer says is there now.
 - **pane address** — the server tag plus pane id. Pane ids are scoped to a
   server, so `%34` on the default server and `%34` on `tmux -L mule` are

@@ -161,11 +161,33 @@ test("a node pane running something else stays unlisted", async () => {
   expect((await readLocal(store, mux, 1_000, { rex: false })).panes).toEqual([]);
 });
 
+test("a dead pane's process is never read", async () => {
+  const { mux, reads } = muxWith(
+    [vtmuxRow({ pane: "%1", state: "working", dead: "1" })],
+    () => WORKER,
+  );
+  const read = await readLocal(store, mux, 1_000, { rex: false });
+  expect(read.panes[0]?.agent).toMatchObject({ agent_name: null, driver: "human" });
+  expect(reads).toEqual([]);
+});
+
+test("a remote pane's process (the local ssh) is never read", async () => {
+  const { mux, reads } = muxWith(
+    [
+      vtmuxRow({ pane: "%1", state: "working", mu_host: "devbox" }),
+      vtmuxRow({ pane: "%2", state: "working", command: "ssh" }),
+    ],
+    () => WORKER,
+  );
+  const read = await readLocal(store, mux, 1_000, { rex: false });
+  expect(read.panes.map((pane) => pane.agent?.agent_name ?? null)).toEqual([null, null]);
+  expect(reads).toEqual([]);
+});
+
 // --- reading a process --------------------------------------------------------
 
 test("argvHarness names a harness a runtime runs, by script name or package", () => {
   expect(argvHarness(["node", "/opt/homebrew/bin/claude"])).toBe("claude");
-  expect(argvHarness(["/usr/bin/node", "/usr/local/bin/pi_cli/dist/bundle/cli.js"])).toBe("pi");
   expect(argvHarness(["node", "/x/node_modules/@mariozechner/pi-coding-agent/dist/cli.js"])).toBe(
     "pi",
   );
@@ -173,12 +195,36 @@ test("argvHarness names a harness a runtime runs, by script name or package", ()
   expect(argvHarness(["pi"])).toBe("pi");
   expect(argvHarness(["node", "/srv/app/server.js"])).toBeNull();
   // A harness-named directory under a non-runtime is not a harness.
-  expect(argvHarness(["python", "/x/pi_cli/cli.py"])).toBeNull();
+  expect(argvHarness(["python", "/x/node_modules/@anthropic-ai/claude-code/cli.py"])).toBeNull();
+});
+
+test("argvHarness skips runtime flags, and their values, to find the script", () => {
+  expect(argvHarness(["node", "--no-warnings", "/opt/homebrew/bin/claude"])).toBe("claude");
+  expect(
+    argvHarness(["node", "--max-old-space-size=8192", "--require", "/x/hook.js", "/bin/pi"]),
+  ).toBe("pi");
+  expect(argvHarness(["node", "-r", "/x/pi.js", "/srv/app.js"])).toBeNull();
+  expect(argvHarness(["node", "--import", "/x/claude", "--loader", "/x/pi", "/srv/a.js"])).toBe(
+    null,
+  );
+  expect(argvHarness(["node", "--no-warnings"])).toBeNull();
+});
+
+test("argvHarness never matches an arbitrary ancestor directory", () => {
+  expect(argvHarness(["node", "/Users/me/claude-code/server.js"])).toBeNull();
+  expect(
+    argvHarness(["node", "/Users/me/pi-coding-agent/node_modules/vitest/vitest.mjs"]),
+  ).toBeNull();
+  expect(
+    argvHarness(["node", "/x/node_modules/@anthropic-ai/claude-code/node_modules/vitest/v.mjs"]),
+  ).toBeNull();
 });
 
 test("ps -E output keeps only mu's keys and the harness", () => {
+  const argv = "node /opt/bin/pi --session s";
   const facts = parsePsEnvironment(
-    "node /opt/bin/pi --session s SECRET_API_KEY=hunter2 MU_MANAGED_AGENT=1 MU_AGENT_NAME=x MU_WORKSTREAM=crew MU_ORCHESTRATOR=",
+    argv,
+    `${argv} SECRET_API_KEY=hunter2 MU_MANAGED_AGENT=1 MU_AGENT_NAME=x MU_WORKSTREAM=crew MU_ORCHESTRATOR=\n`,
   );
   expect(facts).toEqual({
     managed: true,
@@ -188,6 +234,52 @@ test("ps -E output keeps only mu's keys and the harness", () => {
     harness: "pi",
   });
   expect(JSON.stringify(facts)).not.toContain("hunter2");
+});
+
+test("an argv word that looks like a mu key is not the environment", () => {
+  const argv = "pi fix MU_MANAGED_AGENT=1 MU_AGENT_NAME=spoofed";
+  expect(parsePsEnvironment(argv, `${argv} HOME=/h TERM=xterm`)).toMatchObject({
+    managed: false,
+    agent_name: null,
+    harness: "pi",
+  });
+});
+
+test("an env value with spaces cannot inject keys before or after the real ones", () => {
+  const argv = "/bin/pi";
+  const injected = "TEST=hello MU_MANAGED_AGENT=0 MU_AGENT_NAME=spoofed MU_ORCHESTRATOR=1 world";
+  const real = "MU_MANAGED_AGENT=1 MU_AGENT_NAME=x MU_ORCHESTRATOR=";
+  for (const env of [`${injected} ${real}`, `${real} ${injected}`]) {
+    const facts = parsePsEnvironment(argv, `${argv} ${env}`);
+    expect(facts).toMatchObject({ managed: false, agent_name: null, orchestrator: false });
+  }
+  // A repeat with the same value is no conflict.
+  expect(
+    parsePsEnvironment(argv, `${argv} MU_AGENT_NAME=x MU_MANAGED_AGENT=1 A=b MU_AGENT_NAME=x`),
+  ).toMatchObject({ managed: true, agent_name: "x" });
+});
+
+test("an env value with an escaped newline cannot inject a key", () => {
+  const argv = "/bin/pi";
+  const env = `${argv} NOTE=a\\012MU_MANAGED_AGENT=1\\012MU_AGENT_NAME=spoofed HOME=/h`;
+  expect(parsePsEnvironment(argv, env)).toMatchObject({ managed: false, agent_name: null });
+});
+
+test("MU_ORCHESTRATOR counts only as exactly 1", () => {
+  for (const [value, orchestrator] of [
+    ["1", true],
+    ["0", false],
+    ["false", false],
+    ["", false],
+  ] as const) {
+    const facts = parsePsEnvironment("/bin/pi", `/bin/pi MU_ORCHESTRATOR=${value}`);
+    expect(facts?.orchestrator).toBe(orchestrator);
+  }
+});
+
+test("a ps -E line that does not start with the argv is no fallback", () => {
+  expect(parsePsEnvironment("/bin/pi", "/bin/zsh MU_MANAGED_AGENT=1")).toBeNull();
+  expect(parsePsEnvironment("", "MU_MANAGED_AGENT=1")).toBeNull();
 });
 
 test("on Linux the facts come from /proc cmdline and environ", () => {
@@ -215,7 +307,9 @@ function fakePs(body: string): void {
 }
 
 test("ps answering is parsed; ps failing or hanging is null, never a throw", () => {
-  fakePs('echo "node /bin/pi MU_MANAGED_AGENT=1 MU_AGENT_NAME=x"');
+  fakePs(
+    'if [ "$1" = -E ]; then echo "node /bin/pi MU_MANAGED_AGENT=1 MU_AGENT_NAME=x"; else echo "node /bin/pi"; fi',
+  );
   expect(readPaneProcess("41", "darwin")?.agent_name).toBe("x");
   fakePs("exit 1");
   expect(readPaneProcess("41", "darwin")).toBeNull();
