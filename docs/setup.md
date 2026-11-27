@@ -273,7 +273,9 @@ window names, pane titles, OSC 7577 resume records and mu labels into the same
 shape as a tmux pane. A Rex pane's address is its block id;
 `murmur clear --rex --pane block:<id>` dismisses its crash. No Rex, or a Rex
 that does not answer, is simply no Rex panes. A crew pane that mu closes
-mid-work is not reported as a crash.
+mid-work is not reported as a crash. Known gap: Rex has no `@mu_role`, so a
+Rex pane's role is unknown and a Rex orchestrator that dies mid-work is not
+reported either (tmux orchestrators are). Tracked as rex-mu-role-parity.
 
 Remote Rex servers: `murmur peer add|set --rex-host <label>` tells murmur which
 Rex server (`rex -S <label>`) owns a peer's panes, so jump, prompt, stop and

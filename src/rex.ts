@@ -296,7 +296,16 @@ function blockPane(block: {
     block.records.filter((record) => record.app !== FEED_APP && record.effective_app !== FEED_APP),
   );
   // mu's delegate count shows beside a running agent too, not only when it wins.
-  const delegates = block.records.find((record) => record.id === DELEGATES_RECORD) ?? null;
+  // Only while working (a retained idle/done record is no pending work), and
+  // never murmur's own feed echo.
+  const delegates =
+    block.records.find(
+      (record) =>
+        record.id === DELEGATES_RECORD &&
+        record.state === "working" &&
+        record.app !== FEED_APP &&
+        record.effective_app !== FEED_APP,
+    ) ?? null;
   const agentName =
     block.workstream !== null &&
     label !== null &&

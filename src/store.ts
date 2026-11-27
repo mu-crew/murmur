@@ -349,6 +349,10 @@ function sinceFor(before: SeenDbRow | undefined, pane: SeenPane, now: number): n
  * stopped being listed). mu owns its crew's lifecycles: it closes workers and
  * delegates while they still report working, and reports a worker that died
  * itself. Only an orchestrator, which nobody above it watches, crashes here.
+ *
+ * Known gap: Rex panes carry `role: null` (no `@mu_role` there), so a Rex
+ * orchestrator's crash is skipped too. The role is read from the stored record,
+ * so rex-mu-role-parity only has to populate it in src/rex.ts.
  */
 function vanishedMidWork(gone: SeenDbRow, live: ReadonlySet<string> | undefined): boolean {
   if (live?.has(gone.pane)) return false;

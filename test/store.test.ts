@@ -174,6 +174,19 @@ test.each<[string, TmuxServer | { kind: "rex" }, string]>([
   expect(sync.crashed).toEqual([other]);
 });
 
+test("a Rex orchestrator's crash is skipped today: Rex panes have role null", () => {
+  // Known gap until rex-mu-role-parity populates role in src/rex.ts; with
+  // role "orchestrator" on the record the crash is recorded (see the tmux case).
+  const server = { kind: "rex" } as unknown as TmuxServer;
+  const pane = "block:01a21c8c-0000-7000-8000-000000000001";
+  const s = store();
+  s.syncLocal(
+    [{ server, panes: [seen(pane, "running", { server, driver: "orchestrated", role: null })] }],
+    1_000,
+  );
+  expect(s.syncLocal([{ server, panes: [] }], 2_000).crashed).toEqual([]);
+});
+
 test("a crash carries the identity the pane was last seen with", () => {
   const s = store();
   s.syncLocal(

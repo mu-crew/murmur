@@ -53,7 +53,7 @@ const KNOWN_HARNESSES: ReadonlySet<string> = new Set(["pi", "claude", "codex"]);
 /** The known harness a program name or path names (`pi`, `/x/claude.js`), else null. */
 export function harnessName(cli: string | null | undefined): string | null {
   if (!cli) return null;
-  const name = (cli.split("/").pop() ?? "").replace(/\.(?:real|js|mjs|cjs)$/, "");
+  const name = (cli.split("/").pop() ?? "").replace(/\.real$/, "");
   return KNOWN_HARNESSES.has(name) ? name : null;
 }
 

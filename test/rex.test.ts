@@ -357,3 +357,43 @@ test("mu/delegates sets pending whenever present, even under a running root", as
   expect(by("block:idle")).toMatchObject({ state: "waiting", pending: 2 });
   expect(by("block:none")).toMatchObject({ state: "running", pending: null });
 });
+
+test("mu/delegates counts only while working and never from a feed record", async () => {
+  const rec = (state: string, extra: object = {}) => ({ state, app: "pi", id: "", ...extra });
+  const del = (state: string, extra: object = {}) =>
+    rec(state, { id: "mu/delegates", msg: "2 delegates", ...extra });
+  const block = (...records: unknown[]) => ({ status: { records }, process: {} });
+  const { call } = rexWalk([
+    {
+      session_id: "s-1",
+      label: "a",
+      blocks: {
+        "block:idle": block(rec("idle"), del("idle")),
+        "block:done": block(rec("idle"), del("done")),
+        "block:feed": block(rec("working"), del("working", { app: "murmur" })),
+        "block:feed2": block(rec("working"), del("working", { effective_app: "murmur" })),
+      },
+    },
+  ]);
+  const read = await readRex(call);
+  for (const id of ["block:idle", "block:done", "block:feed", "block:feed2"])
+    expect(read?.panes.find((p) => p.pane === id)).toMatchObject({ pending: null });
+});
+
+test("a harness running a child tool is still listed via proc.child", async () => {
+  const quiet = { records: [] };
+  const { call } = rexWalk([
+    {
+      session_id: "s-1",
+      label: "work",
+      blocks: {
+        "block:child": {
+          status: quiet,
+          process: { child: { argv0: "/usr/bin/node", name: "pi" } },
+        },
+        "block:other": { status: quiet, process: { child: { name: "make" } } },
+      },
+    },
+  ]);
+  expect((await readRex(call))?.panes.map((p) => p.pane)).toEqual(["block:child"]);
+});

@@ -285,7 +285,10 @@ test("a ps -E line that does not start with the argv is no fallback", () => {
 test("on Linux the facts come from /proc cmdline and environ", () => {
   const proc = mkdtempSync(join(tmpdir(), "murmur-proc-"));
   mkdirSync(join(proc, "41"));
-  writeFileSync(join(proc, "41", "cmdline"), "node\0/usr/lib/node_modules/codex/bin/codex.js\0");
+  writeFileSync(
+    join(proc, "41", "cmdline"),
+    "node\0/usr/lib/node_modules/@openai/codex/bin/codex.js\0",
+  );
   writeFileSync(join(proc, "41", "environ"), "MU_MANAGED_AGENT=1\0MU_AGENT_NAME=x\0KEY=secret\0");
   expect(readPaneProcess("41", "linux", proc)).toEqual({
     managed: true,
@@ -337,4 +340,14 @@ test("doctor warns about a pane mu placed but did not tag", async () => {
     "mu did not tag this pane; is mu older than 5.6.1? run mu agent retag",
   );
   expect(warning?.severity).toBe("observation");
+});
+
+test("a bare script named like a harness is not one; its package decides", () => {
+  expect(argvHarness(["node", "/srv/tools/pi.js"])).toBeNull();
+  expect(argvHarness(["node", "codex.cjs"])).toBeNull();
+});
+
+test("a bare script named like a harness is not one; its package decides", () => {
+  expect(argvHarness(["node", "/srv/tools/pi.js"])).toBeNull();
+  expect(argvHarness(["node", "codex.cjs"])).toBeNull();
 });
