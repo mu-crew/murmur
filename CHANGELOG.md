@@ -5,6 +5,11 @@ so it says what changed for a user rather than listing every commit.
 
 ## Unreleased
 
+- **Skip dead Unix sockets in `mux.servers()`.** When tmux's socket directory
+  accumulates more than four socket files (e.g. from leaked test servers),
+  `murmur` now probes which sockets are actually listening in a single fast pass
+  instead of spawning a `tmux` subprocess per dead socket file.
+
 ## 3.0.1
 
 **Stale 2.x wiring detection in `murmur doctor`.** `murmur doctor` now scans

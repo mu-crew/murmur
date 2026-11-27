@@ -20,6 +20,43 @@ export type ServerInfo = {
   programResume: string | null;
 };
 
+// Above this many sockets in tmux's directory, probe which ones are actually
+// listening in a single helper pass so thousands of leaked test sockets cannot
+// stall `collect` or `doctor` with one `tmux` spawn per dead file.
+const LIVE_SOCKET_PROBE_THRESHOLD = 4;
+
+/**
+ * Filter Unix socket paths down to those with a listening server, in one child
+ * pass. Falls back to the input list if the probe itself fails.
+ */
+export function filterLiveSockets(paths: readonly string[]): string[] {
+  if (paths.length === 0) return [];
+  const script = `
+    const net = require("node:net");
+    const paths = JSON.parse(process.argv[1]);
+    Promise.all(paths.map((p) => new Promise((resolve) => {
+      let done = false;
+      const finish = (ok) => { if (!done) { done = true; clearTimeout(t); sock.destroy(); resolve(ok ? p : null); } };
+      const sock = net.createConnection(p, () => finish(true));
+      sock.on("error", () => finish(false));
+      const t = setTimeout(() => finish(false), 150);
+    }))).then((res) => process.stdout.write(JSON.stringify(res.filter(Boolean))));
+  `;
+  try {
+    const out = execFileSync(process.execPath, ["-e", script, JSON.stringify(paths)], {
+      encoding: "utf8",
+      timeout: 3000,
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    const parsed: unknown = JSON.parse(out);
+    return Array.isArray(parsed) && parsed.every((p) => typeof p === "string")
+      ? parsed
+      : [...paths];
+  } catch {
+    return [...paths];
+  }
+}
+
 // Up to this many candidate panes, `localPaneProcesses` runs `ps` once per pid.
 const PER_PID_PS_MAX = 4;
 
@@ -296,6 +333,7 @@ export const tmux: Mux = {
       } catch {
         names = [];
       }
+      const socketPaths: string[] = [];
       for (const name of names.sort()) {
         const path = join(directory, name);
         try {
@@ -303,6 +341,13 @@ export const tmux: Mux = {
         } catch {
           continue;
         }
+        socketPaths.push(path);
+      }
+      const livePaths =
+        socketPaths.length > LIVE_SOCKET_PROBE_THRESHOLD
+          ? filterLiveSockets(socketPaths)
+          : socketPaths;
+      for (const path of livePaths) {
         const server = deriveTmuxServer(path, directory);
         found.set(serverKey(server), server);
       }
