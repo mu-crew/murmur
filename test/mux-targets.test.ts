@@ -90,7 +90,15 @@ test("a crew pane on a real labeled server is read in one pass, and its crash is
   process.env.MURMUR_STATE_DIR = mkdtempSync(join(tmpdir(), "murmur-private-tmux-"));
   const store = openStore();
   try {
-    const first = await readLocal(store, tmux, Date.now(), { rex: false });
+    // A fresh pane reports the forked `tmux` child until it execs `sleep`
+    // (visible on Linux), so read until the program is up.
+    let first = await readLocal(store, tmux, Date.now(), { rex: false });
+    for (let i = 0; i < 50; i++) {
+      const cli = first.panes.find((entry) => entry.pane === pane)?.agent?.cli;
+      if (cli === "sleep") break;
+      execFileSync("sleep", ["0.1"]);
+      first = await readLocal(store, tmux, Date.now(), { rex: false });
+    }
     const mine = first.panes.filter((entry) => serverKey(entry.server) === serverKey(server));
     expect(mine.map((entry) => entry.pane)).toEqual([pane]);
     expect(mine[0]?.agent).toMatchObject({
