@@ -5,6 +5,11 @@ so it says what changed for a user rather than listing every commit.
 
 ## Unreleased
 
+## 3.1.1
+
+- **Rex pane detection via `$REX_BLOCK`:** `murmur dash` and `murmur jump` now recognise Rex panes from `$REX_BLOCK` as well as `$REX_SESSION` (Rex 0.1.0-preview.25 sets `$REX_BLOCK` without `$REX_SESSION`), and pass it to `rex window new -s`.
+- **Mux kind and Rex.app focus:** `dash` cards, compact rows, `sidepanel` facts, and the `/` filter now show whether each agent lives in `tmux` or `rex`. Jumping to a Rex pane from outside Rex on macOS now raises Rex.app to the foreground after `session.select`.
+
 ## 3.1.0
 
 - **Glance:** a Rex pane's preview streams only the last 1 MiB of its capture, so a full 64 MiB scrollback previews in well under the 3 s timeout instead of going blank; a remote Rex capture over ssh is trimmed on the far side the same way. The dash previews local Rex panes without blocking.
