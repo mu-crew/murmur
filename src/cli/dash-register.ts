@@ -64,7 +64,8 @@ export function registerDash(program: Command): void {
     .command("dash")
     .description("Watch agents and glance at their panes")
     .option("--goto", "switch to the running dash, or leave a murmur-controlled remote session")
-    .action(async (options: { goto?: boolean }) => {
+    .option("--popup", "exit after jumping to an agent (for tmux popups and Rex floating layers)")
+    .action(async (options: { goto?: boolean; popup?: boolean }) => {
       preferProductionReact();
       const { runDash } = await import("./dash.js");
       await runDash(options);

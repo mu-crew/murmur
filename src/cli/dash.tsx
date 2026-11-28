@@ -132,6 +132,7 @@ const SORTS: DashSort[] = ["priority", "node", "age"];
 type DashProps = {
   dashStore: DashStore;
   initial: Status;
+  popup?: boolean;
 };
 
 type SuspendTerminal = (action: () => void | Promise<void>) => Promise<void>;
@@ -447,7 +448,7 @@ function CompactRow({
   );
 }
 
-export function App({ dashStore, initial }: DashProps) {
+export function App({ dashStore, initial, popup = false }: DashProps) {
   const { exit, suspendTerminal } = useApp();
   const [, setStoreRevision] = useState(0);
   const store = dashStore.store;
@@ -714,8 +715,9 @@ export function App({ dashStore, initial }: DashProps) {
         ? await withDashTerminalSuspended(suspendTerminal, jump)
         : jump();
       setMessage(result.ok ? "" : result.message);
+      if (result.ok && popup) exit();
     },
-    [store, suspendTerminal],
+    [store, suspendTerminal, popup, exit],
   );
 
   const mouseLiveRef = useRef({
@@ -1314,7 +1316,7 @@ export function dashGoto(
  * so that declaring the command does not import this module, and with it
  * ink and react. See that file for the measurements.
  */
-export async function runDash(options: { goto?: boolean }): Promise<void> {
+export async function runDash(options: { goto?: boolean; popup?: boolean }): Promise<void> {
   if (options.goto) {
     dashGoto();
     return;
@@ -1331,10 +1333,15 @@ export async function runDash(options: { goto?: boolean }): Promise<void> {
   // answers about whichever pane the server thinks is active, so asking
   // would let a dash started in a popup mark someone else's pane.
   const pane = process.env.TMUX_PANE;
+  const popup = Boolean(options.popup || (process.env.TMUX && !pane));
   if (pane) tmux.markDashPane(asPaneId(pane));
   try {
     const instance = render(
-      <App dashStore={dashStore} initial={await localStatus(dashStore.store, identity)} />,
+      <App
+        dashStore={dashStore}
+        initial={await localStatus(dashStore.store, identity)}
+        popup={popup}
+      />,
       { alternateScreen: true },
     );
     await instance.waitUntilExit();
