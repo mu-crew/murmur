@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { Command } from "commander";
+import { resolveRexHost, rexHostLabels } from "../agents.js";
 import { hasWarmSocket, ssh } from "../channel.js";
 import { attachmentHoldingPeer, describeFailure, sessionChannelBusy } from "../collector.js";
 import { loadIdentity } from "../identity.js";
@@ -330,12 +331,14 @@ export function registerPeer(program: Command): void {
         // dropped the first); the targets only filter the ssh hosts.
         const configured = new Set(peers.map((entry) => entry.target));
         const discovered = options.all ? sshHosts().filter((host) => !configured.has(host)) : [];
+        const rexHosts = peers.length > 0 ? rexHostLabels() : new Set<string>();
         const now = Date.now();
 
         const rows = [
           ...peers.map((entry) => ({ entry, target: entry.target })),
           ...discovered.map((target) => ({ entry: undefined, target })),
         ].map(({ entry, target }) => {
+          const resolvedRex = entry ? resolveRexHost(entry, rexHosts) : null;
           return {
             // The handle other commands take: a peer's name, or for a host that
             // is not one yet, the ssh host `peer add` wants.
@@ -381,8 +384,10 @@ export function registerPeer(program: Command): void {
             // takes no session at all. JSON only: the table has no room and this
             // is a value for a script, not a reader.
             jump_command: entry?.jump_command ?? null,
-            // How this node's `rex -S` reaches the peer's Rex server, if set.
-            rex_host: entry?.rex_host ?? null,
+            // How this node's `rex -S` reaches the peer's Rex server: explicit
+            // `--rex-host`, or auto-matched from local `rex hosts`.
+            rex_host: resolvedRex?.host ?? null,
+            rex_host_source: resolvedRex?.source ?? null,
           };
         });
 
@@ -410,6 +415,7 @@ export function registerPeer(program: Command): void {
         // collects -- the common case, and one the task calls out -- the table
         // stays exactly as narrow as it is today.
         const showVersionColumn = rows.some((row) => row.version !== undefined);
+        const showRexColumn = rows.some((row) => row.rex_host !== null);
         process.stdout.write(
           formatTable([
             [
@@ -420,6 +426,7 @@ export function registerPeer(program: Command): void {
               ...(showVersionColumn ? ["VERSION"] : []),
               "LAST SEEN",
               "SSH",
+              ...(showRexColumn ? ["REX"] : []),
             ],
             ...rows.map((row) => [
               row.name,
@@ -429,6 +436,15 @@ export function registerPeer(program: Command): void {
               ...(showVersionColumn ? [row.version?.text ?? "-"] : []),
               row.last_seen ?? "-",
               row.ssh,
+              ...(showRexColumn
+                ? [
+                    row.rex_host === null
+                      ? "-"
+                      : row.rex_host_source === "auto"
+                        ? `${row.rex_host} (auto)`
+                        : row.rex_host,
+                  ]
+                : []),
             ]),
           ]),
         );

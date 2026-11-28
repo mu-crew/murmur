@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { peerForHost, rexArgv, shellQuote } from "./agents.js";
+import { peerForHost, resolveRexHost, rexArgv, rexHostLabels, shellQuote } from "./agents.js";
 import { SSH_OPTIONS } from "./channel.js";
 import { helperPath } from "./helper-path.js";
 import type { PaneId } from "./ids.js";
@@ -372,10 +372,21 @@ export const runInput: InputRunner = makeInputRunner();
 /** How a delivery reaches the pane's node: the ssh target, and its Rex host if set here. */
 export type InputRoute = { target: string | null; rexHost: string | null };
 
-export function inputRoute(store: Store, pane: PaneView): InputRoute {
+export function inputRoute(
+  store: Store,
+  pane: PaneView,
+  rexHosts?: ReadonlySet<string>,
+): InputRoute {
   if (pane.local) return { target: null, rexHost: null };
   const resolved = peerForHost(store, pane.host_id);
-  return { target: resolved?.target ?? null, rexHost: resolved?.peer.rex_host ?? null };
+  if (!resolved) return { target: null, rexHost: null };
+  if (pane.server.kind !== "rex") return { target: resolved.target, rexHost: null };
+  const labels =
+    resolved.peer.rex_host !== null ? new Set<string>() : (rexHosts ?? rexHostLabels());
+  return {
+    target: resolved.target,
+    rexHost: resolveRexHost(resolved.peer, labels)?.host ?? null,
+  };
 }
 
 async function deliver(

@@ -252,9 +252,62 @@ export function rexArgv(server: string | null, args: readonly string[]): string[
 }
 
 /**
+ * Parse `rex hosts --json` stdout into the set of configured Rex host labels.
+ * Returns an empty set on malformed or unexpected output.
+ */
+export function parseRexHostLabels(stdout: string): Set<string> {
+  const labels = new Set<string>();
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stdout);
+  } catch {
+    return labels;
+  }
+  const hosts = parsed && typeof parsed === "object" ? (parsed as { hosts?: unknown }).hosts : null;
+  if (!Array.isArray(hosts)) return labels;
+  for (const entry of hosts) {
+    if (!entry || typeof entry !== "object") continue;
+    const host = (entry as { host?: unknown }).host;
+    if (!host || typeof host !== "object") continue;
+    const label = (host as { label?: unknown }).label;
+    if (typeof label === "string" && label.trim() !== "") labels.add(label.trim());
+  }
+  return labels;
+}
+
+/**
+ * The labels configured in this machine's `rex hosts` (`rex --autostart=false
+ * hosts --json`). Local-only, never dials a peer, and returns an empty set when
+ * `rex` is missing or has no running server.
+ */
+export function rexHostLabels(run: Runner = spawnRunner): Set<string> {
+  const result = run("rex", rexArgv(null, ["hosts", "--json"]));
+  return succeeded(result) ? parseRexHostLabels(result.stdout) : new Set();
+}
+
+export type ResolvedRexHost = { host: string; source: "set" | "auto" };
+
+/**
+ * Resolve the `rex -S` host label for a peer: an explicit `--rex-host` wins,
+ * else an exact match of `peer.name` or `peer.target` in `rex hosts`.
+ */
+export function resolveRexHost(
+  peer: Pick<PeerRecord, "name" | "target" | "rex_host">,
+  labels: ReadonlySet<string>,
+): ResolvedRexHost | null {
+  if (peer.rex_host !== null) return { host: peer.rex_host, source: "set" };
+  if (labels.has(peer.name)) return { host: peer.name, source: "auto" };
+  if (labels.has(peer.target)) return { host: peer.target, source: "auto" };
+  return null;
+}
+
+const NO_REX_HOSTS: ReadonlySet<string> = new Set();
+
+/**
  * How this node reaches a remote Rex pane's server: `rex -S <rex_host>` when
- * the peer has one configured here, and the peer's warm ssh to its own local
- * Rex either way, as the fallback. Null when no peer reaches the host.
+ * the peer has one configured here (or matches a local `rex hosts` label), and
+ * the peer's warm ssh to its own local Rex either way, as the fallback. Null
+ * when no peer reaches the host.
  *
  * Viewer-side by design: the pane on the wire is a bare `{ kind: "rex" }` on
  * `host_id`, and only this node knows what its `rex hosts` calls that machine.
@@ -262,9 +315,12 @@ export function rexArgv(server: string | null, args: readonly string[]): string[
 export function rexRoute(
   store: Store,
   agent: Pick<PaneView, "host_id">,
+  run: Runner = spawnRunner,
 ): { peer: PeerRecord; target: string; rexHost: string | null } | null {
   const resolved = peerForHost(store, agent.host_id);
-  return resolved ? { ...resolved, rexHost: resolved.peer.rex_host } : null;
+  if (!resolved) return null;
+  const labels = resolved.peer.rex_host !== null ? NO_REX_HOSTS : rexHostLabels(run);
+  return { ...resolved, rexHost: resolveRexHost(resolved.peer, labels)?.host ?? null };
 }
 
 const succeeded = (result: ReturnType<Runner>) => result.status === 0 && !result.failed;
@@ -330,7 +386,7 @@ function localRexApp(run: Runner, client: string | undefined): { label: string |
 
 function jumpToRex(store: Store, agent: PaneView, run: Runner, env: NodeJS.ProcessEnv): JumpResult {
   const label = agentLabel(agent);
-  const route = agent.local ? null : rexRoute(store, agent);
+  const route = agent.local ? null : rexRoute(store, agent, run);
   if (!agent.local && !route) {
     return {
       ok: false,

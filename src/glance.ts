@@ -1,5 +1,5 @@
 import { execFileSync, spawn } from "node:child_process";
-import { peerForHost, rexArgv, shellQuote } from "./agents.js";
+import { peerForHost, resolveRexHost, rexArgv, rexHostLabels, shellQuote } from "./agents.js";
 import { endLinesWithReset, scan, sgrOnly } from "./ansi.js";
 import { SSH_OPTIONS } from "./channel.js";
 import { helperPath } from "./helper-path.js";
@@ -246,10 +246,21 @@ function rexCaptureArgs(agent: PaneView, server: string | null): string[] {
 /** A Rex capture's last `lines` lines. */
 const tail = (out: string, lines: number) => out.split("\n").slice(-lines).join("\n");
 
+const REX_HOSTS_TTL_MS = 10_000;
+let rexHostsCache: { labels: Set<string>; at: number } | null = null;
+
+function cachedRexHostLabels(): ReadonlySet<string> {
+  const now = Date.now();
+  if (rexHostsCache && now - rexHostsCache.at < REX_HOSTS_TTL_MS) return rexHostsCache.labels;
+  const labels = rexHostLabels();
+  rexHostsCache = { labels, at: now };
+  return labels;
+}
+
 /**
  * How a remote glance reaches the pane: `rex -S <rex_host>` first for a Rex
- * pane whose peer has one configured here, then the ssh (null when it must not
- * run), or null when nothing may run at all.
+ * pane whose peer has one configured here (or auto-matched in `rex hosts`),
+ * then the ssh (null when it must not run), or null when nothing may run at all.
  *
  * Shared by `glance` and `glanceAsync` so the skip rules and the quoting exist
  * once; only the way each is waited on differs.
@@ -258,14 +269,16 @@ function remoteGlance(
   store: Store,
   agent: PaneView,
   lines: number,
+  rexHosts?: ReadonlySet<string>,
 ): { rex: string[] | null; ssh: { target: string; argv: string[] } | null } | null {
   const resolved = peerForHost(store, agent.host_id);
   if (!resolved) return null;
   const { peer, target } = resolved;
   const rex = agent.server.kind === "rex";
+  const rexHost = rex ? (resolveRexHost(peer, rexHosts ?? new Set())?.host ?? null) : null;
   // `rex -S` is its own transport, so a failed murmur collect over ssh does not
   // gate it; the skip below is about the ssh's cost.
-  const direct = rex && peer.rex_host !== null ? rexCaptureArgs(agent, peer.rex_host) : null;
+  const direct = rex && rexHost !== null ? rexCaptureArgs(agent, rexHost) : null;
   // Never dial a peer whose last attempt failed.
   //
   // The preview runs PER KEYPRESS as the cursor moves, so this ssh is on the
@@ -339,7 +352,9 @@ export function glance(
         : tmux.capture(agent.pane, lines, agent.server);
     return local === null ? null : previewSafe(local);
   }
-  const remote = remoteGlance(store, agent, lines);
+  const rexHosts =
+    agent.server.kind === "rex" && rexRun === rexRunner ? cachedRexHostLabels() : undefined;
+  const remote = remoteGlance(store, agent, lines, rexHosts);
   if (!remote) return null;
   const { rex, ssh } = remote;
   const out = firstAnswer([
@@ -363,9 +378,13 @@ export async function glanceAsync(
   rexRun: RexGlanceRunnerAsync = rexRunnerAsync,
 ): Promise<string | null> {
   if (agent.local && agent.server.kind !== "rex") return glance(store, agent, lines);
+  const rexHosts =
+    !agent.local && agent.server.kind === "rex" && rexRun === rexRunnerAsync
+      ? cachedRexHostLabels()
+      : undefined;
   const remote = agent.local
     ? { rex: rexCaptureArgs(agent, null), ssh: null }
-    : remoteGlance(store, agent, lines);
+    : remoteGlance(store, agent, lines, rexHosts);
   if (!remote) return null;
   const { rex, ssh } = remote;
   const out = await firstAnswerAsync([

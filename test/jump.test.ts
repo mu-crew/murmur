@@ -17,9 +17,11 @@ import {
   agentLocation,
   jumpToAgent,
   onOtherTmuxServer,
+  parseRexHostLabels,
   RAISE_REX_JXA,
   type Runner,
   remoteSessionName,
+  resolveRexHost,
   WRAPPER_CLIENT_OPTION,
 } from "../src/agents.js";
 import { SSH_OPTIONS } from "../src/channel.js";
@@ -1805,23 +1807,27 @@ const APP_CLIENTS = JSON.stringify({
   ],
 });
 const CLIENT_LS = ["--autostart=false", "client", "ls", "--json"];
+const HOSTS_LS = ["--autostart=false", "hosts", "--json"];
+const NO_HOSTS = JSON.stringify({ hosts: [] });
 
 /**
- * Records every call. `rex client ls` reports Rex.app connected unless ANSWER
- * says otherwise, and the preflight call is left out of `calls`, so each test
- * reads only the calls it is about; `listed` counts the preflights.
+ * Records every call. `rex client ls` reports Rex.app connected and `rex hosts`
+ * reports no configured hosts unless ANSWER says otherwise; both preflight
+ * calls are left out of `calls`, so each test reads only the calls it is about;
+ * `listed` counts the `client ls` preflights.
  */
 function recorder(answer: (file: string, args: string[]) => ReturnType<Runner> = () => ok()) {
   const calls: Call[] = [];
   let listed = 0;
   const run: Runner = (file, args) => {
-    const preflight = file === "rex" && args.join(" ") === CLIENT_LS.join(" ");
-    if (preflight) listed += 1;
-    else calls.push([file, args]);
+    const isClientLs = file === "rex" && args.join(" ") === CLIENT_LS.join(" ");
+    const isHostsLs = file === "rex" && args.join(" ") === HOSTS_LS.join(" ");
+    if (isClientLs) listed += 1;
+    else if (!isHostsLs) calls.push([file, args]);
     const answered = answer(file, args);
-    return preflight && answered.stdout === "" && answered.status === 0
-      ? ok(APP_CLIENTS)
-      : answered;
+    if (isClientLs && answered.stdout === "" && answered.status === 0) return ok(APP_CLIENTS);
+    if (isHostsLs && answered.stdout === "" && answered.status === 0) return ok(NO_HOSTS);
+    return answered;
   };
   return { calls, run, listed: () => listed };
 }
@@ -2029,6 +2035,50 @@ test("with $REX_CLIENT set, only that app client counts", () => {
   expect(result).toMatchObject({ ok: false, reason: "attach_failed" });
   expect(result.ok ? "" : result.message).toMatch(/Rex\.app client "ipad"/);
   expect(calls).toEqual([]);
+});
+
+test("a remote Rex jump auto-resolves rex_host from `rex hosts --json` when unset", () => {
+  peer("p", "remote-host");
+  const hosts = ok(JSON.stringify({ hosts: [{ host: { label: "p" } }] }));
+  const { calls, run } = recorder((file, args) =>
+    file === "rex" && args.includes("hosts") ? hosts : ok(),
+  );
+  expect(jumpToAgent(store, rexView(), fakeMux(), run, {})).toEqual({ ok: true });
+  expect(calls).toEqual([
+    ["rex", ["-S", "p", "--autostart=false", ...FOCUS]],
+    ["rex", ["-S", "p", "--autostart=false", "-C", "mac", ...SELECT]],
+    ...RAISE_REX,
+  ]);
+});
+
+test("parseRexHostLabels and resolveRexHost prefer explicit --rex-host, then peer name, then target", () => {
+  const labels = parseRexHostLabels(
+    JSON.stringify({
+      hosts: [
+        { host: { label: "bubba" } },
+        { host: { label: "target-box" } },
+        { host: { label: "  " } },
+      ],
+    }),
+  );
+  expect([...labels]).toEqual(["bubba", "target-box"]);
+  expect(parseRexHostLabels("not json").size).toBe(0);
+
+  expect(
+    resolveRexHost({ name: "bubba", target: "target-box", rex_host: "custom" }, labels),
+  ).toEqual({
+    host: "custom",
+    source: "set",
+  });
+  expect(resolveRexHost({ name: "bubba", target: "target-box", rex_host: null }, labels)).toEqual({
+    host: "bubba",
+    source: "auto",
+  });
+  expect(resolveRexHost({ name: "other", target: "target-box", rex_host: null }, labels)).toEqual({
+    host: "target-box",
+    source: "auto",
+  });
+  expect(resolveRexHost({ name: "other", target: "unknown", rex_host: null }, labels)).toBeNull();
 });
 
 test("a remote Rex jump with no peer for the host is no_peer, and runs nothing", () => {

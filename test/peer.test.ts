@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync } from "node:fs";
+import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeEach, expect, test } from "vitest";
@@ -228,4 +228,35 @@ test("a --rex-host value is trimmed, and blank (or only whitespace) clears it", 
   expect(rexHostValue("  me@dev \n")).toBe("me@dev");
   expect(rexHostValue("")).toBeNull();
   expect(rexHostValue("   ")).toBeNull();
+});
+
+test("peer list shows REX column for explicit and auto-matched Rex hosts", () => {
+  const bin = mkdtempSync(join(tmpdir(), "murmur-fake-rex-"));
+  const fakeRex = join(bin, "rex");
+  writeFileSync(fakeRex, `#!/bin/sh\nprintf '%s\\n' '{"hosts":[{"host":{"label":"auto-box"}}]}'\n`);
+  chmodSync(fakeRex, 0o755);
+
+  const store = openStore();
+  store.addPeer("auto-box", "auto-box");
+  store.addPeer("manual-box", "manual-box");
+  store.setPeerRexHost("manual-box", "studio");
+  store.addPeer("tmux-only", "tmux-only");
+  store.close();
+
+  const env = { ...process.env, PATH: `${bin}:${process.env.PATH ?? ""}` };
+  const table = runBuiltCli(["peer", "list"], env);
+  expect(table).toContain("REX");
+  expect(table).toContain("auto-box (auto)");
+  expect(table).toContain("studio");
+
+  const json = JSON.parse(runBuiltCli(["peer", "list", "--json"], env)) as {
+    name: string;
+    rex_host: string | null;
+    rex_host_source: string | null;
+  }[];
+  expect(json).toMatchObject([
+    { name: "auto-box", rex_host: "auto-box", rex_host_source: "auto" },
+    { name: "manual-box", rex_host: "studio", rex_host_source: "set" },
+    { name: "tmux-only", rex_host: null, rex_host_source: null },
+  ]);
 });
