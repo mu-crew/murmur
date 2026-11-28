@@ -1797,13 +1797,33 @@ function rexView(over: Partial<PaneView> = {}): PaneView {
 }
 
 type Call = [string, string[]];
+/** `rex client ls --json` with Rex.app connected (label "mac"). */
+const APP_CLIENTS = JSON.stringify({
+  clients: [
+    { client_id: "client:cli" },
+    { client_id: "client:01app", info: { kind: "app", label: "mac" } },
+  ],
+});
+const CLIENT_LS = ["--autostart=false", "client", "ls", "--json"];
+
+/**
+ * Records every call. `rex client ls` reports Rex.app connected unless ANSWER
+ * says otherwise, and the preflight call is left out of `calls`, so each test
+ * reads only the calls it is about; `listed` counts the preflights.
+ */
 function recorder(answer: (file: string, args: string[]) => ReturnType<Runner> = () => ok()) {
   const calls: Call[] = [];
+  let listed = 0;
   const run: Runner = (file, args) => {
-    calls.push([file, args]);
-    return answer(file, args);
+    const preflight = file === "rex" && args.join(" ") === CLIENT_LS.join(" ");
+    if (preflight) listed += 1;
+    else calls.push([file, args]);
+    const answered = answer(file, args);
+    return preflight && answered.stdout === "" && answered.status === 0
+      ? ok(APP_CLIENTS)
+      : answered;
   };
-  return { calls, run };
+  return { calls, run, listed: () => listed };
 }
 
 const FOCUS = [
@@ -1897,7 +1917,9 @@ test("a remote Rex jump with no Rex host goes straight to ssh, and says how to s
 
 test("a remote Rex jump whose ssh focus fails, with no Rex host, still says how to set one", () => {
   peer("p", "remote-host");
-  const { calls, run } = recorder(() => ({ status: 255, stdout: "", failed: false }));
+  const { calls, run } = recorder((file) =>
+    file === "ssh" ? { status: 255, stdout: "", failed: false } : ok(),
+  );
   const result = jumpToAgent(store, rexView(), fakeMux(), run, {});
   expect(calls.map(([file]) => file)).toEqual(["ssh"]);
   expect(result).toMatchObject({ ok: false, reason: "attach_failed" });
@@ -1920,6 +1942,38 @@ test("a Rex jump that cannot focus the block stops there and selects nothing", (
   const result = jumpToAgent(store, rexView(), fakeMux(), run, {});
   expect(result).toMatchObject({ ok: false, reason: "attach_failed" });
   expect(calls.some(([, args]) => args.includes("session.select"))).toBe(false);
+});
+
+test("without a Rex.app here a Rex jump fails before touching the owning machine", () => {
+  // A Linux box: rex absent, or a server with only CLI clients.
+  for (const listed of [
+    { status: null, stdout: "", failed: true },
+    ok(JSON.stringify({ clients: [{ client_id: "client:cli", info: { kind: "cli" } }] })),
+  ]) {
+    peer("p", "remote-host");
+    store.setPeerRexHost("p", "me@p");
+    const { calls, run } = recorder((file, args) =>
+      file === "rex" && args.includes("client") ? listed : ok(),
+    );
+    const result = jumpToAgent(store, rexView(), fakeMux(), run, {});
+    expect(result).toMatchObject({ ok: false, reason: "attach_failed" });
+    expect(result.ok ? "" : result.message).toMatch(/nothing here to show it in/);
+    // mural maps this wording to its Rex.app remediation.
+    expect(result.ok ? "" : result.message).toMatch(
+      /Rex\.app.*?is not connected to this machine's Rex server/,
+    );
+    expect(calls).toEqual([]);
+  }
+});
+
+test("with $REX_CLIENT set, only that app client counts", () => {
+  const { calls, run } = recorder();
+  const result = jumpToAgent(store, rexView({ local: true }), fakeMux(), run, {
+    REX_CLIENT: "ipad",
+  });
+  expect(result).toMatchObject({ ok: false, reason: "attach_failed" });
+  expect(result.ok ? "" : result.message).toMatch(/Rex\.app client "ipad"/);
+  expect(calls).toEqual([]);
 });
 
 test("a remote Rex jump with no peer for the host is no_peer, and runs nothing", () => {

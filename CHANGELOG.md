@@ -5,6 +5,8 @@ so it says what changed for a user rather than listing every commit.
 
 ## Unreleased
 
+- **Rex jump without Rex.app:** on a machine with no Rex.app connected (Linux, an SSH session), jumping to a Rex pane now stops at once with a clear message, instead of first moving focus in the owning machine's Rex and then failing with "could not show it in Rex.app". With `$REX_CLIENT` set, that app client must be connected.
+
 ## 3.1.2
 
 - **Rex: a jump goes to its tab.** Jumping to a tmux agent from a Rex pane opened the agent in a new tab but left Rex.app on the window it was showing (from a floating picker, on the window under it). The new tab is now selected in Rex.app (`session.select`, on `$REX_CLIENT` when set).

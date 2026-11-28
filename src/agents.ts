@@ -297,8 +297,54 @@ function raiseRexApp(run: Runner, env: NodeJS.ProcessEnv): void {
  * `session.select` exits 1 for a session the app's server does not hold and 3
  * when no app client is connected; each gets its own remediation.
  */
+/**
+ * Whether this machine has a Rex.app to show a Rex pane in: an `app` client on
+ * the local server (`rex client ls`), and with `$REX_CLIENT` set, that one (by
+ * label or ID). False with no `rex`, no running server, or only CLI clients.
+ */
+function hasRexApp(run: Runner, client: string | undefined): boolean {
+  const listed = run("rex", rexArgv(null, ["client", "ls", "--json"]));
+  if (!succeeded(listed)) return false;
+  let clients: unknown;
+  try {
+    clients = (JSON.parse(listed.stdout) as { clients?: unknown }).clients;
+  } catch {
+    return false;
+  }
+  if (!Array.isArray(clients)) return false;
+  return clients.some((entry: unknown) => {
+    if (!entry || typeof entry !== "object") return false;
+    const { client_id: id, info } = entry as {
+      client_id?: unknown;
+      info?: { kind?: unknown; label?: unknown };
+    };
+    if (info?.kind !== "app") return false;
+    return !client || info.label === client || (typeof id === "string" && id.endsWith(client));
+  });
+}
+
 function jumpToRex(store: Store, agent: PaneView, run: Runner, env: NodeJS.ProcessEnv): JumpResult {
   const label = agentLabel(agent);
+  const route = agent.local ? null : rexRoute(store, agent);
+  if (!agent.local && !route) {
+    return {
+      ok: false,
+      reason: "no_peer",
+      message: `${label} is a Rex pane on ${agent.host}, and no peer reaches that host.`,
+    };
+  }
+  const client = env.REX_CLIENT;
+  const app = client ? `Rex.app client "${client}"` : "Rex.app";
+  // Before anything remote: without a Rex.app here (a Linux box, an SSH
+  // session) the jump cannot end anywhere, and focusing first would move the
+  // owning machine's Rex for nothing.
+  if (!hasRexApp(run, client)) {
+    return {
+      ok: false,
+      reason: "attach_failed",
+      message: `${label} is a Rex pane on ${agent.host}, but ${app} is not connected to this machine's Rex server, so there is nothing here to show it in. Jump to it from a machine running Rex.app; the dash still previews it.`,
+    };
+  }
   const focus = [
     "api",
     "call",
@@ -307,16 +353,8 @@ function jumpToRex(store: Store, agent: PaneView, run: Runner, env: NodeJS.Proce
   ];
   let focused: boolean;
   let hint = "";
-  if (agent.local) focused = succeeded(run("rex", rexArgv(null, focus)));
+  if (!route) focused = succeeded(run("rex", rexArgv(null, focus)));
   else {
-    const route = rexRoute(store, agent);
-    if (!route) {
-      return {
-        ok: false,
-        reason: "no_peer",
-        message: `${label} is a Rex pane on ${agent.host}, and no peer reaches that host.`,
-      };
-    }
     focused = route.rexHost !== null && succeeded(run("rex", rexArgv(route.rexHost, focus)));
     focused ||= succeeded(
       run("ssh", [
@@ -336,7 +374,6 @@ function jumpToRex(store: Store, agent: PaneView, run: Runner, env: NodeJS.Proce
       message: `could not focus ${label} in Rex on ${agent.host} (session.focus_block failed).${hint}`,
     };
   }
-  const client = env.REX_CLIENT;
   const select = run(
     "rex",
     rexArgv(null, [
@@ -351,7 +388,6 @@ function jumpToRex(store: Store, agent: PaneView, run: Runner, env: NodeJS.Proce
     raiseRexApp(run, env);
     return { ok: true };
   }
-  const app = client ? `Rex.app client "${client}"` : "Rex.app";
   const message =
     select.status === 3
       ? `focused ${label}, but ${app} is not connected to this machine's Rex server (is Rex.app open with Remote Control on? set $REX_CLIENT to name it).`
