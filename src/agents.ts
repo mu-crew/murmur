@@ -290,37 +290,42 @@ function raiseRexApp(run: Runner, env: NodeJS.ProcessEnv): void {
  * 1. focus the block on the server that OWNS it (`session.focus_block`): the
  *    local one, or a peer's via `rex -S <rex_host>`, else over the peer's ssh;
  * 2. show its session in THIS machine's Rex.app (`session.select`, a client
- *    action), always against the local server and the named client
- *    (`$REX_CLIENT`). Never with `-S`: the remote server's app client, if it
- *    has one, is someone else's screen.
+ *    action). A Rex server only knows its own sessions, so a remote pane must
+ *    be selected through `-S <rex_host>`, always pinned with `-C <label>` to
+ *    THIS machine's app client (read from the local server's `rex client ls`)
+ *    so it never steers another machine's screen.
  *
- * `session.select` exits 1 for a session the app's server does not hold and 3
- * when no app client is connected; each gets its own remediation.
+ * `session.select` exits 1 when the session cannot be shown (or Remote Control
+ * is off) and 3 when the named app client is not connected to that server; each
+ * gets its own remediation.
  */
 /**
- * Whether this machine has a Rex.app to show a Rex pane in: an `app` client on
- * the local server (`rex client ls`), and with `$REX_CLIENT` set, that one (by
- * label or ID). False with no `rex`, no running server, or only CLI clients.
+ * This machine's Rex.app client on the local server (`rex client ls`),
+ * honouring `$REX_CLIENT` (by label or ID). Null with no `rex`, no running
+ * server, or only CLI clients.
  */
-function hasRexApp(run: Runner, client: string | undefined): boolean {
+function localRexApp(run: Runner, client: string | undefined): { label: string | null } | null {
   const listed = run("rex", rexArgv(null, ["client", "ls", "--json"]));
-  if (!succeeded(listed)) return false;
+  if (!succeeded(listed)) return null;
   let clients: unknown;
   try {
     clients = (JSON.parse(listed.stdout) as { clients?: unknown }).clients;
   } catch {
-    return false;
+    return null;
   }
-  if (!Array.isArray(clients)) return false;
-  return clients.some((entry: unknown) => {
-    if (!entry || typeof entry !== "object") return false;
+  if (!Array.isArray(clients)) return null;
+  for (const entry of clients) {
+    if (!entry || typeof entry !== "object") continue;
     const { client_id: id, info } = entry as {
       client_id?: unknown;
       info?: { kind?: unknown; label?: unknown };
     };
-    if (info?.kind !== "app") return false;
-    return !client || info.label === client || (typeof id === "string" && id.endsWith(client));
-  });
+    if (info?.kind !== "app") continue;
+    if (!client || info.label === client || (typeof id === "string" && id.endsWith(client))) {
+      return { label: typeof info.label === "string" && info.label ? info.label : null };
+    }
+  }
+  return null;
 }
 
 function jumpToRex(store: Store, agent: PaneView, run: Runner, env: NodeJS.ProcessEnv): JumpResult {
@@ -338,7 +343,8 @@ function jumpToRex(store: Store, agent: PaneView, run: Runner, env: NodeJS.Proce
   // Before anything remote: without a Rex.app here (a Linux box, an SSH
   // session) the jump cannot end anywhere, and focusing first would move the
   // owning machine's Rex for nothing.
-  if (!hasRexApp(run, client)) {
+  const localApp = localRexApp(run, client);
+  if (!localApp) {
     return {
       ok: false,
       reason: "attach_failed",
@@ -374,10 +380,16 @@ function jumpToRex(store: Store, agent: PaneView, run: Runner, env: NodeJS.Proce
       message: `could not focus ${label} in Rex on ${agent.host} (session.focus_block failed).${hint}`,
     };
   }
+  // Remote select goes through the peer's Rex server, pinned with `-C` to THIS
+  // machine's app label so it can only move our own Rex.app. Without a label,
+  // never send an unpinned `-S` select.
+  const selectServer =
+    route && route.rexHost !== null && localApp.label !== null ? route.rexHost : null;
+  const selectClient = selectServer !== null ? localApp.label : client;
   const select = run(
     "rex",
-    rexArgv(null, [
-      ...(client ? ["-C", client] : []),
+    rexArgv(selectServer, [
+      ...(selectClient ? ["-C", selectClient] : []),
       "do",
       "session.select",
       `session_id=${agent.session}`,
@@ -390,11 +402,15 @@ function jumpToRex(store: Store, agent: PaneView, run: Runner, env: NodeJS.Proce
   }
   const message =
     select.status === 3
-      ? `focused ${label}, but ${app} is not connected to this machine's Rex server (is Rex.app open with Remote Control on? set $REX_CLIENT to name it).`
+      ? selectServer !== null
+        ? `focused ${label} on ${agent.host}, but ${app} does not show that machine's Rex server; connect it in Rex.app (\`rex hosts\`).`
+        : `focused ${label}, but ${app} is not connected to this machine's Rex server (is Rex.app open with Remote Control on? set $REX_CLIENT to name it).`
       : select.status === 1
         ? agent.local
           ? `focused ${label}, but ${app} could not show its session (it is gone, or the app is on another server).`
-          : `focused ${label} on ${agent.host}, but ${app} does not show that machine's Rex server; connect it in Rex.app (\`rex hosts\`).${hint}`
+          : selectServer !== null
+            ? `focused ${label} on ${agent.host}, but ${app} could not show its session (is Remote Control on in Rex.app, and is ${selectServer} connected in \`rex hosts\`?).`
+            : `focused ${label} on ${agent.host}, but ${app} does not show that machine's Rex server; connect it in Rex.app (\`rex hosts\`).${hint}`
         : `focused ${label}, but could not show it in ${app} (rex do session.select failed).`;
   return { ok: false, reason: "attach_failed", message };
 }

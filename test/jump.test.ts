@@ -1871,10 +1871,41 @@ test("a Rex jump still succeeds if raising Rex.app fails", () => {
   ).toEqual({ ok: true });
 });
 
-test("a remote Rex jump focuses on the peer's server via rex -S, and selects locally, never -S", () => {
+test("a remote Rex jump focuses via rex -S and selects via rex -S pinned to this machine's app label", () => {
   peer("p", "remote-host");
   store.setPeerRexHost("p", "me@p");
   const { calls, run } = recorder();
+  expect(jumpToAgent(store, rexView(), fakeMux(), run, {})).toEqual({ ok: true });
+  expect(calls).toEqual([
+    ["rex", ["-S", "me@p", "--autostart=false", ...FOCUS]],
+    ["rex", ["-S", "me@p", "--autostart=false", "-C", "mac", ...SELECT]],
+    ...RAISE_REX,
+  ]);
+});
+
+test("a remote Rex jump resolves a $REX_CLIENT id suffix to its label for -S -C", () => {
+  peer("p", "remote-host");
+  store.setPeerRexHost("p", "me@p");
+  const { calls, run } = recorder();
+  expect(jumpToAgent(store, rexView(), fakeMux(), run, { REX_CLIENT: "01app" })).toEqual({
+    ok: true,
+  });
+  expect(calls).toEqual([
+    ["rex", ["-S", "me@p", "--autostart=false", ...FOCUS]],
+    ["rex", ["-S", "me@p", "--autostart=false", "-C", "mac", ...SELECT]],
+    ...RAISE_REX,
+  ]);
+});
+
+test("a remote Rex jump never sends an unpinned -S select when the local app has no label", () => {
+  peer("p", "remote-host");
+  store.setPeerRexHost("p", "me@p");
+  const unlabelled = ok(
+    JSON.stringify({ clients: [{ client_id: "client:01app", info: { kind: "app" } }] }),
+  );
+  const { calls, run } = recorder((file, args) =>
+    file === "rex" && args.includes("client") ? unlabelled : ok(),
+  );
   expect(jumpToAgent(store, rexView(), fakeMux(), run, {})).toEqual({ ok: true });
   expect(calls).toEqual([
     ["rex", ["-S", "me@p", "--autostart=false", ...FOCUS]],
@@ -1883,11 +1914,35 @@ test("a remote Rex jump focuses on the peer's server via rex -S, and selects loc
   ]);
 });
 
-test("a remote Rex jump whose rex -S fails focuses over the peer's warm ssh instead", () => {
+test("a remote Rex jump whose -S select exits 3 says Rex.app does not show that server", () => {
+  peer("p", "remote-host");
+  store.setPeerRexHost("p", "me@p");
+  const { run } = recorder((_file, args) =>
+    args.includes("session.select") ? { status: 3, stdout: "", failed: false } : ok(),
+  );
+  const result = jumpToAgent(store, rexView(), fakeMux(), run, {});
+  expect(result).toMatchObject({ ok: false, reason: "attach_failed" });
+  expect(result.ok ? "" : result.message).toMatch(/does not show that machine's Rex server/);
+});
+
+test("a remote Rex jump whose -S select exits 1 mentions Remote Control and the Rex host", () => {
+  peer("p", "remote-host");
+  store.setPeerRexHost("p", "me@p");
+  const { run } = recorder((_file, args) =>
+    args.includes("session.select") ? { status: 1, stdout: "", failed: false } : ok(),
+  );
+  const result = jumpToAgent(store, rexView(), fakeMux(), run, {});
+  expect(result).toMatchObject({ ok: false, reason: "attach_failed" });
+  expect(result.ok ? "" : result.message).toMatch(/Remote Control.*me@p/);
+});
+
+test("a remote Rex jump whose rex -S focus fails focuses over the peer's warm ssh instead", () => {
   peer("p", "remote-host");
   store.setPeerRexHost("p", "me@p");
   const { calls, run } = recorder((file, args) =>
-    file === "rex" && args[0] === "-S" ? { status: 1, stdout: "", failed: false } : ok(),
+    file === "rex" && args[0] === "-S" && args.includes("session.focus_block")
+      ? { status: 1, stdout: "", failed: false }
+      : ok(),
   );
   expect(jumpToAgent(store, rexView(), fakeMux(), run, {})).toEqual({ ok: true });
   expect(calls.map(([file]) => file)).toEqual([
