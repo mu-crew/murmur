@@ -1552,6 +1552,7 @@ test("in a Rex pane a local jump opens the agent in a new tab of this session", 
         "new",
         "-s",
         "session:abc",
+        "--json",
         "worker-1",
         "--",
         "sh",
@@ -1585,6 +1586,7 @@ test("in a Rex pane with only REX_BLOCK a local jump targets the block's session
         "new",
         "-s",
         "block:abc",
+        "--json",
         "worker-1",
         "--",
         "sh",
@@ -1594,6 +1596,66 @@ test("in a Rex pane with only REX_BLOCK a local jump targets the block's session
       undefined,
     ],
   ]);
+});
+
+test("in a Rex pane the new tab is shown in Rex.app: the block's session is looked up", () => {
+  const calls: string[][] = [];
+  const result = jumpToAgent(
+    store,
+    localView({ agent_name: "worker-1" }),
+    fakeMux({ livePanes: () => new Set([asPaneId("%9")]) }),
+    (_file, args) => {
+      calls.push(args);
+      if (args.includes("window")) return ok('{"window_id":"window:new","block_ids":["block:n"]}');
+      if (args.includes("inspect")) return ok('{"session_id":"session:s1","windows":[]}');
+      return ok();
+    },
+    { TERM_PROGRAM: "rex", REX_BLOCK: "block:abc", REX_CLIENT: "mac" },
+  );
+  expect(result).toEqual({ ok: true });
+  expect(calls.slice(1)).toEqual([
+    ["--autostart=false", "session", "inspect", "block:abc", "--json"],
+    [
+      "--autostart=false",
+      "-C",
+      "mac",
+      "do",
+      "session.select",
+      "session_id=session:s1",
+      "window_id=window:new",
+    ],
+  ]);
+});
+
+test("in a Rex pane with a session ID the new tab is shown without a lookup", () => {
+  const calls: string[][] = [];
+  jumpToAgent(
+    store,
+    localView({ agent_name: "worker-1" }),
+    fakeMux({ livePanes: () => new Set([asPaneId("%9")]) }),
+    (_file, args) => {
+      calls.push(args);
+      return args.includes("window") ? ok('{"window_id":"window:new"}') : ok();
+    },
+    { TERM_PROGRAM: "rex", REX_SESSION: "session:abc" },
+  );
+  expect(calls.slice(1)).toEqual([
+    ["--autostart=false", "do", "session.select", "session_id=session:abc", "window_id=window:new"],
+  ]);
+});
+
+test("in a Rex pane a tab that opened but could not be shown is still a jump", () => {
+  const result = jumpToAgent(
+    store,
+    localView(),
+    fakeMux({ livePanes: () => new Set([asPaneId("%9")]) }),
+    (_file, args) =>
+      args.includes("window")
+        ? ok('{"window_id":"window:new"}')
+        : { status: 1, stdout: "", failed: false },
+    { TERM_PROGRAM: "rex", REX_BLOCK: "block:abc" },
+  );
+  expect(result).toEqual({ ok: true });
 });
 
 test("in a Rex pane a remote jump probes, then opens the jump command in a new tab", () => {
@@ -1621,6 +1683,7 @@ test("in a Rex pane a remote jump probes, then opens the jump command in a new t
       "new",
       "-s",
       "session:abc",
+      "--json",
       "p · worker-9",
       "--",
       "sh",

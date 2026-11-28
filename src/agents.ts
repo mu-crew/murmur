@@ -399,8 +399,8 @@ export function outsideTmux(env: NodeJS.ProcessEnv = process.env): Outside {
  * Run an interactive attach outside tmux.
  *
  * `rex` hands the command to `rex window new` in the caller's session, with
- * the agent's label as the tab name. It returns at once: the tab owns the
- * attach from there, and closes when it ends.
+ * the agent's label as the tab name, then shows that tab in Rex.app. It
+ * returns at once: the tab owns the attach from there, and closes when it ends.
  */
 function runOutside(
   run: Runner,
@@ -409,27 +409,77 @@ function runOutside(
   label: string,
   env: NodeJS.ProcessEnv,
 ): boolean {
+  if (how !== "rex") return succeeded(run("sh", ["-c", command], true));
   const target = rexSessionTarget(env);
-  const result =
-    how === "rex"
-      ? run(
-          "rex",
-          rexArgv(null, [
-            "window",
-            "new",
-            ...(target ? ["-s", target] : []),
-            // A positional before `--`, so rex parses a leading `-` as a flag:
-            // a pane title (set by the program, OSC 2) of `--shell=...` or
-            // `--help` became an option of this command. Never a dash first.
-            label.replace(/^-+/, "") || "agent",
-            "--",
-            "sh",
-            "-c",
-            command,
-          ]),
-        )
-      : run("sh", ["-c", command], true);
-  return result.status === 0 && !result.failed;
+  const opened = run(
+    "rex",
+    rexArgv(null, [
+      "window",
+      "new",
+      ...(target ? ["-s", target] : []),
+      "--json",
+      // A positional before `--`, so rex parses a leading `-` as a flag:
+      // a pane title (set by the program, OSC 2) of `--shell=...` or
+      // `--help` became an option of this command. Never a dash first.
+      label.replace(/^-+/, "") || "agent",
+      "--",
+      "sh",
+      "-c",
+      command,
+    ]),
+  );
+  if (!succeeded(opened)) return false;
+  showRexWindow(run, target, jsonField(opened.stdout, "window_id"), env);
+  return true;
+}
+
+/** A string field of a JSON object on stdout, or null. */
+function jsonField(stdout: string, key: string): string | null {
+  try {
+    const value: unknown = JSON.parse(stdout);
+    if (value && typeof value === "object") {
+      const field = (value as Record<string, unknown>)[key];
+      if (typeof field === "string" && field) return field;
+    }
+  } catch {
+    // not JSON: nothing to read
+  }
+  return null;
+}
+
+/**
+ * Show a tab `rex window new` just made. The server makes it its session's
+ * active window, but Rex.app keeps showing the window it was on (a floating
+ * picker that launched the jump closes back onto it), so select it in the app
+ * the way `jumpToRex` does. `session.select` wants a session ID, and the
+ * target may be a block: ask Rex which session holds it. Best effort: the tab
+ * is open either way, so a failure here is not a failed jump.
+ */
+function showRexWindow(
+  run: Runner,
+  target: string | undefined,
+  windowId: string | null,
+  env: NodeJS.ProcessEnv,
+): void {
+  if (!target || !windowId) return;
+  const session = target.startsWith("session:")
+    ? target
+    : jsonField(
+        run("rex", rexArgv(null, ["session", "inspect", target, "--json"])).stdout,
+        "session_id",
+      );
+  if (!session) return;
+  const client = env.REX_CLIENT;
+  run(
+    "rex",
+    rexArgv(null, [
+      ...(client ? ["-C", client] : []),
+      "do",
+      "session.select",
+      `session_id=${session}`,
+      `window_id=${windowId}`,
+    ]),
+  );
 }
 
 /**
