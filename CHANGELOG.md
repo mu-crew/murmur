@@ -5,6 +5,8 @@ so it says what changed for a user rather than listing every commit.
 
 ## Unreleased
 
+## 3.1.2
+
 - **Rex: a jump goes to its tab.** Jumping to a tmux agent from a Rex pane opened the agent in a new tab but left Rex.app on the window it was showing (from a floating picker, on the window under it). The new tab is now selected in Rex.app (`session.select`, on `$REX_CLIENT` when set).
 - **`murmur dash --popup`:** exits after a successful jump, for a dash in a tmux popup or a Rex floating layer. Inside a tmux popup (`$TMUX` without `$TMUX_PANE`) it is the default.
 
