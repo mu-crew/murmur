@@ -11,4 +11,5 @@ dist/
 docs/*
 !docs/setup.md
 !docs/VOCABULARY.md
+!docs/ROADMAP.md
 !docs/dash.png

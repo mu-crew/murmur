@@ -182,6 +182,7 @@ factor / `BatchMode`, `MaxSessions 1`, Eternal Terminal): [SSH.md](SSH.md).
 | [SSH.md](SSH.md) | Auth, session caps, control masters |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Model, design choices, gaps |
 | [docs/VOCABULARY.md](docs/VOCABULARY.md) | Protocol and identity terms |
+| [docs/ROADMAP.md](docs/ROADMAP.md) | Planned work not yet in a release |
 | [AGENTS.md](AGENTS.md) | Repo gate for agents working on murmur |
 
 [Release notes](CHANGELOG.md) · [Known gaps](ARCHITECTURE.md#known-gaps)
