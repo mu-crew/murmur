@@ -78,12 +78,23 @@ test("rows name the agent, rendered state, host, age, and workstream", () => {
     name: "worker-1",
     state: "running",
     icon: DASH_GLYPH.running,
-    facts: "running · here · 2m",
+    facts: "running · here · tmux · 2m",
     host: "here",
     hostColor: hostColor("localhost"),
     age: "2m",
     stream: "murmur",
     tag: "",
+    mux: "tmux",
+  });
+
+  const [rex] = sidepanelRows(
+    [pane({ server: { kind: "rex" }, pane: asPaneId("block:1") })],
+    prefs(),
+    120_000,
+  );
+  expect(rex).toMatchObject({
+    facts: "running · here · rex · 2m",
+    mux: "rex",
   });
 
   const [remote] = sidepanelRows(
@@ -104,9 +115,10 @@ test("rows name the agent, rendered state, host, age, and workstream", () => {
   );
   expect(remote).toMatchObject({
     key: '["R","default",null,"%2"]',
-    facts: "running · devbox",
+    facts: "running · devbox · tmux",
     hostColor: hostColor("devbox"),
     stream: "review",
+    mux: "tmux",
   });
 });
 
@@ -216,7 +228,7 @@ test("content width shrinks to the data rather than the window share", () => {
 
   // Full rows: the widest of name, facts and stream, plus one spare column.
   expect(sidepanelContentWidth(rows, false, header)).toBe(
-    Math.max(visibleWidth(header), visibleWidth("running · here · 2m")) + 1,
+    Math.max(visibleWidth(header), visibleWidth("running · here · tmux · 2m")) + 1,
   );
   // Nothing to show still leaves a usable panel.
   expect(sidepanelContentWidth([], false, "m")).toBe(17);

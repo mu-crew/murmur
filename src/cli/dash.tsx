@@ -93,6 +93,7 @@ import type { Store } from "../store.js";
 import {
   age,
   harnessTag,
+  muxTag,
   oneLiner,
   type PaneView,
   pendingSummary,
@@ -327,6 +328,7 @@ function Card({
       </Box>
       <Text wrap="truncate-end">
         <Text color={hostColor(pane.runs_on ?? pane.host)}>{dashHost(pane, true)}</Text>
+        <Text dimColor> · {muxTag(pane)}</Text>
         {pane.driver === "orchestrated" ? `  ${DASH_CHROME.crew}` : ""}
         {stream ? `  ${terminalText(stream)}` : ""}
         {pending ? (
@@ -378,6 +380,7 @@ function compactFields(
   return {
     state: DASH_GLYPH[state],
     agent: agentLabel(pane),
+    mux: muxTag(pane),
     host: dashHost(pane, false),
     stream: stream ? terminalText(stream) : "",
     tag: harnessTag(pane),

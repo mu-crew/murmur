@@ -406,6 +406,8 @@ export type CompactRowFields = {
   agent: string;
   /** The harness tag: its own column, dropped only after every other optional one. */
   tag?: string;
+  /** Multiplexer kind (`tmux` or `rex`). */
+  mux?: string;
   host: string;
   stream: string;
   flags: string;
@@ -413,7 +415,7 @@ export type CompactRowFields = {
   summary: string;
 };
 
-type CompactOptionalColumn = "tag" | "host" | "stream" | "flags" | "age";
+type CompactOptionalColumn = "tag" | "mux" | "host" | "stream" | "flags" | "age";
 
 export type CompactRowLayout = {
   width: number;
@@ -452,12 +454,13 @@ export function compactRowLayout(
     state: Math.max(1, measured("state")),
     agent: Math.max(1, measured("agent", COMPACT_CAPS.agent)),
     tag: measured("tag"),
+    mux: measured("mux"),
     host: measured("host", COMPACT_CAPS.host),
     stream: measured("stream", COMPACT_CAPS.stream),
     flags: measured("flags"),
     age: measured("age"),
   };
-  const optionalColumns: CompactOptionalColumn[] = ["tag", "host", "stream", "flags", "age"];
+  const optionalColumns: CompactOptionalColumn[] = ["tag", "mux", "host", "stream", "flags", "age"];
   const columns = optionalColumns.filter((column) => widths[column] > 0);
   const used = () =>
     2 +
@@ -477,13 +480,13 @@ export function compactRowLayout(
   if (summary) {
     const all = [...columns];
     // The tag is required information: never evicted to make room for a summary.
-    drop(summaryFits, ["flags", "age", "stream", "host"]);
+    drop(summaryFits, ["flags", "age", "stream", "host", "mux"]);
     if (!summaryFits()) {
       summary = false;
       columns.splice(0, columns.length, ...all);
     }
   }
-  drop(() => used() <= width, ["flags", "age", "stream", "host"]);
+  drop(() => used() <= width, ["flags", "age", "stream", "host", "mux"]);
   // The tag goes last, and only when even a shrunk agent name cannot share
   // the row with it: the agent column gives way before the tag does.
   if (used() - widths.agent + Math.min(widths.agent, COMPACT_AGENT_FLOOR) > width) {

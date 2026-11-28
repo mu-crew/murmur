@@ -234,6 +234,7 @@ function row(key: string): SidepanelRow {
     age: "",
     stream: null,
     tag: "",
+    mux: "tmux",
   };
 }
 

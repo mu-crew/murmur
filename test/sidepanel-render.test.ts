@@ -61,7 +61,7 @@ function view(panes: PaneView[]): Status {
   return { counts, orchestrated_counts: counts, panes, peers: [] };
 }
 
-function renderFrame(initial: Status, compact = false): string {
+function renderFrame(initial: Status, compact = false, columns = 40): string {
   const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
   try {
     return renderToString(
@@ -71,7 +71,7 @@ function renderFrame(initial: Status, compact = false): string {
         origin,
         initialPrefs: { ...DEFAULT_DASH_PREFS, compact },
         now: 120_001,
-        dimensions: { columns: 40, rows: 12 },
+        dimensions: { columns, rows: 12 },
       }),
     );
   } finally {
@@ -97,10 +97,10 @@ test("the first frame renders local and remote agent facts", () => {
 
   expect(output).toContain("murmur · 2 agents");
   expect(output).toContain("worker-1");
-  expect(output).toContain("running · here · 2m");
+  expect(output).toContain("running · here · tmux · 2m");
   expect(output).toContain("murmur");
   expect(output).toContain("reviewer-1");
-  expect(output).toContain("idle · devbox · 2m");
+  expect(output).toContain("idle · devbox · tmux · 2m");
   expect(output).toContain("sidepanel");
   expect(output).toContain("? help");
   expect(output).not.toContain("j/k move");
@@ -358,7 +358,7 @@ test("the harness tag shows in both layouts; null harness has none", () => {
     "running · cursor · here",
   );
   const none = renderFrame(view([pane({ harness: null })]));
-  expect(none).toContain("running · here · 2m");
+  expect(none).toContain("running · here · tmux · 2m");
   expect(renderFrame(view([pane({ harness: "codex", message: "gpt-5" })]), true)).toContain(
     "codex",
   );
@@ -367,10 +367,10 @@ test("the harness tag shows in both layouts; null harness has none", () => {
 test("a pi row is unchanged except the tag", () => {
   const plain = renderFrame(view([pane()]));
   const tagged = renderFrame(view([pane({ harness: "pi" })]));
-  expect(tagged).toContain("running · pi · here · 2m");
+  expect(tagged).toContain("running · pi · here · tmux · 2m");
   expect(tagged.replace(" · pi", "")).toBe(plain);
-  const compactPlain = renderFrame(view([pane()]), true);
-  const compactTagged = renderFrame(view([pane({ harness: "pi" })]), true);
+  const compactPlain = renderFrame(view([pane()]), true, 48);
+  const compactTagged = renderFrame(view([pane({ harness: "pi" })]), true, 48);
   expect(compactTagged.replace(/ +/g, " ").replace(" pi", "")).toBe(
     compactPlain.replace(/ +/g, " "),
   );
@@ -388,6 +388,7 @@ test("a narrow compact panel (min width 16) keeps the row within the width", () 
     age: "2m",
     stream: "murmur",
     tag: "claude",
+    mux: "tmux" as const,
   };
   const line = sidepanelCompactLine(row, 16, false);
   expect(visibleWidth(line)).toBeLessThanOrEqual(16);

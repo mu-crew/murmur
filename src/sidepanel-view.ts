@@ -12,6 +12,7 @@ import { dashRows } from "./dash-view.js";
 import {
   age,
   harnessTag,
+  muxTag,
   type PaneView,
   pendingSummary,
   type RenderState,
@@ -34,6 +35,8 @@ export type SidepanelRow = {
   stream: string | null;
   /** The harness tag; empty when unknown. */
   tag: string;
+  /** Multiplexer kind (`tmux` or `rex`). */
+  mux: "rex" | "tmux";
 };
 
 export function sidepanelRows(
@@ -49,12 +52,13 @@ export function sidepanelRows(
     // option any process can set, and the panel prints these fields raw.
     const host = terminalText(pane.runs_on ?? (pane.local ? "here" : pane.host));
     const stream = pane.workstream ?? pane.session_name;
+    const mux = muxTag(pane);
     return {
       key: sidepanelPaneKey(pane),
       state,
       icon: DASH_GLYPH[state],
       name: agentLabel(pane),
-      facts: [state, harnessTag(pane), pendingSummary(pane), host, elapsed]
+      facts: [state, harnessTag(pane), pendingSummary(pane), host, mux, elapsed]
         .filter(Boolean)
         .join(" · "),
       host,
@@ -62,6 +66,7 @@ export function sidepanelRows(
       age: elapsed,
       stream: stream === null ? null : terminalText(stream),
       tag: harnessTag(pane),
+      mux,
     };
   });
 }
@@ -70,6 +75,7 @@ function compactFields(row: SidepanelRow) {
   return {
     state: row.icon,
     agent: row.name,
+    mux: row.mux,
     host: row.host,
     stream: row.stream ?? "",
     tag: row.tag,

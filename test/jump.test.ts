@@ -17,6 +17,7 @@ import {
   agentLocation,
   jumpToAgent,
   onOtherTmuxServer,
+  RAISE_REX_JXA,
   type Runner,
   remoteSessionName,
   WRAPPER_CLIENT_OPTION,
@@ -1749,6 +1750,8 @@ const FOCUS = [
   JSON.stringify({ session_id: "session:s1", block_id: "block:b1" }),
 ];
 const SELECT = ["do", "session.select", "session_id=session:s1", "window_id=window:w1"];
+const RAISE_REX: Call[] =
+  process.platform === "darwin" ? [["osascript", ["-l", "JavaScript", "-e", RAISE_REX_JXA]]] : [];
 
 test("a local Rex jump focuses the block, then shows its session in the named app client", () => {
   const { calls, run } = recorder();
@@ -1759,7 +1762,30 @@ test("a local Rex jump focuses the block, then shows its session in the named ap
   expect(calls).toEqual([
     ["rex", ["--autostart=false", ...FOCUS]],
     ["rex", ["--autostart=false", "-C", "mac", ...SELECT]],
+    ...RAISE_REX,
   ]);
+});
+
+test("a Rex jump from inside Rex skips raising Rex.app", () => {
+  const { calls, run } = recorder();
+  const result = jumpToAgent(store, rexView({ host_id: "LOCAL", local: true }), fakeMux(), run, {
+    TERM_PROGRAM: "rex",
+    REX_BLOCK: "block:other",
+  });
+  expect(result).toEqual({ ok: true });
+  expect(calls).toEqual([
+    ["rex", ["--autostart=false", ...FOCUS]],
+    ["rex", ["--autostart=false", ...SELECT]],
+  ]);
+});
+
+test("a Rex jump still succeeds if raising Rex.app fails", () => {
+  const { run } = recorder((file) =>
+    file === "osascript" ? { status: 1, stdout: "", failed: false } : ok(),
+  );
+  expect(
+    jumpToAgent(store, rexView({ host_id: "LOCAL", local: true }), fakeMux(), run, {}),
+  ).toEqual({ ok: true });
 });
 
 test("a remote Rex jump focuses on the peer's server via rex -S, and selects locally, never -S", () => {
@@ -1770,6 +1796,7 @@ test("a remote Rex jump focuses on the peer's server via rex -S, and selects loc
   expect(calls).toEqual([
     ["rex", ["-S", "me@p", "--autostart=false", ...FOCUS]],
     ["rex", ["--autostart=false", ...SELECT]],
+    ...RAISE_REX,
   ]);
 });
 
@@ -1780,7 +1807,12 @@ test("a remote Rex jump whose rex -S fails focuses over the peer's warm ssh inst
     file === "rex" && args[0] === "-S" ? { status: 1, stdout: "", failed: false } : ok(),
   );
   expect(jumpToAgent(store, rexView(), fakeMux(), run, {})).toEqual({ ok: true });
-  expect(calls.map(([file]) => file)).toEqual(["rex", "ssh", "rex"]);
+  expect(calls.map(([file]) => file)).toEqual([
+    "rex",
+    "ssh",
+    "rex",
+    ...(process.platform === "darwin" ? ["osascript"] : []),
+  ]);
   const ssh = calls[1]?.[1] ?? [];
   expect(ssh.slice(0, SSH_OPTIONS.length)).toEqual(SSH_OPTIONS);
   expect(ssh.at(-2)).toBe("p");

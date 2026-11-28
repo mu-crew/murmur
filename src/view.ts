@@ -181,6 +181,11 @@ export function harnessTag(agent: Pick<PaneView, "harness">): string {
   return agent.harness === "cursor-agent" ? "cursor" : agent.harness;
 }
 
+/** Which multiplexer owns this pane: `"rex"` or `"tmux"`. */
+export function muxTag(agent: Pick<PaneView, "server">): "rex" | "tmux" {
+  return agent.server.kind === "rex" ? "rex" : "tmux";
+}
+
 /**
  * One line describing what this pane is doing, in order of authority.
  *

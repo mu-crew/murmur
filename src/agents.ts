@@ -270,6 +270,20 @@ export function rexRoute(
 const succeeded = (result: ReturnType<Runner>) => result.status === 0 && !result.failed;
 
 /**
+ * Raise Rex.app on macOS via AppKit (`NSRunningApplication`), without
+ * LaunchServices (`open -a`, which fails with -54 in some contexts) or
+ * AppleEvents (`tell application`, which needs Automation permission).
+ */
+export const RAISE_REX_JXA =
+  'ObjC.import("AppKit"); const a = $.NSRunningApplication.runningApplicationsWithBundleIdentifier("com.superlogical.rex"); if (a.count > 0) a.objectAtIndex(0).activateWithOptions($.NSApplicationActivateAllWindows | $.NSApplicationActivateIgnoringOtherApps);';
+
+/** Best-effort raise of Rex.app when jumping into Rex from another terminal on macOS. */
+function raiseRexApp(run: Runner, env: NodeJS.ProcessEnv): void {
+  if (process.platform !== "darwin" || env.TERM_PROGRAM === "rex") return;
+  run("osascript", ["-l", "JavaScript", "-e", RAISE_REX_JXA]);
+}
+
+/**
  * Jump to a Rex block, in two steps, both Rex's own API since a Rex pane has no
  * tmux to attach:
  *
@@ -333,7 +347,10 @@ function jumpToRex(store: Store, agent: PaneView, run: Runner, env: NodeJS.Proce
       ...(agent.window.startsWith("window:") ? [`window_id=${agent.window}`] : []),
     ]),
   );
-  if (succeeded(select)) return { ok: true };
+  if (succeeded(select)) {
+    raiseRexApp(run, env);
+    return { ok: true };
+  }
   const app = client ? `Rex.app client "${client}"` : "Rex.app";
   const message =
     select.status === 3
