@@ -5,6 +5,8 @@ so it says what changed for a user rather than listing every commit.
 
 ## Unreleased
 
+## 3.1.0
+
 - **Glance:** a Rex pane's preview streams only the last 1 MiB of its capture, so a full 64 MiB scrollback previews in well under the 3 s timeout instead of going blank; a remote Rex capture over ssh is trimmed on the far side the same way. The dash previews local Rex panes without blocking.
 - **Jump:** a local jump compares tmux servers by their resolved socket path and refuses one across servers with a clear message, instead of moving another terminal's client; a `-S` socket merely named `default` or `<label>` is no longer mistaken for the default or `-L` server, and `/tmp` vs `/private/tmp` spellings of one socket no longer refuse a same-server jump.
 - `murmur jump` outside tmux no longer runs `switch-client` to a local ssh attachment; it opens the agent instead.
