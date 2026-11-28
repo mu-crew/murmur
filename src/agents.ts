@@ -368,9 +368,14 @@ function jumpToRex(store: Store, agent: PaneView, run: Runner, env: NodeJS.Proce
  */
 export type Outside = "inherit" | "rex";
 
+/** The Rex session target for the current pane: `$REX_SESSION` (older Rex) or `$REX_BLOCK`. */
+function rexSessionTarget(env: NodeJS.ProcessEnv): string | undefined {
+  return env.REX_SESSION || env.REX_BLOCK || undefined;
+}
+
 /** `rex` when this process runs in a Rex pane, else `inherit`. */
 export function outsideTmux(env: NodeJS.ProcessEnv = process.env): Outside {
-  return env.TERM_PROGRAM === "rex" && env.REX_SESSION ? "rex" : "inherit";
+  return env.TERM_PROGRAM === "rex" && rexSessionTarget(env) ? "rex" : "inherit";
 }
 
 /**
@@ -387,6 +392,7 @@ function runOutside(
   label: string,
   env: NodeJS.ProcessEnv,
 ): boolean {
+  const target = rexSessionTarget(env);
   const result =
     how === "rex"
       ? run(
@@ -394,7 +400,7 @@ function runOutside(
           rexArgv(null, [
             "window",
             "new",
-            ...(env.REX_SESSION ? ["-s", env.REX_SESSION] : []),
+            ...(target ? ["-s", target] : []),
             // A positional before `--`, so rex parses a leading `-` as a flag:
             // a pane title (set by the program, OSC 2) of `--shell=...` or
             // `--help` became an option of this command. Never a dash first.

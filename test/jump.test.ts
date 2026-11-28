@@ -1562,6 +1562,39 @@ test("in a Rex pane a local jump opens the agent in a new tab of this session", 
   ]);
 });
 
+test("in a Rex pane with only REX_BLOCK a local jump targets the block's session", () => {
+  const calls: [string, string[], boolean | undefined][] = [];
+  const result = jumpToAgent(
+    store,
+    localView({ agent_name: "worker-1" }),
+    fakeMux({ livePanes: () => new Set([asPaneId("%9")]) }),
+    (file, args, inherit) => {
+      calls.push([file, args, inherit]);
+      return ok();
+    },
+    { TERM_PROGRAM: "rex", REX_BLOCK: "block:abc" },
+  );
+  expect(result).toEqual({ ok: true });
+  expect(calls).toEqual([
+    [
+      "rex",
+      [
+        "--autostart=false",
+        "window",
+        "new",
+        "-s",
+        "block:abc",
+        "worker-1",
+        "--",
+        "sh",
+        "-c",
+        "tmux attach -t '%9'",
+      ],
+      undefined,
+    ],
+  ]);
+});
+
 test("in a Rex pane a remote jump probes, then opens the jump command in a new tab", () => {
   peer("p", "remote-host");
   const calls: [string, string[], boolean | undefined][] = [];

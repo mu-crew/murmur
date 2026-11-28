@@ -17,7 +17,10 @@ test("dash refuses a plain terminal but allows tmux and a Rex pane", () => {
   expect(requireDashTmux({ TERM_PROGRAM: "rex", REX_SESSION: "session:1" }, () => undefined)).toBe(
     true,
   );
-  // Rex's name alone is not enough: no session means nowhere to open a tab.
+  expect(requireDashTmux({ TERM_PROGRAM: "rex", REX_BLOCK: "block:1" }, () => undefined)).toBe(
+    true,
+  );
+  // Rex's name alone is not enough: no session or block means nowhere to open a tab.
   expect(requireDashTmux({ TERM_PROGRAM: "rex" }, () => undefined)).toBe(false);
 });
 
